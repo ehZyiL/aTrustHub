@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
+	"github.com/qy/easyconnect/internal/localapps"
 	"github.com/qy/easyconnect/internal/model"
 	"github.com/qy/easyconnect/internal/store"
 	"github.com/qy/easyconnect/internal/vpn"
@@ -29,18 +31,26 @@ import (
 // version is the app's version.
 const version = "0.1.0"
 
+const appName = "EasyConnect Hub"
+
 // app is everything the window shows and the manager that does the work.
 // appBuild is shown in the footer and the startup log so an old running
 // instance is easy to tell apart from a freshly built one.
-const appBuild = "0.26.18"
+const appBuild = "0.1.0-dev-capture-flows.1"
 
 type app struct {
-	win   *mygo.Window
-	store *store.Store
-	mgr   *vpn.Manager
-	bus   *vpn.LogBus
-	cfg   model.Config
-	dir   string
+	win          *mygo.Window
+	store        *store.Store
+	mgr          *vpn.Manager
+	bus          *vpn.LogBus
+	cfg          model.Config
+	local        *localapps.Manager
+	localEditor  localAppDraft
+	localCatalog installedAppsCatalog
+	localDelete  string
+	localLife    sync.Mutex
+	captureUI    platformCaptureSetup
+	dir          string
 	// keepAlive 记住每个隧道连续探测失败的次数。
 	keepAlive tunKeepAlive
 	icon      ui.ImageSource
@@ -111,7 +121,11 @@ type app struct {
 	sysProxySwitch bool
 
 	// editor is the add/edit dialog.
-	editor editorDraft
+	editor      editorDraft
+	authMu      sync.Mutex
+	authRequest *authenticationRequest
+	authDraft   authenticationDraft
+	dnsProbe    dnsProbeDraft
 	// settings is the settings dialog.
 	settings settingsDraft
 	// deleting is the ID whose deletion the app asks about.
@@ -151,19 +165,24 @@ type app struct {
 }
 
 type editorDraft struct {
-	open          bool
-	editingID     string
-	name          string
-	address       string
-	username      string
-	authMode      string
-	authModeLabel string
-	cred          string
-	totp          string
-	domain        string
-	socksPort     string
-	inPool        bool
-	autoConnect   bool
+	protocol          string
+	remoteDNS         string
+	internalDomains   string
+	certificateSHA256 string
+	advanced          bool
+	open              bool
+	editingID         string
+	name              string
+	address           string
+	username          string
+	authMode          string
+	authModeLabel     string
+	cred              string
+	totp              string
+	domain            string
+	socksPort         string
+	inPool            bool
+	autoConnect       bool
 	// autoPick lets detection choose the auth mode: what a point saved by an
 	// older version (mode "auto") gets when it is opened.
 	autoPick     bool
@@ -195,7 +214,16 @@ type settingsDraft struct {
 }
 
 func main() {
-	mygo.App.SetName("aTrust Hub")
+	if runCaptureLauncher() {
+		return
+	}
+	if len(os.Args) == 2 && os.Args[1] == localapps.BrowserSupervisorFlag {
+		if err := localapps.RunBrowserSupervisor(os.Stdin, os.Stdout); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
+	mygo.App.SetName(appName)
 	mygo.App.SetVersion(version)
 	if !mygo.App.RequestSingleInstanceLock() {
 		return
@@ -203,7 +231,7 @@ func main() {
 
 	a, err := newApp()
 	if err != nil {
-		log.Fatalf("aTrust Hub: %v", err)
+		log.Fatalf("EasyConnect Hub: %v", err)
 	}
 	// Clicking the Dock icon with the window hidden reopens it.
 	mygo.App.OnActivate(func(hasVisibleWindows bool) {
@@ -234,26 +262,21 @@ func newApp() (*app, error) {
 	if err != nil {
 		return nil, err
 	}
-	fileSecrets, err := store.NewFileSecrets(dir)
-	if err != nil {
-		return nil, err
-	}
-	// Which secret store to use is a setting; read it before opening the
-	// store, since the store takes it at construction.
-	useKeychain := false
+	// New profiles use the OS credential store, falling back to memory only.
+	// Preserve an explicit legacy file-store choice without copying it elsewhere.
+	secretKind := model.SecretStoreKeychain
 	if b, rerr := os.ReadFile(filepath.Join(dir, "config.json")); rerr == nil {
-		var pre struct {
-			Settings struct {
-				SecretStore string `json:"secretStore"`
-			} `json:"settings"`
-		}
-		if json.Unmarshal(b, &pre) == nil && pre.Settings.SecretStore == model.SecretStoreKeychain {
-			useKeychain = true
+		var pre model.Config
+		if json.Unmarshal(b, &pre) == nil && pre.Settings.SecretStore == model.SecretStoreFile {
+			secretKind = model.SecretStoreFile
 		}
 	}
-	var secrets store.SecretStore = fileSecrets
-	if useKeychain {
-		secrets = store.FallbackSecrets{Primary: keychainSecrets{}, Fallback: fileSecrets}
+	var secrets store.SecretStore = store.NewSessionSecrets(keychainSecrets{})
+	if secretKind == model.SecretStoreFile {
+		secrets, err = store.NewFileSecrets(dir)
+		if err != nil {
+			return nil, err
+		}
 	}
 	st, err := store.Open(dir, secrets)
 	if err != nil {
@@ -288,11 +311,16 @@ func newApp() (*app, error) {
 		a.logFile = f
 	}
 	a.cfg = st.Config()
+	a.local = localapps.NewManager(func() {
+		if a.win != nil {
+			a.win.Invalidate()
+		}
+	}, a.logLocalAccess)
 	a.sysProxyOn = systemProxyEnabled()
 	a.tunWanted = a.cfg.Settings.TunEnabled
-	a.bus.Add("app", fmt.Sprintf("aTrust Hub %s 启动，数据目录 %s", appBuild, dir))
+	a.bus.Add("app", fmt.Sprintf("EasyConnect Hub %s 启动，数据目录 %s", appBuild, dir))
 	a.mgr = vpn.NewManager(
-		vpn.NewZJUConnector(vpn.ZJUOptions{
+		vpn.NewProtocolConnector(vpn.ZJUOptions{
 			DataDir: dir,
 			Debug:   os.Getenv("EASYCONNECT_DEBUG") != "",
 		}),
@@ -301,7 +329,6 @@ func newApp() (*app, error) {
 		a.invalidate,
 	)
 	a.mgr.Apply(a.cfg)
-	a.cleanupStaleDNS()
 	return a, nil
 }
 
@@ -336,7 +363,7 @@ func resolveDataDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(base, "aTrustHub")
+	dir := filepath.Join(base, "EasyConnectHub")
 	return dir, os.MkdirAll(dir, 0o700)
 }
 
@@ -391,7 +418,7 @@ func (a *app) start() {
 	// app's own log panel, with the time the bus adds, not two timestamps.
 	log.SetFlags(0)
 	a.bus.SetSink(a.logFile)
-	a.bus.Add("app", fmt.Sprintf("aTrust Hub %s 启动（窗口就绪），数据目录 %s", appBuild, a.dir))
+	a.bus.Add("app", fmt.Sprintf("EasyConnect Hub %s 启动（窗口就绪），数据目录 %s", appBuild, a.dir))
 	log.SetOutput(a.bus.Writer("zju"))
 	a.bus.SetNotify(a.invalidate)
 	go a.tailAccessLog()
@@ -407,6 +434,7 @@ func (a *app) start() {
 		lastDNSCheck := time.Now()
 		dnsFails := 0
 		for range time.Tick(3 * time.Second) {
+			a.reconcileLocalApps()
 			a.maybeRefreshTUN()
 			a.checkTunnels()
 			a.guardSystemProxy()
@@ -446,10 +474,8 @@ func (a *app) start() {
 	wecomLogHook = func(line string) { a.bus.Add("app", line) }
 	a.ghReachable = true
 	// 稍等一下再查：启动时刚把系统 DNS 还回去，立刻查询多半还没通。
-	go func() {
-		time.Sleep(8 * time.Second)
-		a.checkForUpdate()
-	}()
+	// This fork has no release feed yet. Do not offer the original app's
+	// binary as an update to an EasyConnect build.
 
 	// Make sure the first window is on screen even if the remembered state or
 	// an early activation left it hidden.
@@ -461,7 +487,7 @@ func (a *app) start() {
 // stale window was destroyed, so the app can always be reopened.
 func (a *app) createWindow() {
 	a.win = mygo.NewWindow(mygo.WindowOptions{
-		Title:           "aTrust Hub",
+		Title:           appName,
 		Width:           1120,
 		Height:          780,
 		MinWidth:        860,
@@ -477,6 +503,12 @@ func (a *app) createWindow() {
 		if a.quitRequested {
 			return
 		}
+		if runtime.GOOS == "linux" {
+			a.quitRequested = true
+			a.shutdown()
+			mygo.App.Quit()
+			return
+		}
 		e.PreventDefault()
 		a.win.Hide()
 		a.updateDockVisibility(true)
@@ -488,13 +520,20 @@ func (a *app) createWindow() {
 
 func (a *app) shutdown() {
 	a.shutdownOnce.Do(func() {
+		a.closeCaptureSetup()
 		// A real quit: window closes must go through, or macOS cancels the
 		// termination and the process stays alive with no usable UI.
 		a.quitRequested = true
+		if a.dnsProbe.cancel != nil {
+			a.dnsProbe.cancel()
+		}
 		// 退出时两件事必须做到：TUN 的 utun/路由/DNS 全部还原，系统代理关掉。
 		// 否则用户下次开机就是「没网」，而且看不出是谁干的。
 		a.teardownTUNOnExit()
 		a.disableSystemProxyOnExit()
+		if a.local != nil {
+			_ = a.local.Close()
+		}
 		if a.mgr != nil {
 			a.mgr.Close()
 		}
@@ -517,6 +556,9 @@ func (a *app) invalidate() {
 // the switch is flipped, so turning TUN off survives a restart and a new login,
 // while turning it on means the next login brings it back.
 func (a *app) maybeResumeTUN() {
+	if !a.canUseGlobalTUN() {
+		return
+	}
 	if !a.tunWanted || a.tunOn || a.tunPending {
 		return
 	}
@@ -603,11 +645,23 @@ func (a *app) credentials(id string) (vpn.Credentials, error) {
 		}
 		return vpn.Credentials{}, err
 	}
-	totp, err := a.store.TOTP(id)
-	if err != nil && !errors.Is(err, store.ErrSecretNotFound) {
-		return vpn.Credentials{}, err
+	// EasyConnect requests fresh codes through its challenge handler. A missing
+	// or locked keyring must not block a password kept in the session fallback.
+	var totp string
+	if point == nil || point.Protocol != model.ProtocolEasyConnect {
+		totp, err = a.store.TOTP(id)
+		if err != nil && !errors.Is(err, store.ErrSecretNotFound) {
+			return vpn.Credentials{}, err
+		}
 	}
-	return vpn.Credentials{Login: cred, TOTP: totp, ExternalLogin: external}, nil
+	creds := vpn.Credentials{Login: cred, TOTP: totp, ExternalLogin: external}
+	if point != nil && point.Protocol == model.ProtocolEasyConnect {
+		name := point.Name
+		creds.Challenge = func(ctx context.Context, ch vpn.Challenge) (string, error) {
+			return a.requestAuthentication(ctx, name, ch)
+		}
+	}
+	return creds, nil
 }
 
 func (a *app) hasPassword(id string) bool {
@@ -709,7 +763,6 @@ func (a *app) teardownTUNOnExit() {
 	_, pidErr := os.Stat(pidPath)
 	if !a.tunOn && pidErr != nil && a.tunPID <= 0 {
 		// 没开过 TUN，但上一次可能被强杀留下了 DNS 劫持，仍然兜底一次。
-		a.cleanupStaleDNS()
 		return
 	}
 	// 给 helper 足够时间自己退出：它会在退出前把 DNS 交还系统。
@@ -717,7 +770,6 @@ func (a *app) teardownTUNOnExit() {
 		a.tunLogf("退出：helper 未在 6 秒内退出，强制结束后重置 DNS")
 	}
 	// helper 被强杀时来不及恢复 DNS，这里再兜底一次。
-	a.cleanupStaleDNS()
 	a.tunOn = false
 	a.tunPID = 0
 	for _, name := range []string{"tun.stop", "tun.pid", "tun.reload", "tun.probe", "tun.probe.result"} {

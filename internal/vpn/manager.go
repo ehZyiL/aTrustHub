@@ -24,6 +24,7 @@ import (
 
 	"github.com/qy/easyconnect/internal/model"
 	"github.com/qy/easyconnect/internal/proxy"
+	"github.com/qy/easyconnect/internal/workeripc"
 )
 
 // State is where an access point is in its login life.
@@ -51,9 +52,16 @@ func (s State) Label() string {
 }
 
 // Credentials are what the secret store holds for an access point.
+type Challenge struct {
+	ID    string
+	Kind  string
+	Image []byte
+}
+
 type Credentials struct {
-	Login string
-	TOTP  string
+	Challenge func(context.Context, Challenge) (string, error)
+	Login     string
+	TOTP      string
 	// ExternalLogin shows loginURL to the user, as a QR code or a browser
 	// page, and returns the https callback URL the identity provider
 	// redirects to. It is what the WeCom (external OAuth2/CAS) mode uses;
@@ -65,7 +73,6 @@ type Credentials struct {
 type Session interface {
 	// Dial opens a connection through the VPN tunnel.
 	Dial(ctx context.Context, network, addr string) (net.Conn, error)
-	// Resolve resolves a name through the tunnel, for internal domains.
 	// Info describes the session for the UI.
 	Info() SessionInfo
 	// Close logs out and releases the tunnel.
@@ -80,6 +87,7 @@ type SessionInfo struct {
 	BestNodes    map[string]string
 	HealthTarget string
 	Apps         []App
+	Resources    *workeripc.ResourceSnapshot
 }
 
 // Connector logs in to one access point. It blocks until the login either
@@ -91,6 +99,7 @@ type CredentialFunc func(id string) (Credentials, error)
 
 // View is a copy of one access point's state for the UI.
 type View struct {
+	Protocol    string
 	ID          string
 	Name        string
 	Server      string
@@ -336,7 +345,8 @@ func (m *Manager) Apply(cfg model.Config) {
 func needsRestart(a, b model.AccessPoint) bool {
 	return a.Server != b.Server || a.Port != b.Port ||
 		a.Username != b.Username || a.AuthMode != b.AuthMode ||
-		a.LoginDomain != b.LoginDomain || a.SocksPort != b.SocksPort
+		a.LoginDomain != b.LoginDomain || a.SocksPort != b.SocksPort ||
+		a.Protocol != b.Protocol || a.RemoteDNS != b.RemoteDNS || a.CertificateSHA256 != b.CertificateSHA256 || strings.Join(a.InternalDomains, "\n") != strings.Join(b.InternalDomains, "\n")
 }
 
 type closeLater struct {
@@ -424,6 +434,7 @@ func (m *Manager) Views() []View {
 		}
 		v := View{
 			ID: ep.cfg.ID, Name: ep.cfg.Name, Server: ep.cfg.Server,
+			Protocol: ep.cfg.Protocol, DNSServer: ep.info.DNSServer,
 			Port: ep.cfg.Port, Username: ep.cfg.Username,
 			AuthMode: ep.cfg.AuthMode, LoginDomain: ep.cfg.LoginDomain,
 			SocksPort: ep.cfg.SocksPort,
@@ -549,8 +560,12 @@ func (m *Manager) connect(id string, gen int) {
 	ctx, timeout := context.WithTimeout(ctx, 5*time.Minute)
 	defer timeout()
 	m.mu.Lock()
-	if cur := m.points[id]; cur != nil && cur.gen == gen {
+	if cur := m.points[id]; cur != nil && cur.gen == gen && cur.state == StateConnecting {
 		cur.cancel = cancel
+	} else {
+		m.mu.Unlock()
+		cancel()
+		return
 	}
 	m.mu.Unlock()
 	defer cancel()
@@ -1202,7 +1217,7 @@ func (m *Manager) checkSessions() {
 			if ep == nil || ep.state != StateOnline {
 				continue
 			}
-			if !ep.cfg.MonitorEnabled() {
+			if ep.cfg.Protocol == model.ProtocolEasyConnect || !ep.cfg.MonitorEnabled() {
 				continue
 			}
 			// 单点登录的会话由浏览器产生，服务器的在线检查会把它当作
@@ -1425,7 +1440,7 @@ func (m *Manager) SetTunServed(ids []string) {
 		if ep == nil {
 			continue
 		}
-		want := served[id] && ep.state == StateOnline
+		want := served[id] && ep.state == StateOnline && ep.cfg.Protocol != model.ProtocolEasyConnect
 		switch {
 		case want && !ep.tunServed && ep.sess != nil:
 			work = append(work, handover{

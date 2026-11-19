@@ -120,7 +120,17 @@ func (m AuthMode) Valid() bool {
 
 // AccessPoint is one aTrust server the app logs in to. Its cred and
 // TOTP secret live in the secret store, under the point's ID, not here.
+const (
+	ProtocolATrust      = "atrust"
+	ProtocolEasyConnect = "easyconnect"
+)
+
 type AccessPoint struct {
+	Protocol          string   `json:"protocol,omitempty"`
+	RemoteDNS         string   `json:"remoteDNS,omitempty"`
+	InternalDomains   []string `json:"internalDomains,omitempty"`
+	CertificateSHA256 string   `json:"certificateSHA256,omitempty"`
+
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	Server   string `json:"server"`
@@ -132,14 +142,14 @@ type AccessPoint struct {
 	LoginDomain string `json:"loginDomain,omitempty"`
 	// SocksPort is the SOCKS5 port this access point serves on its own;
 	// 0 disables it.
-	SocksPort   int   `json:"socksPort"`
-	InPool      bool  `json:"inPool"`
-	AutoConnect bool  `json:"autoConnect"`
+	SocksPort   int  `json:"socksPort"`
+	InPool      bool `json:"inPool"`
+	AutoConnect bool `json:"autoConnect"`
 	// LoginInBrowser asks the login window to hand the page to the system
 	// browser and take the callback address back by paste. Some SSO portals
 	// only finish their login in a real browser.
-	LoginInBrowser bool `json:"loginInBrowser,omitempty"`
-	CreatedAt   int64 `json:"createdAt,omitempty"`
+	LoginInBrowser bool  `json:"loginInBrowser,omitempty"`
+	CreatedAt      int64 `json:"createdAt,omitempty"`
 	// Monitor asks the portal now and then whether this access point's login
 	// is still the active one: another client signing in with the same account
 	// takes the session over, and the tunnel can look fine while it is dead.
@@ -242,9 +252,10 @@ const (
 
 // Config is the file the app keeps its configuration in.
 type Config struct {
-	Version  int           `json:"version"`
-	Settings Settings      `json:"settings"`
-	Points   []AccessPoint `json:"points"`
+	Version   int           `json:"version"`
+	Settings  Settings      `json:"settings"`
+	Points    []AccessPoint `json:"points"`
+	LocalApps []LocalApp    `json:"localApps,omitempty"`
 }
 
 // CurrentVersion is the version of the configuration format.
@@ -259,7 +270,7 @@ func DefaultSettings() Settings {
 		Routing:           RoutingLatency,
 		HealthIntervalSec: 60,
 		AutoReconnect:     true,
-		SecretStore:       SecretStoreFile,
+		SecretStore:       SecretStoreKeychain,
 	}
 }
 
@@ -290,6 +301,15 @@ func (c *Config) Normalize() {
 		}
 		seen[p.ID] = true
 	}
+	seenApps := map[string]bool{}
+	for i := range c.LocalApps {
+		app := &c.LocalApps[i]
+		app.Normalize()
+		if app.ID == "" || seenApps[app.ID] {
+			app.ID = NewID()
+		}
+		seenApps[app.ID] = true
+	}
 	c.EnsurePorts()
 }
 
@@ -317,6 +337,15 @@ func (s *Settings) Normalize() {
 
 // Normalize cleans one access point.
 func (p *AccessPoint) Normalize() {
+	if p.Protocol == "" {
+		p.Protocol = ProtocolATrust
+	}
+	p.RemoteDNS = strings.TrimSpace(p.RemoteDNS)
+	p.CertificateSHA256 = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(p.CertificateSHA256), ":", ""))
+	for i, domain := range p.InternalDomains {
+		p.InternalDomains[i] = strings.Trim(strings.ToLower(strings.TrimSpace(domain)), ".")
+	}
+
 	p.Server = CleanServer(p.Server)
 	p.Username = strings.TrimSpace(p.Username)
 	if p.AuthMode == "" || !AuthMode(p.AuthMode).Valid() {
@@ -325,7 +354,7 @@ func (p *AccessPoint) Normalize() {
 		p.AuthMode = string(AuthModePassword)
 	}
 	p.LoginDomain = strings.TrimSpace(p.LoginDomain)
-	if p.LoginDomain == "" {
+	if p.LoginDomain == "" && p.Protocol != ProtocolEasyConnect {
 		// ZJU-Connect's aTrust default; servers list it as an auth
 		// domain and the login fails without one.
 		p.LoginDomain = "Radius"
@@ -421,6 +450,20 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%s：%w", c.Points[i].Name, err)
 		}
 	}
+	seenApps := map[string]bool{}
+	for i := range c.LocalApps {
+		app := &c.LocalApps[i]
+		if err := app.Validate(); err != nil {
+			return fmt.Errorf("%s：%w", app.Name, err)
+		}
+		if seenApps[app.ID] {
+			return errors.New("本机软件 ID 重复")
+		}
+		seenApps[app.ID] = true
+		if c.Find(app.PointID) == nil {
+			return fmt.Errorf("%s：关联的接入点不存在，请重新选择", app.Name)
+		}
+	}
 	return nil
 }
 
@@ -446,6 +489,27 @@ func (s *Settings) Validate() error {
 
 // Validate checks one access point.
 func (p *AccessPoint) Validate() error {
+	if p.Protocol != "" && p.Protocol != ProtocolATrust && p.Protocol != ProtocolEasyConnect {
+		return errors.New("不支持的 VPN 协议")
+	}
+	if p.Protocol == ProtocolEasyConnect && p.AuthMode != string(AuthModePassword) {
+		return errors.New("EasyConnect 目前支持账号密码及后续验证码")
+	}
+	if p.RemoteDNS != "" && net.ParseIP(p.RemoteDNS).To4() == nil {
+		return errors.New("VPN DNS 必须是 IPv4 地址")
+	}
+	if p.CertificateSHA256 != "" {
+		b, err := hex.DecodeString(p.CertificateSHA256)
+		if err != nil || len(b) != 32 {
+			return errors.New("证书 SHA256 必须是 64 位十六进制指纹")
+		}
+	}
+	for _, domain := range p.InternalDomains {
+		if domain == "" || strings.ContainsAny(domain, " /:*?\\	\r\n") || net.ParseIP(domain) != nil {
+			return errors.New("内网域名请填写域名后缀，用逗号分隔")
+		}
+	}
+
 	if p.Server == "" {
 		return errors.New("服务器地址不能为空")
 	}

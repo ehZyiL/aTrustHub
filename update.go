@@ -54,6 +54,10 @@ func releaseSources() []string {
 // checkForUpdate asks GitHub for the newest release once per start. It runs in
 // the background: a blocked mirror must never delay or freeze the window.
 func (a *app) checkForUpdate() {
+	// No release feed is configured for this fork.
+	if version == "0.1.0" {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 

@@ -31,6 +31,11 @@ type Auth struct {
 
 // Options configure a Server.
 type Options struct {
+	// Context bounds the lifetime of pending dials for private launch leases.
+	Context context.Context
+	// SOCKSOnly is used for authenticated private links. The public mixed
+	// HTTP entry has separate semantics and must not bypass SOCKS authentication.
+	SOCKSOnly bool
 	// Addr is the address to listen on, such as "127.0.0.1:1080".
 	Addr string
 	// Dial opens the connection to the destination the client asked for.
@@ -236,6 +241,9 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 	if first[0] != 0x05 {
+		if s.opts.SOCKSOnly {
+			return
+		}
 		// Not SOCKS5: treat it as an HTTP proxy request (CONNECT or a
 		// plain absolute-URI request). Many browsers and proxy switchers
 		// handle HTTP proxies better, and CONNECT carries the hostname so
@@ -256,7 +264,11 @@ func (s *Server) handle(conn net.Conn) {
 	// applies its own timeout through ctx.
 	_ = conn.SetDeadline(time.Time{})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	parent := s.opts.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 45*time.Second)
 	remote, err := s.dialFunc()(ctx, "tcp", target)
 	cancel()
 	if err != nil {
@@ -429,6 +441,11 @@ func (s *Server) reply(conn net.Conn, code byte) error {
 	_, err := conn.Write([]byte{5, code, 0, 1, 0, 0, 0, 0, 0, 0})
 	return err
 }
+
+// Relay copies both ways until both directions finish. The caller owns the
+// connections and must close them; closing either side can interrupt Relay.
+// A write half-close preserves response bytes after the request reaches EOF.
+func Relay(a, b net.Conn) { pipe(a, b) }
 
 // pipe copies both ways until both directions finish. A write half-close
 // lets the peer see the end of the request or the response without cutting

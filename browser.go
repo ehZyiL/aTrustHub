@@ -3,10 +3,10 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/qy/easyconnect/internal/localapps"
 	"github.com/qy/easyconnect/internal/vpn"
 )
 
@@ -30,25 +30,7 @@ func openProxyBrowser(proxy, target string) error {
 	if bin == "" {
 		return fmt.Errorf("没有找到 Chrome / Edge / Chromium")
 	}
-	dir, err := os.MkdirTemp("", "atrust-browser-")
-	if err != nil {
-		return err
-	}
-	args := []string{
-		"--proxy-server=socks5://" + proxy,
-		"--user-data-dir=" + dir,
-		"--no-first-run",
-		"--no-default-browser-check",
-	}
-	if target != "" {
-		args = append(args, target)
-	}
-	cmd := exec.Command(bin, args...)
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	go func() { _ = cmd.Wait() }()
-	return nil
+	return localapps.OpenBrowser(bin, proxy, target)
 }
 
 // proxyBrowserCommand is the shell command openProxyBrowser runs, for the

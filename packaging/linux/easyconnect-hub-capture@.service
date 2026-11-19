@@ -1,0 +1,37 @@
+# EasyConnect Hub owned capture helper. One instance per authorized desktop UID.
+[Unit]
+Description=EasyConnect Hub capture helper for user %i
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/easyconnect-hub-capture --uid=%i
+ExecStopPost=/usr/local/libexec/easyconnect-hub-capture --uid=%i --recover
+Restart=on-failure
+RestartSec=2
+# Bounded command timeouts may accumulate while up to 16 leases roll back.
+TimeoutStopSec=10min
+RuntimeDirectory=easyconnect-hub-capture-%i easyconnect-hub-capture
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+UMask=0022
+User=root
+Group=root
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_CHOWN CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/run/easyconnect-hub-capture-%i /run/easyconnect-hub-capture
+
+[Install]
+WantedBy=multi-user.target

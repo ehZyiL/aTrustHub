@@ -168,6 +168,10 @@ func (a *app) tunConfigFor() (tunConfigFile, error) {
 }
 
 func (a *app) startGlobalTUN(id string) {
+	if !a.canUseGlobalTUN() {
+		a.toast = "当前平台尚未支持透明接管，请使用软件代理"
+		return
+	}
 	if a.win == nil {
 		a.tunLogf("startGlobalTUN: 主窗口还没创建，跳过 id=%s", id)
 		return
@@ -745,6 +749,9 @@ func buildAQuery(name string) []byte {
 // the DNS port. A leftover root process keeps the system pointed at a resolver
 // nobody serves, which looks exactly like "登录成功但什么都连不上".
 func (a *app) cleanupStaleHelper() {
+	if !a.canUseGlobalTUN() {
+		return
+	}
 	pidPath := filepath.Join(a.dir, "tun.pid")
 	if !pidFileFresh(pidPath, 30*time.Second) {
 		return
@@ -762,4 +769,17 @@ func (a *app) cleanupStaleHelper() {
 	if pidFileFresh(pidPath, 2*time.Second) {
 		a.tunLogf("遗留进程仍未退出，请手动结束它以恢复 DNS")
 	}
+}
+
+// The inherited TUN helper only understands aTrust saved sessions.
+func (a *app) canUseGlobalTUN() bool {
+	if !supportsElevatedTUN() {
+		return false
+	}
+	for _, p := range a.cfg.Points {
+		if p.Protocol == model.ProtocolEasyConnect {
+			return false
+		}
+	}
+	return true
 }

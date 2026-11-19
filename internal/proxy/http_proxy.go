@@ -70,9 +70,13 @@ func (s *Server) handleHTTP(conn net.Conn, br *bufio.Reader) {
 }
 
 func (s *Server) dial(target string) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	parent := s.opts.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 45*time.Second)
 	defer cancel()
-	remote, err := s.opts.Dial(ctx, "tcp", target)
+	remote, err := s.dialFunc()(ctx, "tcp", target)
 	if err != nil {
 		return nil, err
 	}

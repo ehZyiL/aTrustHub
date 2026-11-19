@@ -90,7 +90,7 @@ func TestEmptyView(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1120, 800)
 	texts := strings.Join(tt.Texts(), "|")
-	for _, want := range []string{"aTrust Hub", "还没有接入点", "添加第一个接入点"} {
+	for _, want := range []string{appName, "还没有接入点", "添加第一个接入点"} {
 		if !strings.Contains(texts, want) {
 			t.Errorf("view lacks %q; texts = %s", want, texts)
 		}
@@ -134,6 +134,7 @@ func TestEditorDropsAutoAuthMode(t *testing.T) {
 	if err := tt.Click("＋ 添加接入点"); err != nil {
 		t.Fatalf("click add: %v", err)
 	}
+	a.editor.protocol = "aTrust"
 	tt.Frame()
 	texts := strings.Join(tt.Texts(), "|")
 	if !strings.Contains(texts, "认证方式") || !strings.Contains(texts, "账号密码") {
@@ -151,6 +152,7 @@ func TestEditorAddressAboveAuthMode(t *testing.T) {
 	if err := tt.Click("＋ 添加接入点"); err != nil {
 		t.Fatalf("click add: %v", err)
 	}
+	a.editor.protocol = "aTrust"
 	tt.Frame()
 	addr, ok := tt.Find("接入地址")
 	if !ok {
@@ -343,6 +345,7 @@ func TestZeroSocksPortIsRespected(t *testing.T) {
 func TestSaveWeComEditor(t *testing.T) {
 	a := testApp(t)
 	a.openNewEditor()
+	a.editor.protocol = "aTrust"
 	a.editor.address = "https://vpn.example.edu.cn"
 	a.editor.authModeLabel = model.AuthModeWeCom.Label()
 	a.saveEditor()
@@ -404,6 +407,7 @@ func TestAppsTab(t *testing.T) {
 func TestSaveEditorWithAccessAddress(t *testing.T) {
 	a := testApp(t)
 	a.openNewEditor()
+	a.editor.protocol = "aTrust"
 	a.editor.address = "https://vpn.example.com:44892/portal"
 	a.editor.authModeLabel = model.AuthModeWeCom.Label()
 	a.saveEditor()

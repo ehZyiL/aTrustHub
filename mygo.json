@@ -1,8 +1,8 @@
 {
-  "name": "aTrustHub",
-  "identifier": "app.atrust.hub",
-  "version": "0.26.18",
-  "copyright": "Copyright © 2026 aTrust Hub",
+  "name": "EasyConnectHub",
+  "identifier": "app.easyconnect.hub",
+  "version": "0.1.0",
+  "copyright": "Based on aTrustHub and ZJU-Connect",
   "out": "build",
   "macos": {
     "infoPlist": {

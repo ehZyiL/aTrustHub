@@ -61,6 +61,8 @@ func (a *app) view(c *ui.Context) {
 			a.appsSection(c)
 		case 2:
 			a.accessSection(c)
+		case 3:
+			a.localAppsSection(c)
 		default:
 			// 系统代理没开时，统一入口没有参与任何转发，整块隐藏；
 			// 需要手动配置端口时在「设置」里看。
@@ -76,16 +78,20 @@ func (a *app) view(c *ui.Context) {
 	})
 	a.editorView(c)
 	a.settingsView(c)
+	a.dnsProbeView(c)
 	a.deleteView(c)
 	a.logoutView(c)
 	a.quitView(c)
 	a.appDetailView(c)
+	a.authenticationView(c)
+	a.localAppEditorView(c)
+	a.localAppDeleteView(c)
 }
 
 // qrCard was removed: WeCom's QR login now uses a WebView popup.
 
 func (a *app) tabBar(c *ui.Context) {
-	ui.Tabs(c, &a.tab, "接入点", appTabLabel(a.appCount()), accessTabLabel())
+	ui.Tabs(c, &a.tab, "接入点", appTabLabel(a.appCount()), accessTabLabel(), "本机软件")
 }
 
 func accessTabLabel() string {
@@ -94,9 +100,9 @@ func accessTabLabel() string {
 
 func appTabLabel(n int) string {
 	if n > 0 {
-		return fmt.Sprintf("应用 %d", n)
+		return fmt.Sprintf("网关资源 %d", n)
 	}
-	return "应用"
+	return "网关资源"
 }
 
 // appEntry is one application of one online access point.
@@ -253,7 +259,7 @@ func (a *app) appsEmpty(c *ui.Context) {
 			return
 		}
 		ui.Text(c, "已登录，服务器没有下发应用").FontSize(16).Bold()
-		ui.Text(c, "有些 aTrust 服务器不返回应用列表；代理仍然可以按节点组使用。").
+		ui.Text(c, "此页显示网关资源。EasyConnect 目前请在接入点页面启动代理浏览器，或为软件填写代理地址。").
 			FontSize(12).TextColor(t.TextMuted)
 	})
 }
@@ -452,11 +458,11 @@ func (a *app) appDetailView(c *ui.Context) {
 }
 
 func (a *app) proxyFor(pointID string) string {
+	if p := a.cfg.Find(pointID); p != nil && p.SocksPort > 0 {
+		return displayAddr(net.JoinHostPort(a.cfg.Settings.ListenHost, strconv.Itoa(p.SocksPort)))
+	}
 	if agg := a.mgr.Aggregate(); agg.Running && agg.Addr != "" {
 		return displayAddr(agg.Addr)
-	}
-	if p := a.cfg.Find(pointID); p != nil && p.SocksPort > 0 {
-		return fmt.Sprintf("127.0.0.1:%d", p.SocksPort)
 	}
 	return ""
 }
@@ -656,8 +662,8 @@ func (a *app) header(c *ui.Context) {
 				ui.Image(c, a.icon).Size(42, 42)
 			}
 			ui.Column(c).Gap(3).Children(func() {
-				ui.Text(c, "aTrust Hub").FontSize(24).Bold()
-				ui.Text(c, "同时登录多个 aTrust 接入点").
+				ui.Text(c, appName).FontSize(24).Bold()
+				ui.Text(c, "EasyConnect / aTrust · 本地 HTTP 和 SOCKS5 代理").
 					FontSize(12).TextColor(t.TextMuted)
 			})
 		})
@@ -673,9 +679,8 @@ func (a *app) header(c *ui.Context) {
 				ui.Row(c).Size(7, 7).Radius(3.5).Background(color)
 				ui.Text(c, a.describeProgress()).FontSize(12).TextColor(t.TextMuted)
 			})
-			// Global TUN switch: always shown; toggling starts or stops TUN
-			// with the first online point. The position is remembered.
-			{
+			// Only the existing aTrust helper supports system TUN.
+			if a.canUseGlobalTUN() {
 				shown := a.tunOn || a.tunPending
 				// Bind the switch to a persistent field: the framework writes
 				// the clicked value into the *bool after this frame builds, so
@@ -788,7 +793,7 @@ func (a *app) pointsSection(c *ui.Context) {
 		ui.Text(c, fmt.Sprintf("%d 个", len(views))).FontSize(12).TextColor(t.TextMuted)
 		ui.Row(c).Grow(1)
 		if len(views) > 0 {
-			ui.Text(c, "每个接入点可单独开一个 SOCKS5 端口，也可只加入统一入口").
+			ui.Text(c, "每个接入点提供 HTTP / SOCKS5 共用端口，连接后可启动代理浏览器").
 				FontSize(11).TextColor(t.TextMuted)
 		}
 	})
@@ -811,8 +816,7 @@ func (a *app) emptyState(c *ui.Context) {
 	ui.Column(c).Padding(40).Gap(10).Center().Radius(12).
 		Border(1, t.Border).Background(t.Surface).Children(func() {
 		ui.Text(c, "还没有接入点").FontSize(16).Bold()
-		ui.Text(c, "添加 aTrust 服务器地址、用户名和密码。应用会为每个接入点"+
-			"单独登录，并保留各自的设备 ID 和会话。").FontSize(12).
+		ui.Text(c, "添加 EasyConnect / aTrust 服务器地址、用户名和密码，连接后启动代理浏览器。").FontSize(12).
 			TextColor(t.TextMuted).MaxWidth(460)
 		ui.Text(c, "多个接入点可以填同一账号的不同网关，也可以填不同账号。").
 			FontSize(12).TextColor(t.TextMuted)
@@ -848,7 +852,7 @@ func (a *app) pointCard(c *ui.Context, v vpn.View) {
 			if v.SocksPort > 0 {
 				addr := "127.0.0.1:" + strconv.Itoa(v.SocksPort)
 				socks := "socks5://" + addr
-				metaCopy(c, t, "独立 SOCKS5", addr, "复制独立 SOCKS5 地址",
+				metaCopy(c, t, "HTTP / SOCKS5", addr, "复制独立 SOCKS5 地址",
 					func() { a.copyText(socks) })
 			}
 			meta(c, t, "连接", fmt.Sprintf("%d 当前 / %d 累计", v.Active, v.Total))
@@ -943,8 +947,23 @@ func (a *app) sessionMonitor(c *ui.Context, v vpn.View) {
 func (a *app) pointButtons(c *ui.Context, v vpn.View) {
 	switch v.State {
 	case vpn.StateOnline:
+		if v.Protocol == model.ProtocolEasyConnect && ui.Button(c, "DNS 诊断").Label("DNS 诊断 "+v.Name).Clicked() {
+			a.openDNSProbe(v.ID, v.Name)
+		}
+		if ui.Button(c, "代理浏览器").Label("代理浏览器 " + v.Name).Clicked() {
+			if err := openProxyBrowser(a.proxyFor(v.ID), "about:blank"); err != nil {
+				a.toast = err.Error()
+			}
+		}
 		if ui.Button(c, "断开").Label("断开 " + v.Name).Clicked() {
-			go a.mgr.Disconnect(v.ID)
+			go func() {
+				a.localLife.Lock()
+				defer a.localLife.Unlock()
+				if a.local != nil {
+					a.local.StopPoint(v.ID)
+				}
+				a.mgr.Disconnect(v.ID)
+			}()
 		}
 		// Only the WeCom login keeps a session worth discarding by hand: it is
 		// the one where "退出登录" means "sign in as someone else next time".
@@ -1044,6 +1063,7 @@ func (a *app) accessSection(c *ui.Context) {
 			a.bus.Clear()
 		}
 	})
+	ui.Text(c, "本机软件记录 TCP 建立结果；失败条目的路径表示尝试的出口。缺少核心报告时显示「路径未报告」。重复记录合并显示。").FontSize(11).TextColor(t.TextMuted).Wrap()
 	scroll := ui.Scroll(c).Grow(1).MinHeight(0)
 	scroll.Children(func() {
 		box := ui.Column(c).Padding(10).Radius(10).Border(1, t.Border).
@@ -1053,8 +1073,8 @@ func (a *app) accessSection(c *ui.Context) {
 				if len(entries) == 0 {
 					ui.Column(c).Padding(30).Center().Children(func() {
 						ui.Text(c, "还没有访问记录").FontSize(13).Bold()
-						ui.Text(c, "通过统一入口代理的连接会显示在这里，"+
-							"并标注走了哪个接入点、属于哪个应用。").
+						ui.Text(c, "从本机软件页启动项目后，连接会显示在这里；"+
+							"支持的核心会报告 VPN 或原出口及命中的规则。").
 							FontSize(11).TextColor(t.TextMuted)
 					})
 					return
@@ -1278,97 +1298,125 @@ func (a *app) editorView(c *ui.Context) {
 	ui.Modal(c, &d.open, func() {
 		ui.Column(c).Width(600).Gap(10).Children(func() {
 			ui.Text(c, editorTitle(d)).FontSize(18).Bold()
-			ui.Field(c, "名称", func() {
-				ui.TextInput(c, &d.name).Placeholder("例如：主网关 / 教育网线路")
-			})
-			// 接入地址先填，检测按钮紧跟着它，点检测时地址已经在上方。
-			ui.Field(c, "接入地址", func() {
-				ui.TextInput(c, &d.address).
-					Placeholder("例如：https://vpn.example.com:443").Grow(1)
-			})
-			ui.Row(c).Gap(10).AlignItems(ui.End).Children(func() {
-				ui.Field(c, "认证方式", func() {
-					ui.Select(c, &d.authModeLabel, authModeLabels()).Width(220)
-					d.authMode = string(authModeFromLabel(d.authModeLabel))
-				})
-				if ui.Button(c, "检测").Disabled(d.detecting).Clicked() {
-					a.detectEditor()
-				}
-			})
-			if d.detecting {
-				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Spinner(c)
-					ui.Text(c, "正在读取服务器支持的认证方式…").FontSize(11).TextColor(t.TextMuted)
-				})
-			}
-			if d.detectErr != "" {
-				ui.Text(c, d.detectErr).FontSize(11).TextColor(t.Danger)
-			}
-			if len(d.detected) > 0 {
-				ui.Text(c, "服务器支持："+strings.Join(d.detected, "、")).FontSize(11).
-					TextColor(t.TextMuted)
-			}
-			switch d.authMode {
-			case string(model.AuthModeWeCom):
-				// 企业微信：登录域用来在服务器提供多个外部登录时挑一个。
-				ui.Field(c, "登录域（可选）", func() {
-					ui.TextInput(c, &d.domain).Placeholder("服务器有多个外部登录方式时用来区分").Width(240)
-				})
-			case string(model.AuthModeSSO):
-				// 单点登录：账号密码在对方页面上完成，这里只说明流程。
-				ui.Text(c, "保存后点卡片上的「登录」会打开浏览器完成单点登录，"+
-					"登录成功后自动取回会话并连接。").
-					FontSize(11).TextColor(t.TextMuted)
-			default:
-				ui.Field(c, "用户名", func() {
-					ui.TextInput(c, &d.username).Placeholder("登录 aTrust 的账号")
-				})
-				ui.Row(c).Gap(10).AlignItems(ui.End).Children(func() {
-					ui.Field(c, "密码", func() {
-						in := ui.TextInput(c, &d.cred).Password().Grow(1)
-						if d.hasPassword {
-							in.Placeholder("已保存，留空则沿用")
-						} else {
-							in.Placeholder("登录密码")
+			ui.Scroll(c).MaxHeight(470).MinHeight(0).Children(func() {
+				ui.Column(c).Gap(10).Children(func() {
+					ui.Field(c, "VPN 协议", func() { ui.Select(c, &d.protocol, []string{"EasyConnect", "aTrust"}) })
+					ui.Field(c, "名称", func() {
+						ui.TextInput(c, &d.name).Placeholder("例如：主网关 / 教育网线路")
+					})
+					// 接入地址先填，检测按钮紧跟着它，点检测时地址已经在上方。
+					ui.Field(c, "接入地址", func() {
+						ui.TextInput(c, &d.address).
+							Placeholder("例如：https://vpn.example.com:443").Grow(1)
+					})
+					if d.protocol == "EasyConnect" {
+						d.authMode, d.authModeLabel = string(model.AuthModePassword), model.AuthModePassword.Label()
+						ui.Field(c, "用户名", func() { ui.TextInput(c, &d.username) })
+						ui.Field(c, "密码", func() {
+							input := ui.TextInput(c, &d.cred).Password()
+							if d.hasPassword {
+								input.Placeholder("已保存，留空则沿用")
+							}
+						})
+						ui.Text(c, "短信、动态口令或图形验证码会在连接时弹出。无需保存动态口令密钥。").FontSize(11).TextColor(t.TextMuted).Wrap()
+						ui.Checkbox(c, &d.advanced, "高级：内网 DNS 与证书兼容")
+						if d.advanced {
+							ui.Field(c, "VPN DNS（可选，IPv4）", func() { ui.TextInput(c, &d.remoteDNS).Placeholder("留空使用网关下发的 DNS") })
+							ui.Field(c, "内网域名后缀（可选，逗号分隔）", func() { ui.TextInput(c, &d.internalDomains).Placeholder("例如：corp.example.com") })
+							ui.Field(c, "网关证书 SHA256（可选）", func() {
+								ui.TextInput(c, &d.certificateSHA256).Placeholder("填写经确认的指纹后启用旧证书兼容")
+							})
 						}
+					} else {
+						ui.Row(c).Gap(10).AlignItems(ui.End).Children(func() {
+							ui.Field(c, "认证方式", func() {
+								ui.Select(c, &d.authModeLabel, authModeLabels()).Width(220)
+								d.authMode = string(authModeFromLabel(d.authModeLabel))
+							})
+							if ui.Button(c, "检测").Disabled(d.detecting).Clicked() {
+								a.detectEditor()
+							}
+						})
+						if d.detecting {
+							ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+								ui.Spinner(c)
+								ui.Text(c, "正在读取服务器支持的认证方式…").FontSize(11).TextColor(t.TextMuted)
+							})
+						}
+						if d.detectErr != "" {
+							ui.Text(c, d.detectErr).FontSize(11).TextColor(t.Danger)
+						}
+						if len(d.detected) > 0 {
+							ui.Text(c, "服务器支持："+strings.Join(d.detected, "、")).FontSize(11).
+								TextColor(t.TextMuted)
+						}
+						switch d.authMode {
+						case string(model.AuthModeWeCom):
+							// 企业微信：登录域用来在服务器提供多个外部登录时挑一个。
+							ui.Field(c, "登录域（可选）", func() {
+								ui.TextInput(c, &d.domain).Placeholder("服务器有多个外部登录方式时用来区分").Width(240)
+							})
+						case string(model.AuthModeSSO):
+							// 单点登录：账号密码在对方页面上完成，这里只说明流程。
+							ui.Text(c, "保存后点卡片上的「登录」会打开浏览器完成单点登录，"+
+								"登录成功后自动取回会话并连接。").
+								FontSize(11).TextColor(t.TextMuted)
+						default:
+							ui.Field(c, "用户名", func() {
+								ui.TextInput(c, &d.username).Placeholder("登录 aTrust 的账号")
+							})
+							ui.Row(c).Gap(10).AlignItems(ui.End).Children(func() {
+								ui.Field(c, "密码", func() {
+									in := ui.TextInput(c, &d.cred).Password().Grow(1)
+									if d.hasPassword {
+										in.Placeholder("已保存，留空则沿用")
+									} else {
+										in.Placeholder("登录密码")
+									}
+								})
+								ui.Field(c, "登录域", func() {
+									ui.TextInput(c, &d.domain).Placeholder("默认 Radius").Width(180)
+								})
+							})
+							ui.Field(c, "TOTP 密钥（可选）", func() {
+								ui.TextInput(c, &d.totp).Placeholder("Base32 密钥，留空则不用动态口令")
+							})
+							if d.hasTOTP {
+								ui.Checkbox(c, &d.clearTOTP, "清除已保存的 TOTP 密钥")
+							}
+						}
+					}
+					ui.Field(c, "密码存储方式", func() {
+						ui.Select(c, &d.secretStore, secretStoreLabels()).Width(220)
+						ui.Text(c, "系统凭据服务不可用时仅在本次运行保存，重启后需重新填写。").FontSize(11).TextColor(t.TextMuted).Wrap()
 					})
-					ui.Field(c, "登录域", func() {
-						ui.TextInput(c, &d.domain).Placeholder("默认 Radius").Width(180)
+					ui.Divider(c)
+					ui.Row(c).Gap(14).AlignItems(ui.Start).Children(func() {
+						ui.Field(c, "独立 SOCKS5 端口", func() {
+							ui.TextInput(c, &d.socksPort).Width(100)
+						})
+						// The two boxes follow the field's own rhythm: the first lines
+						// up with the "独立 SOCKS5 端口" caption, the second with the
+						// input under it.
+						ui.Column(c).Gap(9).Children(func() {
+							ui.Checkbox(c, &d.inPool, "加入统一入口分流")
+							ui.Checkbox(c, &d.autoConnect, "应用启动时自动登录")
+						})
 					})
+					if d.protocol != "EasyConnect" {
+						ui.Row(c).Gap(14).AlignItems(ui.Center).Children(func() {
+							ui.Checkbox(c, &d.monitor, "监测会话是否仍有效")
+							if d.monitor {
+								// Label and box on one line: the stacked field wrapped the
+								// caption onto two lines and looked out of place here.
+								ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+									ui.Text(c, "监测间隔（秒）").FontSize(12)
+									ui.TextInput(c, &d.monitorEvery).Width(90)
+								})
+							}
+						})
+					}
 				})
-				ui.Field(c, "TOTP 密钥（可选）", func() {
-					ui.TextInput(c, &d.totp).Placeholder("Base32 密钥，留空则不用动态口令")
-				})
-				if d.hasTOTP {
-					ui.Checkbox(c, &d.clearTOTP, "清除已保存的 TOTP 密钥")
-				}
-			}
-			ui.Field(c, "密码存储方式", func() {
-				ui.Select(c, &d.secretStore, secretStoreLabels()).Width(220)
-			})
-			ui.Divider(c)
-			ui.Row(c).Gap(14).AlignItems(ui.Start).Children(func() {
-				ui.Field(c, "独立 SOCKS5 端口", func() {
-					ui.TextInput(c, &d.socksPort).Width(100)
-				})
-				// The two boxes follow the field's own rhythm: the first lines
-				// up with the "独立 SOCKS5 端口" caption, the second with the
-				// input under it.
-				ui.Column(c).Gap(9).Children(func() {
-					ui.Checkbox(c, &d.inPool, "加入统一入口分流")
-					ui.Checkbox(c, &d.autoConnect, "应用启动时自动登录")
-				})
-			})
-			ui.Row(c).Gap(14).AlignItems(ui.Center).Children(func() {
-				ui.Checkbox(c, &d.monitor, "监测会话是否仍有效")
-				if d.monitor {
-					// Label and box on one line: the stacked field wrapped the
-					// caption onto two lines and looked out of place here.
-					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, "监测间隔（秒）").FontSize(12)
-						ui.TextInput(c, &d.monitorEvery).Width(90)
-					})
-				}
 			})
 			if d.err != "" {
 				ui.Text(c, d.err).FontSize(12).TextColor(t.Danger)
@@ -1591,7 +1639,7 @@ func (a *app) quitView(c *ui.Context) {
 	open := a.quitAsk
 	ui.Modal(c, &open, func() {
 		ui.Column(c).Width(420).Gap(10).Children(func() {
-			ui.Text(c, "退出 aTrust Hub").FontSize(17).Bold()
+			ui.Text(c, "退出 "+appName).FontSize(17).Bold()
 			online, _, _ := a.mgr.Counts()
 			line := "退出会断开所有隧道。"
 			if a.tunOn {
@@ -1601,8 +1649,8 @@ func (a *app) quitView(c *ui.Context) {
 				line += fmt.Sprintf("当前有 %d 个接入点在线。", online)
 			}
 			ui.Text(c, line).FontSize(12).TextColor(t.Text)
-			ui.Text(c, "窗口上的关闭按钮只是隐藏到后台，不会退出。").
-				FontSize(11).TextColor(t.TextMuted)
+			ui.Text(c, "退出后数据库转发和软件接管会停止。软件窗口保留；停止接管的软件新连接恢复系统网络。").
+				FontSize(11).TextColor(t.TextMuted).Wrap()
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 				if ui.Button(c, "取消").Clicked() {
 					a.quitAsk = false
@@ -1624,6 +1672,7 @@ func (a *app) quitView(c *ui.Context) {
 
 func (a *app) openNewEditor() {
 	a.editor = editorDraft{
+		protocol:      "EasyConnect",
 		open:          true,
 		address:       "",
 		authMode:      string(model.AuthModePassword),
@@ -1653,22 +1702,26 @@ func (a *app) openEditor(v vpn.View) {
 		}
 	}
 	a.editor = editorDraft{
-		open:          true,
-		editingID:     p.ID,
-		name:          p.Name,
-		address:       model.FormatAccessAddress(p.Server, p.Port),
-		username:      p.Username,
-		authMode:      string(mode),
-		authModeLabel: mode.Label(),
-		domain:        p.LoginDomain,
-		socksPort:     strconv.Itoa(p.SocksPort),
-		inPool:        p.InPool,
-		autoConnect:   p.AutoConnect,
-		monitor:       p.MonitorEnabled(),
-		monitorEvery:  strconv.Itoa(p.MonitorIntervalSeconds()),
-		secretStore:   secretStoreLabel(a.cfg.Settings.SecretStore),
-		hasPassword:   a.hasPassword(p.ID),
-		detected:      nil,
+		open:              true,
+		editingID:         p.ID,
+		protocol:          protocolLabel(p.Protocol),
+		remoteDNS:         p.RemoteDNS,
+		internalDomains:   strings.Join(p.InternalDomains, ", "),
+		certificateSHA256: p.CertificateSHA256,
+		name:              p.Name,
+		address:           model.FormatAccessAddress(p.Server, p.Port),
+		username:          p.Username,
+		authMode:          string(mode),
+		authModeLabel:     mode.Label(),
+		domain:            p.LoginDomain,
+		socksPort:         strconv.Itoa(p.SocksPort),
+		inPool:            p.InPool,
+		autoConnect:       p.AutoConnect,
+		monitor:           p.MonitorEnabled(),
+		monitorEvery:      strconv.Itoa(p.MonitorIntervalSeconds()),
+		secretStore:       secretStoreLabel(a.cfg.Settings.SecretStore),
+		hasPassword:       a.hasPassword(p.ID),
+		detected:          nil,
 	}
 	a.editor.hasTOTP = a.hasTOTP(p.ID)
 	// A point saved before the mode was a choice gets the mode the server
@@ -1733,16 +1786,20 @@ func (a *app) saveEditor() {
 		username = ""
 	}
 	p := model.AccessPoint{
-		ID:          d.editingID,
-		Name:        strings.TrimSpace(d.name),
-		Server:      server,
-		Port:        port,
-		Username:    username,
-		AuthMode:    mode,
-		LoginDomain: strings.TrimSpace(d.domain),
-		SocksPort:   socksPort,
-		InPool:      d.inPool,
-		AutoConnect: d.autoConnect,
+		Protocol:          protocolFromLabel(d.protocol),
+		RemoteDNS:         d.remoteDNS,
+		InternalDomains:   strings.FieldsFunc(d.internalDomains, func(r rune) bool { return r == ',' || r == '，' || r == '\n' }),
+		CertificateSHA256: d.certificateSHA256,
+		ID:                d.editingID,
+		Name:              strings.TrimSpace(d.name),
+		Server:            server,
+		Port:              port,
+		Username:          username,
+		AuthMode:          mode,
+		LoginDomain:       strings.TrimSpace(d.domain),
+		SocksPort:         socksPort,
+		InPool:            d.inPool,
+		AutoConnect:       d.autoConnect,
 	}
 	monitor := d.monitor
 	p.Monitor = &monitor
@@ -1834,6 +1891,9 @@ func (a *app) saveEditor() {
 // editor's "detect" button. It runs beside the view and updates the draft
 // on the main thread.
 func (a *app) detectEditor() {
+	if a.editor.protocol == "EasyConnect" {
+		return
+	}
 	d := &a.editor
 	server, port, err := model.ParseAccessAddress(d.address)
 	if err != nil {
@@ -2040,6 +2100,12 @@ func (a *app) saveSettings() {
 }
 
 func (a *app) removePoint(id string) {
+	for _, p := range a.cfg.LocalApps {
+		if p.PointID == id {
+			a.toast = "「" + p.Name + "」仍使用此接入点，请先在本机软件中更换或删除"
+			return
+		}
+	}
 	if _, err := a.store.Update(func(cfg *model.Config) error {
 		cfg.Remove(id)
 		return nil
@@ -2076,14 +2142,14 @@ func parseOptionalPort(s string) (int, error) {
 }
 
 func secretStoreLabels() []string {
-	return []string{"本地文件（推荐）", "系统钥匙串"}
+	return []string{"系统钥匙串", "本地文件（明文）"}
 }
 
 func secretStoreLabel(v string) string {
 	if v == model.SecretStoreKeychain {
 		return "系统钥匙串"
 	}
-	return "本地文件（推荐）"
+	return "本地文件（明文）"
 }
 
 func secretStoreFromLabel(label string) string {
@@ -2145,4 +2211,17 @@ func appFilterValue(index int) string {
 // login lives in the app's own window and its files are not worth touching.
 func logoutClearsBrowser(mode model.AuthMode) bool {
 	return mode == model.AuthModeSSO
+}
+
+func protocolLabel(value string) string {
+	if value == model.ProtocolEasyConnect {
+		return "EasyConnect"
+	}
+	return "aTrust"
+}
+func protocolFromLabel(label string) string {
+	if label == "EasyConnect" {
+		return model.ProtocolEasyConnect
+	}
+	return model.ProtocolATrust
 }

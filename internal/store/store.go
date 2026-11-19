@@ -174,9 +174,7 @@ func (s *Store) DeleteSecrets(id string) error {
 }
 
 func cloneConfig(c model.Config) model.Config {
-	out := c
-	out.Points = append([]model.AccessPoint(nil), c.Points...)
-	return out
+	return c.Clone()
 }
 
 func saveJSON(path string, value any) error {

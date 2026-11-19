@@ -1,0 +1,12 @@
+//go:build !linux
+
+package localapps
+
+import (
+	"context"
+
+	"github.com/qy/easyconnect/internal/model"
+)
+
+// The platform launcher reports unsupported capture on these platforms.
+func checkCaptureProgram(ctx context.Context, _ model.LocalApp) error { return ctx.Err() }

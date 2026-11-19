@@ -141,6 +141,7 @@ func TestSaveDefaultEditorIsPassword(t *testing.T) {
 func TestSaveSSOEditor(t *testing.T) {
 	a := testApp(t)
 	a.openNewEditor()
+	a.editor.protocol = "aTrust"
 	a.editor.address = "https://vpn.example.edu.cn"
 	a.editor.authModeLabel = model.AuthModeSSO.Label()
 	a.saveEditor()
@@ -288,7 +289,6 @@ func TestCallbackFromURLTakesTicketAndCode(t *testing.T) {
 		t.Fatal("门户页不应算回调")
 	}
 }
-
 
 func TestParsePasteProbe(t *testing.T) {
 	href, text := parsePasteProbe(`["https://a.net/x#devtools","https://a.net/passport/v1/auth/cas?ticket=1"]`)

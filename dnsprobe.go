@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ type dnsProbeDraft struct {
 	open, running                           bool
 	capture                                 bool
 	automatic                               bool
+	port                                    string
 	id, name, domain, kind, result, summary string
 	cancel                                  context.CancelFunc
 	replies                                 <-chan string
@@ -26,7 +28,7 @@ func (a *app) openDNSProbe(id, name string) {
 	if a.dnsProbe.cancel != nil {
 		a.dnsProbe.cancel()
 	}
-	d := dnsProbeDraft{open: true, id: id, name: name, kind: "A", summary: "核心尚未提供 DNS 资源信息"}
+	d := dnsProbeDraft{open: true, id: id, name: name, kind: "A", port: "443", summary: "核心尚未提供 DNS 资源信息"}
 	if resources := a.mgr.DNSResources(id); resources != nil {
 		server := resources.DNSServer
 		if server == "" {
@@ -160,6 +162,15 @@ func (a *app) dnsProbeView(c *ui.Context) {
 				d.result = formatRouteDecision(a.mgr.PreviewDNS(d.domain, id))
 			}
 			ui.Text(c, "查询使用当前 VPN 的 DNS；公网名称不会被转发。此工具不修改系统 DNS，解析成功也不代表业务端口已经可用。").FontSize(11).TextColor(c.Theme().TextMuted).Wrap()
+			ui.Field(c, "接管 TCP 检查端口", func() { ui.TextInput(c, &d.port) })
+			ui.Row(c).Gap(8).Children(func() {
+				if ui.Button(c, "检查运行中映射 DNS").Disabled(d.running).Clicked() {
+					a.startMappedProbe(false)
+				}
+				if ui.Button(c, "检查映射 DNS 并连接 TCP").Disabled(d.running).Clicked() {
+					a.startMappedProbe(true)
+				}
+			})
 			if d.result != "" {
 				ui.Scroll(c).MaxHeight(210).Children(func() { ui.Text(c, d.result).FontSize(12).Wrap() })
 			}
@@ -179,4 +190,69 @@ func (a *app) dnsProbeView(c *ui.Context) {
 	if !d.open && d.cancel != nil {
 		d.cancel()
 	}
+}
+
+func (a *app) startMappedProbe(tcp bool) {
+	d := &a.dnsProbe
+	packet, err := dnsProbeQuestion(d.domain, "A")
+	if err != nil {
+		d.result = err.Error()
+		return
+	}
+	port := 443
+	if tcp {
+		port, err = parsePort(d.port, "检查端口")
+		if err != nil {
+			d.result = err.Error()
+			return
+		}
+	}
+	if a.local == nil {
+		d.result = "未启用接管，无法检查实际映射链路"
+		return
+	}
+	connection, err := a.mgr.LocalAppConnection(d.id)
+	if err != nil {
+		d.result = err.Error()
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	replies := make(chan string, 1)
+	d.cancel, d.replies, d.running = cancel, replies, true
+	go func() {
+		defer cancel()
+		answer, err := a.local.ExchangeRunningMappedDNS(ctx, connection.Key, packet)
+		if err != nil {
+			replies <- "运行中映射检查失败：" + err.Error()
+			a.invalidate()
+			return
+		}
+		result := "运行中映射 DNS（包含助手发布确认）：\n" + dnsProbeResult(answer, nil, false)
+		result += "\n此检查使用接管服务的 DNS 入口；系统 NRPT / 应用自有 DNS 是否命中仍需实机验证。"
+		if tcp {
+			m := new(dns.Msg)
+			m.Unpack(answer)
+			address := ""
+			for _, rr := range m.Answer {
+				if rr, ok := rr.(*dns.A); ok {
+					address = rr.A.String()
+					break
+				}
+			}
+			if address == "" {
+				result += "\nTCP：未尝试，没有可用映射地址"
+			} else {
+				started := time.Now()
+				conn, e := connection.Dial(ctx, "tcp", net.JoinHostPort(address, strconv.Itoa(port)))
+				if e != nil {
+					result += "\nTCP：建立失败（详情见访问日志）"
+				} else {
+					conn.Close()
+					result += fmt.Sprintf("\nTCP：已通过所属网关建立，用时 %s；未验证应用业务操作", time.Since(started).Round(time.Millisecond))
+				}
+			}
+		}
+		replies <- result
+		a.invalidate()
+	}()
 }

@@ -39,7 +39,11 @@ func (a *app) setupResourceTUN() {
 			if err != nil {
 				port = "0"
 			}
-			return suspendProxyForResourceTUN(a.dir, net.JoinHostPort("127.0.0.1", port))
+			return suspendProxyForResourceTUN(a.dir, net.JoinHostPort("127.0.0.1", port), func(message string) {
+				if a.bus != nil {
+					a.bus.Add("app", message)
+				}
+			})
 		}, change: func() {
 			view := a.resourceTUN.View()
 			message := view.Error

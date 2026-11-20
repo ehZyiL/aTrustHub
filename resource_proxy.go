@@ -18,6 +18,11 @@ type captureProxyRecovery struct{ Before, Installed captureProxySnapshot }
 type captureProxyOps struct {
 	read       func() (captureProxySnapshot, error)
 	setEnabled func(uint64) error
+	notice     func(string)
+}
+
+func ownsProxy(snapshot captureProxySnapshot, address string) bool {
+	return snapshot.Enabled != 0 && !snapshot.Automatic && (snapshot.Server == "socks="+address || snapshot.Server == address)
 }
 
 func suspendOwnedProxy(path, address string, ops captureProxyOps) (func() error, error) {
@@ -30,14 +35,11 @@ func suspendOwnedProxy(path, address string, ops captureProxyOps) (func() error,
 	if err != nil {
 		return nil, err
 	}
-	if before.Automatic {
-		return nil, errors.New("系统使用自动代理配置，请先关闭自动代理再启用系统 TUN")
-	}
-	if before.Enabled == 0 {
+	if !ownsProxy(before, address) {
+		if (before.Enabled != 0 || before.Automatic) && ops.notice != nil {
+			ops.notice("系统 TUN 保留第三方系统代理；使用该代理的应用仍遵循其分流规则，内网目标需在该代理中设置绕过或使用本应用统一入口")
+		}
 		return func() error { return nil }, nil
-	}
-	if before.Server != "socks="+address && before.Server != address {
-		return nil, errors.New("当前系统代理由其他配置管理，请先关闭它再启用系统 TUN")
 	}
 	installed := before
 	installed.Enabled = 0

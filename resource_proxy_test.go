@@ -53,9 +53,9 @@ func TestCaptureProxySwitchRestoresOnlyItsUnchangedWrite(t *testing.T) {
 	}
 }
 
-func TestCaptureProxyRejectsExternalAndRetainsFailedRestore(t *testing.T) {
+func TestCaptureProxyRetainsFailedRestore(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "proxy.json")
-	current := captureProxySnapshot{Enabled: 1, Server: "external:8080", Fingerprint: "x"}
+	current := captureProxySnapshot{Enabled: 1, Server: "socks=127.0.0.1:1080", Fingerprint: "x"}
 	writes := 0
 	fail := false
 	ops := captureProxyOps{read: func() (captureProxySnapshot, error) { return current, nil }, setEnabled: func(v uint64) error {
@@ -66,10 +66,6 @@ func TestCaptureProxyRejectsExternalAndRetainsFailedRestore(t *testing.T) {
 		current.Enabled = v
 		return nil
 	}}
-	if _, err := suspendOwnedProxy(path, "127.0.0.1:1080", ops); err == nil || writes != 0 {
-		t.Fatal("external proxy modified")
-	}
-	current.Server = "socks=127.0.0.1:1080"
 	restore, err := suspendOwnedProxy(path, "127.0.0.1:1080", ops)
 	if err != nil {
 		t.Fatal(err)
@@ -84,5 +80,25 @@ func TestCaptureProxyRejectsExternalAndRetainsFailedRestore(t *testing.T) {
 	fail = false
 	if err := restore(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCaptureProxyCoexistsWithExternalProxyWithoutChangingIt(t *testing.T) {
+	for _, automatic := range []bool{false, true} {
+		path := filepath.Join(t.TempDir(), "proxy.json")
+		current := captureProxySnapshot{Enabled: 1, Server: "127.0.0.1:10808", Fingerprint: "v2rayN", Automatic: automatic}
+		writes := 0
+		ops := captureProxyOps{read: func() (captureProxySnapshot, error) { return current, nil }, setEnabled: func(uint64) error { writes++; return nil }}
+		restore, err := suspendOwnedProxy(path, "127.0.0.1:1080", ops)
+		if err != nil || restore == nil {
+			t.Fatalf("external proxy unnecessarily blocked resource capture: %v", err)
+		}
+		current.Server = "127.0.0.1:10809" // External owner changes its settings during capture.
+		if err := restore(); err != nil || writes != 0 || current.Server != "127.0.0.1:10809" {
+			t.Fatal("capture stop touched external proxy", err)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("created a recovery journal for settings we do not own")
+		}
 	}
 }

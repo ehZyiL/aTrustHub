@@ -105,8 +105,10 @@ func TestKeepAliveCounts(t *testing.T) {
 func TestSystemProxyGuards(t *testing.T) {
 	// 单元测试不能碰真实系统设置：CI 上会卡在管理员密码弹窗。
 	orig := applySystemProxyFn
+	origOwned := systemProxyOwnedFn
+	systemProxyOwnedFn = func(string) bool { return true }
 	applySystemProxyFn = func(string, bool) error { return nil }
-	t.Cleanup(func() { applySystemProxyFn = orig })
+	t.Cleanup(func() { applySystemProxyFn, systemProxyOwnedFn = orig, origOwned })
 
 	a := testApp(t)
 

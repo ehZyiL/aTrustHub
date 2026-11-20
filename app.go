@@ -37,7 +37,7 @@ const appName = "EasyConnect Hub"
 // app is everything the window shows and the manager that does the work.
 // appBuild is shown in the footer and the startup log so an old running
 // instance is easy to tell apart from a freshly built one.
-const appBuild = "0.1.0-dev-multigateway-tun.1"
+const appBuild = "0.1.0-dev-multigateway-tun.2"
 
 //go:embed resources/icon.png
 var embeddedAppIcon []byte
@@ -329,7 +329,7 @@ func newApp() (*app, error) {
 		}
 	}, a.logLocalAccess)
 	a.local.SetErrorHandler(a.logLocalAppError)
-	a.sysProxyOn = systemProxyEnabled()
+	a.sysProxyOn = systemProxyOwned(a.systemProxyAddress())
 	a.tunWanted = a.cfg.Settings.TunEnabled
 	a.bus.Add("app", fmt.Sprintf("EasyConnect Hub %s 启动，数据目录 %s", appBuild, dir))
 	a.mgr = vpn.NewManager(
@@ -455,7 +455,7 @@ func (a *app) start() {
 			if err := recoverResourceProxy(a.dir, net.JoinHostPort("127.0.0.1", port)); err != nil {
 				a.tunLogf("系统捕获代理恢复：%v", err)
 			} else {
-				a.sysProxyOn = systemProxyEnabled()
+				a.sysProxyOn = systemProxyOwned(a.systemProxyAddress())
 			}
 		}
 	}
@@ -780,6 +780,9 @@ func (a *app) guardSystemProxy() {
 	if !a.sysProxyOn {
 		return
 	}
+	if a.releaseLostSystemProxy() {
+		return
+	}
 	agg := a.mgr.Aggregate()
 	if agg.Running && agg.Addr != "" {
 		if conn, err := net.DialTimeout("tcp", agg.Addr, 1500*time.Millisecond); err == nil {
@@ -831,6 +834,9 @@ func (a *app) teardownTUNOnExit() {
 // once because a failed revert leaves the machine with no usable network.
 func (a *app) disableSystemProxyOnExit() {
 	if !a.sysProxyOn {
+		return
+	}
+	if a.releaseLostSystemProxy() {
 		return
 	}
 	for attempt := 0; attempt < 2; attempt++ {

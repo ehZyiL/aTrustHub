@@ -2,9 +2,9 @@
 
 当前阶段：多网关系统 TCP 接管已完成生产路径自动化验证，真实 UAC、Wintun、NRPT、重连和共存正在验收。用户于 2026-11-20 确认过旧版本 Windows DBX 软件接管成功；该反馈不代表此次新系统模式已通过实测。
 
-构建标识：`0.1.0-dev-multigateway-tun.1`。请完整替换解压目录内的三个程序。Windows 网络助手协议为 6，EasyConnect worker 协议为 6。
+构建标识：`0.1.0-dev-multigateway-tun.2`。请完整替换解压目录内的三个程序。Windows 网络助手协议为 6，EasyConnect worker 协议为 6。
 
-新按钮 **系统 TUN (TCP)** 复用已登录 worker，以资源归属选择网关；旧 aTrust TUN 入口独立保留。系统模式启动完成后才暂停本应用自己的系统代理，停止或失败时恢复。外部代理、自动代理或未完成的清理会阻止新启动，界面显示原因并提供重试清理。
+新按钮 **系统 TUN (TCP)** 复用已登录 worker，以资源归属选择网关；旧 aTrust TUN 入口独立保留。系统模式启动完成后才暂停本应用自己的系统代理，停止或失败时恢复。第三方/自动代理原样保留，不阻止资源捕获；使用第三方代理的应用仍遵循它的分流规则。未完成的清理会阻止新启动，界面显示原因并提供重试清理。
 
 保留 `windows-capture.3` 的 IPv4 网卡修复：写回前清零 `SitePrefixLength`，并将初始化、路由、管道和进程启动错误细化到操作名称及 Win32 错误码。接管失败也会记录在应用日志中。用户已反馈此前失败的 DBX 接管成功；旧日志仍不足以确定原先具体失败的接口。
 
@@ -30,7 +30,7 @@ go test -mod=readonly -trimpath -c -o .\build\windows-capture\windows-capture-te
 .\build\windows-capture\windows-capture-tests.exe '-test.v' '-test.timeout=60s'
 ```
 
-退出旧版本后，普通双击 `build\windows-capture\easyconnect-hub.exe`，确认启动日志显示 `0.1.0-dev-multigateway-tun.1`。三个文件必须分别叫 `easyconnect-hub.exe`、`easyconnect-worker.exe` 和 `easyconnect-hub-capture.exe`，放在同一目录。Wintun DLL 已由依赖嵌入助手，无需另拷 DLL。旧 worker 可能在收到 v6 消息后立即退出；`test-worker.ps1` 使用空配置确认协议，完全不登录或访问网络。
+退出旧版本后，普通双击 `build\windows-capture\easyconnect-hub.exe`，确认启动日志显示 `0.1.0-dev-multigateway-tun.2`。三个文件必须分别叫 `easyconnect-hub.exe`、`easyconnect-worker.exe` 和 `easyconnect-hub-capture.exe`，放在同一目录。Wintun DLL 已由依赖嵌入助手，无需另拷 DLL。旧 worker 可能在收到 v6 消息后立即退出；`test-worker.ps1` 使用空配置确认协议，完全不登录或访问网络。
 
 Linux 上交叉编译或 Windows Git Bash 打完整 ZIP，可使用 `bash scripts/package-windows.sh`，包含三个程序、自测程序、说明和许可证。Windows PowerShell 调用示例：`& "C:\Program Files\Git\bin\bash.exe" .\scripts\package-windows.sh`。脚本已为 worker 的构建和模块清单单独禁用 workspace。
 
@@ -43,6 +43,13 @@ Linux 上交叉编译或 Windows Git Bash 打完整 ZIP，可使用 `bash script
 5. 停止后检查日志与网络差量。若出现“重试清理”，先处理清理错误；外部修改的代理/NRPT 配置会被保留并报告，不强行覆盖。
 
 新模式本次启动默认关闭，不自动恢复上次开关；显式启用它会关闭旧 aTrust 模式的自动恢复意图。助手异常退出由恢复进程处理拥有的策略，未过期映射池记录跨进程保留，不能分配给其他身份。
+
+## 与 v2rayN 等工具共存
+
+- 本应用只添加授权资源的具体路由，原网络出口可以继续经过其他 TUN/Tailscale。两个程序同时运行的路由、DNS 及开关顺序仍需按本机配置验证。
+- Windows 系统代理是一个共享设置，两个程序不能同时占用它。若另一个程序改写代理地址，Hub 会取消自己的“系统代理”状态并保留新设置，退出时也不关闭别人的代理。
+- 系统 TUN 与第三方系统代理可以同时开启。应用若把内网目标先交给第三方 HTTP/SOCKS/PAC，该目标就可能不经过本机的资源路由；应在第三方代理中为内网设置绕过，或让该应用显式使用 Hub 的统一入口。程序不会自动更改第三方分流规则。
+- 第三方 TUN 的 DNS 劫持/严格 DNS 策略可能影响内网 NRPT；IP 连通不等于域名链路通过，须分别使用运行中 DNS 诊断和实际应用验证。
 
 ## 按软件接管启动
 

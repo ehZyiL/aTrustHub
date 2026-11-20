@@ -70,8 +70,15 @@ func captureProxyRegistryOps() captureProxyOps {
 	}
 }
 
-func suspendProxyForResourceTUN(dir, address string) (func() error, error) {
-	return suspendOwnedProxy(filepath.Join(dir, "system-tun-proxy-recovery.json"), address, captureProxyRegistryOps())
+func suspendProxyForResourceTUN(dir, address string, notice func(string)) (func() error, error) {
+	ops := captureProxyRegistryOps()
+	ops.notice = notice
+	return suspendOwnedProxy(filepath.Join(dir, "system-tun-proxy-recovery.json"), address, ops)
+}
+
+func systemProxyOwned(address string) bool {
+	snapshot, err := captureProxyRegistryOps().read()
+	return err == nil && ownsProxy(snapshot, address)
 }
 
 func recoverResourceProxy(dir, address string) error {

@@ -2035,6 +2035,10 @@ func (a *app) toggleSystemProxy() {
 		a.toast = "请先关闭系统 TUN 再切换系统代理"
 		return
 	}
+	if a.releaseLostSystemProxy() {
+		a.toast = "系统代理已由其他软件修改，已更新开关状态并保留当前配置"
+		return
+	}
 	if a.tunOn && !a.sysProxyOn {
 		a.toast = "全局 TUN 已经接管流量，先关掉 TUN 再用系统代理"
 		a.sysProxySwitch = a.sysProxyOn

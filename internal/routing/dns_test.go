@@ -26,6 +26,12 @@ func TestDNSExplicitEquivalentGroupUsesOnlyOnlineCurrentOwners(t *testing.T) {
 	group.DNSFailover = false
 	check("", "", nil)
 	group.DNSFailover = true
+	g[1].Known, g[1].Current, g[1].Online = g[1].Current, nil, false
+	g[0].Known, g[0].Current, g[0].Online = g[0].Current, nil, false
+	check("", "", nil)
+	g[0].Known, g[0].Current, g[0].Online = nil, domainSnapshot("test", 443), true
+	check("", "", nil) // A broader current claim cannot replace B's exact offline ownership.
+	g[0].Current, g[1].Current, g[1].Online = domainSnapshot("corp.test", 443), g[1].Known, true
 	g = append(g, Gateway{ID: "C", Online: true, Current: domainSnapshot("corp.test", 443)})
 	check("", "", nil)
 }

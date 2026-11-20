@@ -153,7 +153,7 @@ func (a *app) dnsProbeView(c *ui.Context) {
 			ui.Field(c, "查询类型", func() { ui.Select(c, &d.kind, []string{"A", "AAAA", "CNAME", "TXT", "MX", "SRV"}) })
 			ui.Checkbox(c, &d.capture, "旧版 IP 授权兼容检查（不验证当前接管映射）")
 			ui.Checkbox(c, &d.automatic, "按资源归属查询（应用域名默认 DNS 归属）")
-			if ui.Button(c, "预览 DNS 归属").Clicked() {
+			if ui.Button(c, "预览 DNS 归属").FontSize(11).Clicked() {
 				id := d.id
 				if d.automatic {
 					id = ""
@@ -163,10 +163,10 @@ func (a *app) dnsProbeView(c *ui.Context) {
 			ui.Text(c, "查询使用当前 VPN 的 DNS；公网名称不会被转发。此工具不修改系统 DNS，解析成功也不代表业务端口已经可用。").FontSize(11).TextColor(c.Theme().TextMuted).Wrap()
 			ui.Field(c, "接管 TCP 检查端口", func() { ui.TextInput(c, &d.port) })
 			ui.Row(c).Gap(8).Children(func() {
-				if ui.Button(c, "检查运行中映射 DNS").Disabled(d.running).Clicked() {
+				if ui.Button(c, "检查运行中映射 DNS").FontSize(11).Disabled(d.running).Clicked() {
 					a.startMappedProbe(false)
 				}
-				if ui.Button(c, "检查映射 DNS 并连接 TCP").Disabled(d.running).Clicked() {
+				if ui.Button(c, "检查映射 DNS 并连接 TCP").FontSize(11).Disabled(d.running).Clicked() {
 					a.startMappedProbe(true)
 				}
 			})

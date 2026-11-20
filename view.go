@@ -245,10 +245,8 @@ func (a *app) appsSection(c *ui.Context) {
 				return
 			}
 			if len(shown) == 0 {
-				ui.Column(c).Padding(40).Center().Children(func() {
-					ui.Text(c, "没有匹配「"+a.appQuery+"」的应用").
-						FontSize(13).TextColor(t.TextMuted)
-				})
+				noResults(c, "没有匹配「"+a.appQuery+"」的应用",
+					"换个名称、地址或标签试试；清空搜索可以看到全部应用。")
 				return
 			}
 			// Group by access point, in the order the points appear.
@@ -388,10 +386,10 @@ func (a *app) appRow(c *ui.Context, entry appEntry) {
 	enabled := a.appEnabled(entry.PointID, app.ID)
 	row := ui.Row(c).Padding(10, 12).Gap(10).AlignItems(ui.Center)
 	row.Children(func() {
-		ui.Row(c).Size(26, 26).Radius(8).Background(appColor(app.Name)).
+		ui.Row(c).Size(26, 26).Radius(8).Background(appColor(t, app.Name)).
 			AlignItems(ui.Center).Justify(ui.Center).Children(func() {
 			ui.Text(c, firstRune(app.Name)).FontSize(13).Bold().
-				TextColor(ui.RGBA(255, 255, 255, 1))
+				TextColor(textOnFill)
 		})
 		ui.Column(c).Gap(2).Grow(1).MinWidth(0).Children(func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -719,13 +717,15 @@ func firstRune(s string) string {
 	return "应"
 }
 
-func appColor(name string) ui.Color {
+// appColor 给资源色块挑一个底色：按名称散列，但只从主题色里取，深浅两套主题
+// 下都不会出现与当前配色冲突的固定亮色。
+func appColor(t *ui.Theme, name string) ui.Color {
 	palette := []ui.Color{
-		ui.RGBA(0x4F, 0x8C, 0xFF, 1),
-		ui.RGBA(0x2F, 0xB3, 0x7A, 1),
-		ui.RGBA(0xE0, 0x8A, 0x2E, 1),
-		ui.RGBA(0x8E, 0x6C, 0xE8, 1),
-		ui.RGBA(0x2A, 0xA8, 0xB8, 1),
+		t.Accent.Mix(t.Surface, 0.15),
+		t.Success.Mix(t.Surface, 0.15),
+		t.Warning.Mix(t.Surface, 0.15),
+		t.Accent.Mix(t.Success, 0.45),
+		t.Accent.Mix(t.Warning, 0.45),
 	}
 	if name == "" {
 		return palette[0]
@@ -1004,6 +1004,19 @@ func (a *app) pointColumns() int {
 	return 3
 }
 
+// noResults 是列表内的「没有结果」提示：留白、字号与层次统一，
+// 与整页空状态（emptyState 类的面板）区分开。
+func noResults(c *ui.Context, title, hint string) {
+	t := c.Theme()
+	ui.Column(c).Padding(24).Gap(4).Center().Children(func() {
+		ui.Text(c, title).FontSize(13).Bold()
+		if hint != "" {
+			ui.Text(c, hint).FontSize(11).TextColor(t.TextMuted).
+				Wrap().MaxWidth(460)
+		}
+	})
+}
+
 func (a *app) emptyState(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Padding(32).Gap(10).Center().Radius(12).
@@ -1261,7 +1274,8 @@ func (a *app) accessSection(c *ui.Context) {
 		ui.Text(c, "访问日志").FontSize(15).Bold()
 		ui.Text(c, fmt.Sprintf("%d 条", len(entries))).FontSize(11).TextColor(t.TextMuted)
 		ui.Row(c).Grow(1)
-		if ui.Button(c, "复制全部").FontSize(11).Clicked() {
+		// 页面级工具栏用默认字号（13），面板内的动作才用 11。
+		if ui.Button(c, "复制全部").Clicked() {
 			var b strings.Builder
 			for _, e := range entries {
 				mark := "✔"
@@ -1284,12 +1298,9 @@ func (a *app) accessSection(c *ui.Context) {
 		box.Children(func() {
 			ui.Column(c).Gap(4).Children(func() {
 				if len(entries) == 0 {
-					ui.Column(c).Padding(30).Center().Children(func() {
-						ui.Text(c, "还没有访问记录").FontSize(13).Bold()
-						ui.Text(c, "从本机软件页启动项目后，连接会显示在这里；"+
-							"支持的核心会报告 VPN 或原出口及命中的规则。").
-							FontSize(11).TextColor(t.TextMuted)
-					})
+					noResults(c, "还没有访问记录",
+						"从本机软件页启动项目后，连接会显示在这里；"+
+							"支持的核心会报告 VPN 或原出口及命中的规则。")
 					return
 				}
 				for _, e := range entries {
@@ -1323,7 +1334,7 @@ func (a *app) footer(c *ui.Context) {
 	t := c.Theme()
 	ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
 		if ui.Button(c, "退出").FontSize(11).Background(t.Danger).
-			TextColor(ui.Hex("#ffffff")).Clicked() {
+			TextColor(textOnFill).Clicked() {
 			a.askQuit()
 		}
 		ui.Text(c, "⌘1–⌘4 切换页面").FontSize(10).TextColor(t.TextMuted)
@@ -1681,8 +1692,8 @@ func (a *app) editorView(c *ui.Context) {
 			// 底部：删除在左，取消与保存在右。
 			dialogFooter(c, func() {
 				if d.editingID != "" {
-					if ui.Button(c, "删除此接入点").Background(t.Danger).
-						TextColor(ui.RGBA(255, 255, 255, 1)).FontSize(11).
+					if ui.Button(c, "删除此接入点").FontSize(11).Background(t.Danger).
+						TextColor(textOnFill).FontSize(11).
 						Label("删除接入点 " + d.name).Clicked() {
 						a.deleting = d.editingID
 						d.open = false
@@ -1871,7 +1882,7 @@ func (a *app) logoutView(c *ui.Context) {
 					a.logoutAsk = ""
 				}
 				if ui.Button(c, "确认退出登录").FontSize(11).Background(t.Danger).
-					TextColor(ui.Hex("#ffffff")).Clicked() {
+					TextColor(textOnFill).Clicked() {
 					id := a.logoutAsk
 					a.logoutAsk = ""
 					go func() {
@@ -1920,7 +1931,7 @@ func (a *app) quitView(c *ui.Context) {
 					a.quitAsk = false
 				}
 				if ui.Button(c, "确认退出").FontSize(11).Background(t.Danger).
-					TextColor(ui.Hex("#ffffff")).Clicked() {
+					TextColor(textOnFill).Clicked() {
 					a.quitAsk = false
 					a.doQuit()
 				}

@@ -177,7 +177,7 @@ func (a *app) routesView(c *ui.Context) {
 						ui.Field(c, "目标（主机:端口）", func() { ui.TextInput(c, &d.target).Placeholder("db.corp.example:443") })
 						ui.Field(c, "协议", func() { ui.Select(c, &d.network, []string{"tcp", "udp", "tcp6", "udp6"}) })
 						ui.Field(c, "入口绑定", func() { ui.Select(c, &d.binding, a.routeChoices("自动归属")) })
-						if ui.PrimaryButton(c, "预览路由").Clicked() {
+						if ui.PrimaryButton(c, "预览路由").FontSize(11).Clicked() {
 							a.previewRoute()
 						}
 						ui.Text(c, d.result).FontSize(13).Wrap()
@@ -265,19 +265,19 @@ func (a *app) routePolicies(c *ui.Context) {
 	if d.action == "指定网关" {
 		ui.Select(c, &d.gateway, a.routeChoices("请选择网关"))
 	}
-	if ui.Button(c, "添加策略").Clicked() {
+	if ui.Button(c, "添加策略").FontSize(11).Clicked() {
 		a.addRoutePolicy(false)
 	}
 	for i, p := range a.cfg.Settings.RoutePolicies {
 		ui.Row(c).Gap(6).Children(func() {
 			ui.Text(c, fmt.Sprintf("%d. %s · %s:%d–%d · %s %s", i+1, p.Pattern, p.Protocol, p.PortMin, p.PortMax, map[string]string{"auto": "自动", "gateway": "指定网关", "direct": "原网络", "block": "阻止"}[p.Action], p.GatewayID)).FontSize(11).Grow(1).Wrap()
-			if ui.Button(c, "上移").Label("上移策略 " + p.ID).Disabled(i == 0).Clicked() {
+			if ui.Button(c, "上移").Label("上移策略 " + p.ID).FontSize(11).Disabled(i == 0).Clicked() {
 				a.updateRoutes(func(s *model.Settings) error {
 					s.RoutePolicies[i-1], s.RoutePolicies[i] = s.RoutePolicies[i], s.RoutePolicies[i-1]
 					return nil
 				})
 			}
-			if ui.Button(c, "删除").Label("删除策略 " + p.ID).Clicked() {
+			if ui.Button(c, "删除").Label("删除策略 " + p.ID).FontSize(11).Clicked() {
 				a.updateRoutes(func(s *model.Settings) error {
 					s.RoutePolicies = append(s.RoutePolicies[:i], s.RoutePolicies[i+1:]...)
 					return nil
@@ -296,7 +296,7 @@ func (a *app) routePolicies(c *ui.Context) {
 		}
 		ui.Checkbox(c, d.shared[p.ID], a.pointChoice(p))
 	}
-	if ui.Button(c, "添加同业务出口组").Clicked() {
+	if ui.Button(c, "添加同业务出口组").FontSize(11).Clicked() {
 		a.addRoutePolicy(true)
 	}
 	for i, g := range a.cfg.Settings.SharedExits {
@@ -306,7 +306,7 @@ func (a *app) routePolicies(c *ui.Context) {
 				dns = " · DNS 离线备用"
 			}
 			ui.Text(c, fmt.Sprintf("%s · %s:%d–%d · %s%s", g.Pattern, g.Protocol, g.PortMin, g.PortMax, strings.Join(g.Gateways, ", "), dns)).FontSize(11).Grow(1).Wrap()
-			if ui.Button(c, "删除").Label("删除出口组 " + g.ID).Clicked() {
+			if ui.Button(c, "删除").Label("删除出口组 " + g.ID).FontSize(11).Clicked() {
 				a.updateRoutes(func(s *model.Settings) error {
 					s.SharedExits = append(s.SharedExits[:i], s.SharedExits[i+1:]...)
 					return nil
@@ -317,7 +317,7 @@ func (a *app) routePolicies(c *ui.Context) {
 	ui.Field(c, "单次拨号预算（毫秒）", func() { ui.TextInput(c, &d.each) })
 	ui.Text(c, "域名默认 DNS 归属（沿用上方域名；与业务端口策略分开）").FontSize(13).Bold()
 	ui.Select(c, &d.gateway, a.routeChoices("请选择网关"))
-	if ui.Button(c, "添加 DNS 默认归属").Clicked() {
+	if ui.Button(c, "添加 DNS 默认归属").FontSize(11).Clicked() {
 		a.updateRoutes(func(s *model.Settings) error {
 			s.DNSBindings = append(s.DNSBindings, routing.DNSBinding{ID: model.NewID(), Pattern: strings.TrimSpace(d.pattern), GatewayID: a.routePoint(d.gateway)})
 			return nil
@@ -326,7 +326,7 @@ func (a *app) routePolicies(c *ui.Context) {
 	for i, b := range a.cfg.Settings.DNSBindings {
 		ui.Row(c).Gap(6).Children(func() {
 			ui.Text(c, b.Pattern+" → "+b.GatewayID).FontSize(11).Grow(1)
-			if ui.Button(c, "删除").Label("删除 DNS 归属 " + b.ID).Clicked() {
+			if ui.Button(c, "删除").Label("删除 DNS 归属 " + b.ID).FontSize(11).Clicked() {
 				a.updateRoutes(func(s *model.Settings) error {
 					s.DNSBindings = append(s.DNSBindings[:i], s.DNSBindings[i+1:]...)
 					return nil
@@ -335,7 +335,7 @@ func (a *app) routePolicies(c *ui.Context) {
 		})
 	}
 	ui.Field(c, "总拨号预算（毫秒）", func() { ui.TextInput(c, &d.total) })
-	if ui.Button(c, "保存拨号预算").Clicked() {
+	if ui.Button(c, "保存拨号预算").FontSize(11).Clicked() {
 		a.updateRoutes(func(s *model.Settings) error {
 			each, e1 := strconv.Atoi(d.each)
 			total, e2 := strconv.Atoi(d.total)

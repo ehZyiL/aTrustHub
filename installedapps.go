@@ -38,7 +38,7 @@ func (a *app) loadInstalledApps() {
 func (a *app) installedAppsPicker(c *ui.Context) {
 	d := &a.localEditor
 	if !d.showInstalled {
-		if ui.Button(c, "从已安装软件选择…").Clicked() {
+		if ui.Button(c, "从已安装软件选择…").FontSize(11).Clicked() {
 			d.showInstalled = true
 			if len(a.localCatalog.apps) == 0 {
 				a.loadInstalledApps()

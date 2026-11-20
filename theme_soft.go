@@ -10,6 +10,10 @@ var (
 	softDark  = newSoftTheme(true)
 )
 
+// textOnFill 是彩色底块上的文字：字母色块与小号危险按钮共用，避免同一白色
+// 在几处各写一种写法（ui.Hex("#ffffff") 与 ui.RGBA 混用）。
+var textOnFill = ui.RGBA(255, 255, 255, 1)
+
 func newSoftTheme(dark bool) *ui.Theme {
 	t := ui.LightTheme()
 	if dark {

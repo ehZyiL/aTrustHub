@@ -151,11 +151,8 @@ func (a *app) localAppList(c *ui.Context) {
 	panel.Children(func() {
 		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4).Children(func() {
 			if len(groups) == 0 {
-				ui.Column(c).Padding(24).Gap(4).Children(func() {
-					ui.Text(c, "没有匹配的项目").FontSize(13).Bold()
-					ui.Text(c, "换个名称、地址或接入点试试；清空搜索可以看到全部项目。").
-						FontSize(11).TextColor(t.TextMuted)
-				})
+				noResults(c, "没有匹配的项目",
+					"换个名称、地址或接入点试试；清空搜索可以看到全部项目。")
 				return
 			}
 			first := true
@@ -346,7 +343,7 @@ func localModeMark(c *ui.Context, t *ui.Theme, mode, name string) {
 	ui.Row(c).Size(26, 26).Radius(8).Background(bg).
 		AlignItems(ui.Center).Justify(ui.Center).Children(func() {
 		ui.Text(c, firstRune(name)).FontSize(13).Bold().
-			TextColor(ui.RGBA(255, 255, 255, 1))
+			TextColor(textOnFill)
 	})
 }
 
@@ -601,7 +598,7 @@ func (a *app) localAppDeleteView(c *ui.Context) {
 				if ui.Button(c, "取消").FontSize(11).Clicked() {
 					a.localDelete = ""
 				}
-				if ui.Button(c, "确认删除").Clicked() {
+				if ui.Button(c, "确认删除").FontSize(11).Clicked() {
 					id := a.localDelete
 					_, err := a.store.Update(func(cfg *model.Config) error {
 						if a.local != nil && localProjectBusy(a.local.View(id)) {

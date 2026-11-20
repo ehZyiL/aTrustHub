@@ -50,6 +50,9 @@ func (a *app) doQuit() {
 
 // loadAppIconPNG returns the tray icon bytes.
 func loadAppIconPNG() []byte {
+	if len(embeddedAppIcon) > 0 {
+		return embeddedAppIcon
+	}
 	var paths []string
 	if dir, err := mygo.App.Path(mygo.PathResources); err == nil && dir != "" {
 		paths = append(paths, filepath.Join(dir, "icon.png"))

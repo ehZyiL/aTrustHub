@@ -122,6 +122,9 @@ func (a *app) externalLogin(ctx context.Context, pointName, server, loginURL str
 			DevTools:  mygo.DevToolsEnabled,
 		},
 	})
+	if iconBytes := loadAppIconPNG(); len(iconBytes) > 0 {
+		_ = loginWin.SetIcon(iconBytes)
+	}
 	if loginWin.IsDestroyed() {
 		return "", errors.New("打不开扫码登录窗口")
 	}
@@ -911,6 +914,9 @@ func (a *app) browserLogin(ctx context.Context, pointName, server, loginURL stri
 		BackgroundColor: "light-dark(#ffffff, #1e1e1e)",
 		Page: mygo.PageOptions{DevTools: mygo.DevToolsEnabled},
 	})
+	if iconBytes := loadAppIconPNG(); len(iconBytes) > 0 {
+		_ = win.SetIcon(iconBytes)
+	}
 	if win.IsDestroyed() {
 		return "", errors.New("打不开登录窗口")
 	}

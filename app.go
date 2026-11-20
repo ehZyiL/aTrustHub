@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,6 +38,9 @@ const appName = "EasyConnect Hub"
 // appBuild is shown in the footer and the startup log so an old running
 // instance is easy to tell apart from a freshly built one.
 const appBuild = "0.1.0-dev-certificate-trust.1"
+
+//go:embed resources/icon.png
+var embeddedAppIcon []byte
 
 type app struct {
 	win          *mygo.Window
@@ -340,6 +344,11 @@ func newApp() (*app, error) {
 // loadAppIcon reads the icon mygo packages as resources/icon.png, for the
 // window header. The Dock icon comes from the same file at build time.
 func loadAppIcon() ui.ImageSource {
+	if len(embeddedAppIcon) > 0 {
+		if src, err := ui.DecodeBitmap(embeddedAppIcon); err == nil {
+			return src
+		}
+	}
 	var paths []string
 	if dir, err := mygo.App.Path(mygo.PathResources); err == nil && dir != "" {
 		paths = append(paths, filepath.Join(dir, "icon.png"))
@@ -374,8 +383,12 @@ func resolveDataDir() (string, error) {
 
 // setupMenu installs the app menu. It keeps the usual App/Edit/Window menus
 // and adds a 视图 menu whose 开发者工具 item (F12) opens the login window's
-// inspector on request.
+// inspector on request. On macOS, this becomes the global menu bar; on other
+// platforms, the window has no top-level menu bar to keep the UI clean.
 func (a *app) setupMenu() {
+	if runtime.GOOS != "darwin" {
+		return
+	}
 	menu := mygo.NewMenu([]*mygo.MenuItem{
 		{Role: mygo.RoleAppMenu},
 		{Role: mygo.RoleEditMenu},
@@ -500,7 +513,11 @@ func (a *app) createWindow() {
 		StateKey:        "main",
 		BackgroundColor: "light-dark(#f7f7f9, #17181a)",
 		Content:         ui.View(a.view),
+		AutoHideMenuBar: true,
 	})
+	if iconBytes := loadAppIconPNG(); len(iconBytes) > 0 {
+		_ = a.win.SetIcon(iconBytes)
+	}
 	// Closing the window hides it instead of quitting: tunnels, TUN and the
 	// tray/menu bar icon stay alive. Only 退出 really quits.
 	a.win.OnClose(func(e *mygo.CloseEvent) {

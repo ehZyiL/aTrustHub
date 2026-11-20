@@ -127,6 +127,9 @@ func openStaticQRWindow(ctx context.Context, title, instruction string, png []by
 		URL:             "about:blank",
 		BackgroundColor: "light-dark(#ffffff, #ffffff)",
 	})
+	if iconBytes := loadAppIconPNG(); len(iconBytes) > 0 {
+		_ = win.SetIcon(iconBytes)
+	}
 	if win.IsDestroyed() {
 		return errors.New("打不开二维码窗口")
 	}

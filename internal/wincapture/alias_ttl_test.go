@@ -11,10 +11,10 @@ import (
 )
 
 func TestPublishShorterRefreshKeepsLongerExpiration(t *testing.T) {
+	s := &captureSession{aliases: netip.MustParsePrefix("198.19.0.0/20"), mappings: make(map[netip.Addr]aliasEntry)}
 	e := &engine{
-		aliases:  netip.MustParsePrefix("198.19.0.0/16"),
-		adapter:  netip.MustParsePrefix("198.19.0.1/32"),
-		mappings: make(map[netip.Addr]aliasEntry),
+		adapter:  netip.MustParsePrefix("198.18.0.0/30"),
+		sessions: map[string]*captureSession{"A": s},
 	}
 
 	addr := netip.MustParseAddr("198.19.0.10")
@@ -22,14 +22,14 @@ func TestPublishShorterRefreshKeepsLongerExpiration(t *testing.T) {
 
 	// 1. Initial publish with TTL=60
 	now := time.Now()
-	err := e.publish([]workeripc.DNSAlias{
+	err := e.publish("A", []workeripc.DNSAlias{
 		{Address: addr.String(), Original: orig.String(), TTL: 60},
 	})
 	if err != nil {
 		t.Fatalf("first publish failed: %v", err)
 	}
 
-	entry, ok := e.mappings[addr]
+	entry, ok := s.mappings[addr]
 	if !ok {
 		t.Fatal("mapping not stored")
 	}
@@ -40,14 +40,14 @@ func TestPublishShorterRefreshKeepsLongerExpiration(t *testing.T) {
 
 	// 2. Refresh with shorter TTL=1 should NOT shorten initialExpires
 	time.Sleep(10 * time.Millisecond)
-	err = e.publish([]workeripc.DNSAlias{
+	err = e.publish("A", []workeripc.DNSAlias{
 		{Address: addr.String(), Original: orig.String(), TTL: 1},
 	})
 	if err != nil {
 		t.Fatalf("second publish failed: %v", err)
 	}
 
-	updated, ok := e.mappings[addr]
+	updated, ok := s.mappings[addr]
 	if !ok {
 		t.Fatal("mapping missing after refresh")
 	}
@@ -57,30 +57,31 @@ func TestPublishShorterRefreshKeepsLongerExpiration(t *testing.T) {
 
 	// 3. Refresh with longer TTL should extend it
 	extendedTTL := 60
-	err = e.publish([]workeripc.DNSAlias{
+	err = e.publish("A", []workeripc.DNSAlias{
 		{Address: addr.String(), Original: orig.String(), TTL: uint32(extendedTTL)},
 	})
 	if err != nil {
 		t.Fatalf("third publish failed: %v", err)
 	}
-	extended := e.mappings[addr]
+	extended := s.mappings[addr]
 	if extended.expires.Before(initialExpires) {
 		t.Fatalf("extended expires was shrunk: %v", extended.expires)
 	}
 }
 
 func TestExpiredPublishedAddressCannotBeRebound(t *testing.T) {
-	e := &engine{aliases: netip.MustParsePrefix("198.19.0.0/20"), adapter: netip.MustParsePrefix("198.18.0.0/30"), mappings: map[netip.Addr]aliasEntry{}}
+	s := &captureSession{aliases: netip.MustParsePrefix("198.19.0.0/20"), mappings: make(map[netip.Addr]aliasEntry)}
+	e := &engine{adapter: netip.MustParsePrefix("198.18.0.0/30"), sessions: map[string]*captureSession{"A": s}}
 	a := workeripc.DNSAlias{Address: "198.19.0.10", Original: "10.0.0.8", TTL: 1}
-	if err := e.publish([]workeripc.DNSAlias{a}); err != nil {
+	if err := e.publish("A", []workeripc.DNSAlias{a}); err != nil {
 		t.Fatal(err)
 	}
 	ip := netip.MustParseAddr(a.Address)
-	entry := e.mappings[ip]
+	entry := s.mappings[ip]
 	entry.expires = time.Now().Add(-time.Second)
-	e.mappings[ip] = entry
+	s.mappings[ip] = entry
 	a.Original = "10.0.0.9"
-	if err := e.publish([]workeripc.DNSAlias{a}); err == nil {
+	if err := e.publish("A", []workeripc.DNSAlias{a}); err == nil {
 		t.Fatal("expired identity rebound")
 	}
 }

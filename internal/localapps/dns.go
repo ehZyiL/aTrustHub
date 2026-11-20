@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/qy/easyconnect/internal/dnsmapping"
 	"github.com/qy/easyconnect/internal/netpolicy"
 	"github.com/qy/easyconnect/internal/splitdns"
 	"github.com/qy/easyconnect/internal/workeripc"
@@ -18,6 +19,7 @@ import (
 
 type CaptureConfig struct {
 	Key              string
+	Identity         dnsmapping.Identity
 	Gateway          string
 	Domains          []string
 	Exchange         splitdns.ExchangeFunc

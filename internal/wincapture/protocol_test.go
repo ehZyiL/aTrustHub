@@ -11,7 +11,7 @@ import (
 )
 
 func TestHelperScopeValidation(t *testing.T) {
-	valid := Config{Gateway: "vpn.example.test", Networks: []netpolicy.Range{{Min: "10.44.0.1", Max: "10.44.0.254"}}, Domains: []string{"internal.example.test"}, DNSAddress: "127.0.0.1:21001"}
+	valid := Config{GatewayID: "A", Generation: 1, ResourceVersion: "v1", Scope: "application", Gateway: "vpn.example.test", Networks: []netpolicy.Range{{Min: "10.44.0.1", Max: "10.44.0.254"}}, Domains: []string{"internal.example.test"}, DNSAddress: "127.0.0.1:21001"}
 	if err := valid.validate(); err != nil {
 		t.Fatal(err)
 	}

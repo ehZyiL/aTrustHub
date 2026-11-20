@@ -42,11 +42,17 @@ func (c *captureProcess) Close() error {
 }
 
 func windowsConfig(ctx context.Context, config CaptureConfig) wincapture.Config {
-	result := wincapture.Config{Networks: config.Networks, Gateway: config.Gateway, ReservedPools: config.ReservedPools, AliasNetworks: config.AliasNetworks}
+	result := windowsSessionConfig(config)
 	if binding, ok := ctx.Value(dnsContextKey{}).(*dnsBinding); ok {
 		result.DNSAddress, result.Domains = binding.address, binding.domains
 	}
 	return result
+}
+
+func windowsSessionConfig(config CaptureConfig) wincapture.Config {
+	return wincapture.Config{GatewayID: config.Identity.GatewayID, Generation: config.Identity.Generation,
+		ResourceVersion: config.Identity.Version, Scope: "application", Networks: config.Networks,
+		Gateway: config.Gateway, ReservedPools: config.ReservedPools, AliasNetworks: config.AliasNetworks}
 }
 
 func startCapture(ctx context.Context, p model.LocalApp, dial DialFunc) (managedCapture, error) {

@@ -14,16 +14,20 @@ import (
 	"github.com/qy/easyconnect/internal/workeripc"
 )
 
-const ProtocolVersion = 3
+const ProtocolVersion = 4
 const maxFrame = 256 << 10
 
 type Config struct {
-	Gateway       string            `json:"gateway"`
-	Networks      []netpolicy.Range `json:"networks,omitempty"`
-	DNSAddress    string            `json:"dnsAddress,omitempty"`
-	Domains       []string          `json:"domains,omitempty"`
-	ReservedPools []string          `json:"reservedPools,omitempty"`
-	AliasNetworks []netpolicy.Range `json:"aliasNetworks,omitempty"`
+	GatewayID       string            `json:"gatewayID"`
+	Generation      int               `json:"generation"`
+	ResourceVersion string            `json:"resourceVersion"`
+	Scope           string            `json:"scope"`
+	Gateway         string            `json:"gateway"`
+	Networks        []netpolicy.Range `json:"networks,omitempty"`
+	DNSAddress      string            `json:"dnsAddress,omitempty"`
+	Domains         []string          `json:"domains,omitempty"`
+	ReservedPools   []string          `json:"reservedPools,omitempty"`
+	AliasNetworks   []netpolicy.Range `json:"aliasNetworks,omitempty"`
 }
 
 type Upstream struct {
@@ -42,6 +46,9 @@ func (u Upstream) validate() error {
 }
 
 func (c Config) validate() error {
+	if c.GatewayID == "" || len(c.GatewayID) > 256 || c.Generation < 0 || c.ResourceVersion == "" || len(c.ResourceVersion) > 256 || c.Scope != "application" {
+		return errors.New("网络助手缺少有效的网关代次、资源版本或接管作用域")
+	}
 	if err := dnsmapping.ValidateReservations(c.ReservedPools); err != nil {
 		return err
 	}
@@ -99,6 +106,7 @@ type attach struct {
 type frame struct {
 	Version int                  `json:"version"`
 	Type    string               `json:"type"`
+	Session string               `json:"session,omitempty"`
 	Config  *Config              `json:"config,omitempty"`
 	Attach  *attach              `json:"attach,omitempty"`
 	ID      string               `json:"id,omitempty"`

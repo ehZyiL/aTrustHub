@@ -13,6 +13,14 @@ import (
 // helpers could both inspect the same free alias subnet before either adds
 // its route. The lease itself is not locked: each owns its specific resources.
 func networkTransaction(ctx context.Context) (func(), error) {
+	return namedNetworkLock(ctx, `Global\EasyConnectHub-NetworkTransaction`)
+}
+
+func runtimeOwnership(ctx context.Context) (func(), error) {
+	return namedNetworkLock(ctx, `Global\EasyConnectHub-NetworkOwner`)
+}
+
+func namedNetworkLock(ctx context.Context, lockName string) (func(), error) {
 	// Win32 mutex ownership belongs to an OS thread, not a goroutine.
 	runtime.LockOSThread()
 	locked := false
@@ -21,7 +29,7 @@ func networkTransaction(ctx context.Context) (func(), error) {
 			runtime.UnlockOSThread()
 		}
 	}()
-	name, _ := windows.UTF16PtrFromString(`Global\EasyConnectHub-NetworkTransaction`)
+	name, _ := windows.UTF16PtrFromString(lockName)
 	sd, err := windows.SecurityDescriptorFromString("D:P(A;;GA;;;SY)(A;;GA;;;BA)")
 	if err != nil {
 		return nil, windowsError("创建网络事务安全描述符", err)

@@ -23,42 +23,57 @@ import (
 )
 
 type registration struct {
-	job    windows.Handle
-	dial   *proxy.SOCKSDialer
-	ctx    context.Context
-	cancel context.CancelFunc
+	session string
+	job     windows.Handle
+	dial    *proxy.SOCKSDialer
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 type aliasEntry struct {
 	original netip.Addr
 	expires  time.Time
 }
 
-type engine struct {
-	mu               sync.Mutex
-	ctx              context.Context
-	cancel           context.CancelFunc
-	tun              tun.WinTun
-	stack            tun.Stack
-	index            uint32
-	routes           []*windows.MibIpForwardRow2
-	adapter, aliases netip.Prefix
-	dnsAddress       netip.Addr
-	config           Config
-	id               string
-	parent           windows.Handle
-	apps             map[string]*registration
-	mappings         map[netip.Addr]aliasEntry
-	issued           map[netip.Addr]netip.Addr
-	slots            chan struct{}
-	resources        []netip.Prefix
-	rules            ruleSet
-	once             sync.Once
-	closeErr         error
-	drainOnce        sync.Once
-	drainErr         error
+type captureSession struct {
+	config    Config
+	aliases   netip.Prefix
+	resources []netip.Prefix
+	gateways  []netip.Addr
+	mappings  map[netip.Addr]aliasEntry
+	issued    map[netip.Addr]netip.Addr
+	rules     ruleSet
+	retired   bool
+	ctx       context.Context
+	cancel    context.CancelFunc
 }
 
-func newEngine(ctx context.Context, id string, parent windows.Handle, config Config) (_ *engine, err error) {
+type engine struct {
+	mu           sync.Mutex
+	ctx          context.Context
+	cancel       context.CancelFunc
+	tun          tun.WinTun
+	stack        tun.Stack
+	index        uint32
+	installRoute func(netip.Prefix) (func() error, error)
+	aliasUndo    []func() error
+	adapter      netip.Prefix
+	dnsAddress   netip.Addr
+	id           string
+	parent       windows.Handle
+	apps         map[string]*registration
+	sessions     map[string]*captureSession
+	shared       sharedRules
+	slots        chan struct{}
+	once         sync.Once
+	closeErr     error
+	drainOnce    sync.Once
+	drainErr     error
+}
+
+func newEngine(ctx context.Context, id string, parent windows.Handle, sessionID string, config Config) (_ *engine, err error) {
+	if !validID(sessionID) {
+		return nil, errors.New("VPN 接管会话标识无效")
+	}
 	if err = config.validate(); err != nil {
 		return nil, err
 	}
@@ -126,8 +141,8 @@ func newEngine(ctx context.Context, id string, parent windows.Handle, config Con
 		return nil, err
 	}
 	life, cancel := context.WithCancel(ctx)
-	e := &engine{ctx: life, cancel: cancel, adapter: adapter, aliases: aliases, dnsAddress: adapter.Addr().Next().Next(),
-		config: config, id: id, parent: parent, apps: map[string]*registration{}, mappings: map[netip.Addr]aliasEntry{}, slots: make(chan struct{}, 512), resources: resources}
+	e := &engine{ctx: life, cancel: cancel, adapter: adapter, dnsAddress: adapter.Addr().Next().Next(),
+		id: id, parent: parent, apps: map[string]*registration{}, sessions: map[string]*captureSession{}, shared: sharedRules{}, slots: make(chan struct{}, 512)}
 	defer func() {
 		if err != nil {
 			_ = e.Close()
@@ -146,6 +161,13 @@ func newEngine(ctx context.Context, id string, parent windows.Handle, config Con
 		return nil, windowsError("查找 Wintun 接管网卡", err)
 	}
 	e.index = uint32(iface.Index)
+	e.installRoute = func(p netip.Prefix) (func() error, error) {
+		row, err := addRoute(e.index, p)
+		if err != nil {
+			return nil, err
+		}
+		return func() error { return removeRoute(row) }, nil
+	}
 	if err = configureAdapter(e.index, netip.PrefixFrom(adapter.Addr().Next(), adapter.Bits())); err != nil {
 		return nil, err
 	}
@@ -154,27 +176,13 @@ func newEngine(ctx context.Context, id string, parent windows.Handle, config Con
 		e.stack = nil
 		return nil, fmt.Errorf("启动接管网络栈：%w", err)
 	}
-	row, err := addRoute(e.index, aliases)
-	if err != nil {
-		return nil, fmt.Errorf("安装 DNS 映射路由：%w", err)
-	}
-	e.routes = append(e.routes, row)
-	for _, p := range resources {
-		e.rules.install = append(e.rules.install, func() (func() error, error) {
-			row, err := addRoute(e.index, p)
-			if err != nil {
-				return nil, fmt.Errorf("安装 VPN 资源路由：%w", err)
-			}
-			return func() error { return removeRoute(row) }, nil
-		})
-	}
-	if len(config.Domains) > 0 {
-		e.rules.install = append(e.rules.install, func() (func() error, error) { return installNRPT(e.ctx, id, config.Domains, e.dnsAddress.String()) })
+	if err = e.registerPrepared(sessionID, config, aliases, resources, gateways); err != nil {
+		return nil, err
 	}
 	return e, nil
 }
 
-func (e *engine) attach(request *attach) error {
+func (e *engine) attach(sessionID string, request *attach) error {
 	if request == nil || !validID(request.ID) || request.Job == 0 {
 		return errors.New("软件启动身份无效")
 	}
@@ -200,11 +208,22 @@ func (e *engine) attach(request *attach) error {
 		return err
 	}
 	e.mu.Lock()
+	session := e.sessions[sessionID]
+	if session == nil || session.retired {
+		e.mu.Unlock()
+		return errors.New("VPN 接管会话不存在或已退役")
+	}
 	if len(e.apps) >= 16 || e.apps[request.ID] != nil {
 		e.mu.Unlock()
 		return errors.New("软件接管项目过多或已存在")
 	}
-	first := len(e.apps) == 0
+	first := true
+	for _, app := range e.apps {
+		if app.session == sessionID {
+			first = false
+			break
+		}
+	}
 	e.mu.Unlock()
 	if first {
 		lockCtx, cancel := context.WithTimeout(e.ctx, 20*time.Second)
@@ -218,20 +237,20 @@ func (e *engine) attach(request *attach) error {
 		if err != nil {
 			return err
 		}
-		for _, p := range e.resources {
+		for _, p := range session.resources {
 			for _, r := range routes {
 				if r.Interface != e.index && r.Prefix.Bits() >= p.Bits() && r.Prefix.Overlaps(p) {
 					return errors.New("VPN 资源与当前网络路由冲突，请使用显式代理")
 				}
 			}
 		}
-		if err := e.rules.Enable(); err != nil {
+		if err := session.rules.Enable(); err != nil {
 			return fmt.Errorf("启用软件接管规则：%w", err)
 		}
 	}
-	ctx, cancel := context.WithCancel(e.ctx)
+	ctx, cancel := context.WithCancel(session.ctx)
 	e.mu.Lock()
-	e.apps[request.ID] = &registration{job: job, dial: dial, ctx: ctx, cancel: cancel}
+	e.apps[request.ID] = &registration{session: sessionID, job: job, dial: dial, ctx: ctx, cancel: cancel}
 	e.mu.Unlock()
 	keep = true
 	return nil
@@ -258,54 +277,69 @@ func sameOrdinaryUser(parent, child windows.Handle) error {
 	return nil
 }
 
-func (e *engine) detach(id string) error {
+func (e *engine) detach(sessionID, id string) error {
 	e.mu.Lock()
 	if app := e.apps[id]; app != nil {
+		if app.session != sessionID {
+			e.mu.Unlock()
+			return errors.New("软件不属于指定 VPN 会话")
+		}
 		delete(e.apps, id)
 		app.cancel()
 		windows.CloseHandle(app.job)
 	}
-	last := len(e.apps) == 0
+	last := true
+	for _, app := range e.apps {
+		if app.session == sessionID {
+			last = false
+			break
+		}
+	}
+	session := e.sessions[sessionID]
 	e.mu.Unlock()
-	if last {
-		return e.rules.Disable()
+	if last && session != nil {
+		return session.rules.Disable()
 	}
 	return nil
 }
 
-func (e *engine) publish(aliases []workeripc.DNSAlias) error {
+func (e *engine) publish(sessionID string, aliases []workeripc.DNSAlias) error {
 	if len(aliases) > 256 {
 		return errors.New("DNS 映射数量过多")
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	session := e.sessions[sessionID]
+	if session == nil || session.retired {
+		return errors.New("VPN 接管会话不存在或已退役")
+	}
 	now := time.Now()
-	for addr, entry := range e.mappings {
+	for addr, entry := range session.mappings {
 		if !now.Before(entry.expires) {
-			delete(e.mappings, addr)
+			delete(session.mappings, addr)
 		}
 	}
 	updates := map[netip.Addr]aliasEntry{}
-	if e.issued == nil {
-		e.issued = make(map[netip.Addr]netip.Addr)
+	if session.issued == nil {
+		session.issued = make(map[netip.Addr]netip.Addr)
 	}
 	for _, alias := range aliases {
 		a, ea := netip.ParseAddr(alias.Address)
 		o, eo := netip.ParseAddr(alias.Original)
-		if ea != nil || eo != nil || !e.aliases.Contains(a) || !o.Is4() || !o.IsGlobalUnicast() || o.IsLoopback() || o.IsLinkLocalUnicast() || e.aliases.Contains(o) || e.adapter.Contains(o) || alias.TTL == 0 || alias.TTL > 60 {
+		if ea != nil || eo != nil || !session.aliases.Contains(a) || !o.Is4() || !o.IsGlobalUnicast() || o.IsLoopback() || o.IsLinkLocalUnicast() || netip.MustParsePrefix("198.18.0.0/15").Contains(o) || alias.TTL == 0 || alias.TTL > 60 {
 			return errors.New("DNS 映射超出本次会话范围")
 		}
-		if old, ok := e.mappings[a]; ok && old.original != o {
+		if old, ok := session.mappings[a]; ok && old.original != o {
 			return errors.New("DNS 映射在有效期内发生冲突")
 		}
-		if original, ok := e.issued[a]; ok && original != o {
+		if original, ok := session.issued[a]; ok && original != o {
 			return errors.New("已发布映射不能改变原始地址")
 		}
 		if old, ok := updates[a]; ok && old.original != o {
 			return errors.New("重复 DNS 映射冲突")
 		}
 		newExpires := now.Add(time.Duration(alias.TTL) * time.Second)
-		if old, ok := e.mappings[a]; ok && old.expires.After(newExpires) {
+		if old, ok := session.mappings[a]; ok && old.expires.After(newExpires) {
 			newExpires = old.expires
 		}
 		if old, ok := updates[a]; ok && old.expires.After(newExpires) {
@@ -313,12 +347,18 @@ func (e *engine) publish(aliases []workeripc.DNSAlias) error {
 		}
 		updates[a] = aliasEntry{o, newExpires}
 	}
-	if len(e.mappings)+len(updates) > 8192 {
+	newEntries := 0
+	for addr := range updates {
+		if _, ok := session.mappings[addr]; !ok {
+			newEntries++
+		}
+	}
+	if len(session.mappings)+newEntries > 8192 {
 		return errors.New("DNS 映射表已满")
 	}
 	for addr, entry := range updates {
-		e.mappings[addr] = entry
-		e.issued[addr] = entry.original
+		session.mappings[addr] = entry
+		session.issued[addr] = entry.original
 	}
 	return nil
 }
@@ -346,14 +386,25 @@ func (e *engine) selectApp(owner *Owner) (*registration, error) {
 }
 
 func (e *engine) originalTarget(destination netip.AddrPort) (string, error) {
-	if e.aliases.Contains(destination.Addr()) {
-		e.mu.Lock()
-		entry, ok := e.mappings[destination.Addr()]
-		e.mu.Unlock()
-		if !ok || !time.Now().Before(entry.expires) {
-			return "", errors.New("DNS 映射已过期，请重新解析域名")
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if netip.MustParsePrefix("198.19.0.0/16").Contains(destination.Addr()) {
+		found := false
+		for _, session := range e.sessions {
+			if !session.aliases.Contains(destination.Addr()) {
+				continue
+			}
+			entry, ok := session.mappings[destination.Addr()]
+			if !ok || !time.Now().Before(entry.expires) {
+				return "", errors.New("DNS 映射已过期，请重新解析域名")
+			}
+			destination = netip.AddrPortFrom(entry.original, destination.Port())
+			found = true
+			break
 		}
-		destination = netip.AddrPortFrom(entry.original, destination.Port())
+		if !found {
+			return "", errors.New("未知 DNS 映射地址")
+		}
 	}
 	if e.adapter.Contains(destination.Addr()) {
 		return "", errors.New("不允许转发到捕获适配器自身")
@@ -388,6 +439,9 @@ func (e *engine) NewConnection(ctx context.Context, conn net.Conn, metadata M.Me
 	var upstream net.Conn
 	life := e.ctx
 	if app != nil {
+		if err := e.validateAppTarget(app.session, metadata.Destination.Addr); err != nil {
+			return err
+		}
 		life = app.ctx
 		upstream, err = app.dial.DialContext(life, "tcp", metadata.Destination.String())
 	} else {
@@ -489,18 +543,40 @@ func (e *engine) dnsQuery(ctx context.Context, q *dns.Msg) *dns.Msg {
 	if q.Response || q.Opcode != dns.OpcodeQuery || len(q.Question) != 1 {
 		return fail()
 	}
-	allowed := false
-	for _, domain := range e.config.Domains {
-		if dns.IsSubDomain(domain+".", q.Question[0].Name) {
-			allowed = true
-			break
+	e.mu.Lock()
+	var selected *captureSession
+	best, conflict := 0, false
+	for _, session := range e.sessions {
+		for _, domain := range session.config.Domains {
+			if !dns.IsSubDomain(domain+".", q.Question[0].Name) {
+				continue
+			}
+			if len(domain) > best {
+				selected, best, conflict = session, len(domain), false
+			} else if len(domain) == best && selected != session {
+				conflict = true
+			}
 		}
 	}
-	if !allowed {
+	if selected == nil {
+		e.mu.Unlock()
 		return new(dns.Msg).SetRcode(q, dns.RcodeRefused)
 	}
-	answer, _, err := (&dns.Client{Net: "tcp", Timeout: 8 * time.Second}).ExchangeContext(ctx, q, e.config.DNSAddress)
-	if err != nil {
+	if conflict || selected.retired {
+		e.mu.Unlock()
+		return fail()
+	}
+	address, life := selected.config.DNSAddress, selected.ctx
+	e.mu.Unlock()
+	queryCtx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(life, cancel)
+	defer stop()
+	defer cancel()
+	answer, _, err := (&dns.Client{Net: "tcp", Timeout: 8 * time.Second}).ExchangeContext(queryCtx, q, address)
+	e.mu.Lock()
+	retired := selected.retired
+	e.mu.Unlock()
+	if err != nil || retired {
 		return fail()
 	}
 	return answer
@@ -555,7 +631,9 @@ func (e *engine) serveDNSUDP(ctx context.Context, conn N.PacketConn, destination
 func (e *engine) Close() error {
 	e.once.Do(func() {
 		e.closeErr = errors.Join(e.closeErr, e.beginDrain())
-		e.closeErr = errors.Join(e.closeErr, e.rules.Disable())
+		for _, session := range e.sessions {
+			e.closeErr = errors.Join(e.closeErr, session.rules.Disable())
+		}
 		e.cancel()
 		e.mu.Lock()
 		for id, app := range e.apps {
@@ -564,8 +642,8 @@ func (e *engine) Close() error {
 			delete(e.apps, id)
 		}
 		e.mu.Unlock()
-		for i := len(e.routes) - 1; i >= 0; i-- {
-			e.closeErr = errors.Join(e.closeErr, removeRoute(e.routes[i]))
+		for i := len(e.aliasUndo) - 1; i >= 0; i-- {
+			e.closeErr = errors.Join(e.closeErr, e.aliasUndo[i]())
 		}
 		if e.tun != nil {
 			e.closeErr = errors.Join(e.closeErr, e.tun.Close())
@@ -586,7 +664,9 @@ func (e *engine) beginDrain() error {
 			delete(e.apps, id)
 		}
 		e.mu.Unlock()
-		e.drainErr = e.rules.Disable()
+		for id := range e.sessions {
+			e.drainErr = errors.Join(e.drainErr, e.unregister(id))
+		}
 	})
 	return e.drainErr
 }
@@ -595,9 +675,11 @@ func (e *engine) drain() error {
 	err := e.beginDrain()
 	e.mu.Lock()
 	deadline := time.Now()
-	for _, entry := range e.mappings {
-		if entry.expires.After(deadline) {
-			deadline = entry.expires
+	for _, session := range e.sessions {
+		for _, entry := range session.mappings {
+			if entry.expires.After(deadline) {
+				deadline = entry.expires
+			}
 		}
 	}
 	e.mu.Unlock()
@@ -622,23 +704,28 @@ func (e *engine) checkNetwork() error {
 	}
 	// Failed cleanup stays owned. Retry on the next heartbeat even if the
 	// DNS lease keeps an idle helper alive until VPN disconnect.
-	if !e.rules.active && len(e.rules.undo) > 0 {
-		if err := e.rules.Disable(); err != nil {
-			return fmt.Errorf("软件接管规则清理未完成：%w", err)
+	for id, session := range e.sessions {
+		if !session.rules.active && len(session.rules.undo) > 0 {
+			if err := session.rules.Disable(); err != nil {
+				return fmt.Errorf("软件接管规则清理未完成：%w", err)
+			}
 		}
-	}
-	if e.rules.active && len(e.config.Domains) > 0 {
-		if err := checkNRPTActive(e.id, e.config.Domains, e.dnsAddress.String()); err != nil {
-			return err
+		if session.rules.active && len(session.config.Domains) > 0 {
+			if err := checkNRPTActive(id, session.config.Domains, e.dnsAddress.String()); err != nil {
+				return err
+			}
 		}
 	}
 	routes, err := routeRows()
 	if err != nil {
 		return err
 	}
-	wanted := []netip.Prefix{e.aliases}
-	if e.rules.active {
-		wanted = append(wanted, e.resources...)
+	var wanted []netip.Prefix
+	for _, session := range e.sessions {
+		wanted = append(wanted, session.aliases)
+		if session.rules.active {
+			wanted = append(wanted, session.resources...)
+		}
 	}
 	for _, resource := range wanted {
 		found := false

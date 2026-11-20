@@ -55,6 +55,12 @@ func RunHelper(ctx context.Context, id string, parentIdentity Identity) error {
 	defer stop()
 	reader := bufio.NewReaderSize(f, maxFrame)
 	var backend *engine
+	var releaseOwner func()
+	defer func() {
+		if releaseOwner != nil {
+			releaseOwner()
+		}
+	}()
 	defer func() {
 		if backend != nil {
 			_ = backend.drain()
@@ -77,13 +83,28 @@ func RunHelper(ctx context.Context, id string, parentIdentity Identity) error {
 				actionErr = errors.New("网络助手已配置或配置缺失")
 				break
 			}
+			if releaseOwner == nil {
+				ownerCtx, ownerCancel := context.WithTimeout(life, time.Second)
+				releaseOwner, actionErr = runtimeOwnership(ownerCtx)
+				ownerCancel()
+				if actionErr != nil {
+					actionErr = errors.New("另一个 EasyConnect 网络助手正在管理网络，请先关闭它的接管模式")
+					break
+				}
+			}
 			if actionErr = RecoverOrphanedDNS(life); actionErr != nil {
 				break
 			}
-			backend, actionErr = newEngine(context.Background(), id, parent, *req.Config)
+			backend, actionErr = newEngine(context.Background(), id, parent, req.Session, *req.Config)
 			if actionErr == nil {
-				reply.Prefix = backend.aliases.String()
+				reply.Prefix = backend.sessions[req.Session].aliases.String()
 			}
+		case "register":
+			if backend == nil || req.Config == nil {
+				actionErr = errors.New("网络助手尚未配置或会话配置缺失")
+				break
+			}
+			reply.Prefix, actionErr = backend.register(req.Session, *req.Config)
 		case "ping":
 			if backend != nil {
 				actionErr = backend.checkNetwork()
@@ -92,18 +113,20 @@ func RunHelper(ctx context.Context, id string, parentIdentity Identity) error {
 			if backend != nil {
 				actionErr = backend.beginDrain()
 			}
-		case "attach", "detach", "publish":
+		case "attach", "detach", "publish", "unregister":
 			if backend == nil {
 				actionErr = errors.New("网络助手尚未配置")
 				break
 			}
 			switch req.Type {
 			case "attach":
-				actionErr = backend.attach(req.Attach)
+				actionErr = backend.attach(req.Session, req.Attach)
 			case "detach":
-				actionErr = backend.detach(req.ID)
+				actionErr = backend.detach(req.Session, req.ID)
 			case "publish":
-				actionErr = backend.publish(req.Aliases)
+				actionErr = backend.publish(req.Session, req.Aliases)
+			case "unregister":
+				actionErr = backend.unregister(req.Session)
 			}
 		default:
 			actionErr = errors.New("未知网络助手请求")
@@ -232,8 +255,8 @@ func RunWatchdog(ctx context.Context, id string, expected Identity) error {
 	// PowerShell startup can race the engine's own orderly cleanup. Repeating
 	// the narrowly owned removal is idempotent and also handles a transient CIM failure.
 	for attempt := 0; attempt < 3; attempt++ {
-		if err = removeNRPT(ctx, id); err == nil {
-			return clearJournal(id)
+		if err = RecoverOrphanedDNS(ctx); err == nil {
+			return nil
 		}
 	}
 	return fmt.Errorf("恢复本次 DNS 策略：%w", err)

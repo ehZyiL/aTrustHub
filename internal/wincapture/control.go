@@ -19,6 +19,8 @@ type controlTransport interface {
 }
 
 type Session struct {
+	runtime   *Session
+	id        string
 	gate      chan struct{}
 	file      controlTransport
 	reader    *bufio.Reader
@@ -37,18 +39,53 @@ func newSession(conn controlTransport) *Session {
 
 func (s *Session) Prefix() string        { return s.prefix }
 func (s *Session) Done() <-chan struct{} { return s.done }
-func (s *Session) Err() error            { s.errMu.Lock(); defer s.errMu.Unlock(); return s.err }
+func (s *Session) Err() error {
+	s.errMu.Lock()
+	err := s.err
+	s.errMu.Unlock()
+	if s.runtime != nil {
+		return errors.Join(err, s.runtime.Err())
+	}
+	return err
+}
+
+func logicalSession(runtime *Session, id, prefix string) *Session {
+	s := &Session{runtime: runtime, id: id, prefix: prefix, done: make(chan struct{})}
+	go func() {
+		select {
+		case <-runtime.Done():
+			s.fail(runtime.Err())
+		case <-s.Done():
+		}
+	}()
+	return s
+}
 func (s *Session) fail(err error) {
 	s.once.Do(func() {
 		s.errMu.Lock()
 		s.err = err
 		s.errMu.Unlock()
-		_ = s.file.Close()
+		if s.file != nil {
+			_ = s.file.Close()
+		}
 		close(s.done)
 	})
 }
 
 func (s *Session) request(ctx context.Context, req frame) (frame, error) {
+	if s.runtime != nil {
+		select {
+		case <-s.done:
+			return frame{}, errors.Join(os.ErrClosed, s.Err())
+		default:
+		}
+		req.Session = s.id
+		return s.runtime.requestScoped(ctx, req, s)
+	}
+	return s.requestScoped(ctx, req, nil)
+}
+
+func (s *Session) requestScoped(ctx context.Context, req frame, scope *Session) (frame, error) {
 	select {
 	case <-ctx.Done():
 		return frame{}, ctx.Err()
@@ -57,6 +94,13 @@ func (s *Session) request(ctx context.Context, req frame) (frame, error) {
 	case s.gate <- struct{}{}:
 	}
 	defer func() { <-s.gate }()
+	if scope != nil {
+		select {
+		case <-scope.done:
+			return frame{}, errors.Join(os.ErrClosed, scope.Err())
+		default:
+		}
+	}
 	select {
 	case <-s.done:
 		return frame{}, errors.Join(os.ErrClosed, s.Err())
@@ -66,7 +110,7 @@ func (s *Session) request(ctx context.Context, req frame) (frame, error) {
 		return frame{}, err
 	}
 	timeout := 20 * time.Second
-	if req.Type == "configure" || req.Type == "attach" {
+	if req.Type == "configure" || req.Type == "register" || req.Type == "attach" || req.Type == "unregister" {
 		timeout = 60 * time.Second
 	}
 	deadline := time.Now().Add(timeout)
@@ -122,8 +166,18 @@ func (s *Session) Publish(ctx context.Context, aliases []workeripc.DNSAlias) err
 
 func (s *Session) Close() error {
 	s.closeOnce.Do(func() {
+		if s.runtime != nil {
+			// Revoke queued requests before releasing the transport gate after
+			// unregister. A late publish cannot reactivate a retired scope.
+			s.fail(nil)
+			_, s.closeErr = s.runtime.request(context.Background(), frame{Type: "unregister", Session: s.id})
+			s.errMu.Lock()
+			s.err = s.closeErr
+			s.errMu.Unlock()
+			return
+		}
 		_, s.closeErr = s.request(context.Background(), frame{Type: "close"})
-		s.fail(nil)
+		s.fail(s.closeErr)
 	})
 	return s.closeErr
 }

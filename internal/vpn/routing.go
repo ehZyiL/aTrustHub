@@ -102,7 +102,7 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 	defer cancel()
 	if decision.Action == "direct" {
 		started := time.Now()
-		conn, err := directDial(ctx, network, decision.Target)
+		conn, err := originalRouteDial(ctx, network, decision.Target)
 		if required != nil && !m.currentRoute(sessions[required.id], request.GatewayID) {
 			if conn != nil {
 				conn.Close()
@@ -140,6 +140,10 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 		var conn net.Conn
 		var err error
 		if c.served {
+			if ctx.Value(originalDialContextKey{}) != nil {
+				stop()
+				return nil, errors.New("新系统捕获不能使用旧 TUN 移交会话")
+			}
 			// Compatibility for the existing aTrust helper which owns this
 			// session. New worker-backed system TUN must never use SetTunServed.
 			conn, err = directDial(attempt, "tcp", decision.Target)

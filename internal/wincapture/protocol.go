@@ -14,7 +14,7 @@ import (
 	"github.com/qy/easyconnect/internal/workeripc"
 )
 
-const ProtocolVersion = 5
+const ProtocolVersion = 6
 const maxFrame = 256 << 10
 
 type Config struct {
@@ -105,15 +105,16 @@ type attach struct {
 }
 
 type frame struct {
-	Version int                  `json:"version"`
-	Type    string               `json:"type"`
-	Session string               `json:"session,omitempty"`
-	Config  *Config              `json:"config,omitempty"`
-	Attach  *attach              `json:"attach,omitempty"`
-	ID      string               `json:"id,omitempty"`
-	Prefix  string               `json:"prefix,omitempty"`
-	Aliases []workeripc.DNSAlias `json:"aliases,omitempty"`
-	Error   string               `json:"error,omitempty"`
+	Version  int                  `json:"version"`
+	Type     string               `json:"type"`
+	Session  string               `json:"session,omitempty"`
+	Config   *Config              `json:"config,omitempty"`
+	Attach   *attach              `json:"attach,omitempty"`
+	ID       string               `json:"id,omitempty"`
+	Prefix   string               `json:"prefix,omitempty"`
+	Aliases  []workeripc.DNSAlias `json:"aliases,omitempty"`
+	Upstream *Upstream            `json:"upstream,omitempty"`
+	Error    string               `json:"error,omitempty"`
 }
 
 func readFrame(r *bufio.Reader, v *frame) error {

@@ -35,6 +35,7 @@ type aliasEntry struct {
 }
 
 type captureSession struct {
+	system    *registration
 	config    Config
 	aliases   netip.Prefix
 	resources []netip.Prefix
@@ -48,6 +49,10 @@ type captureSession struct {
 }
 
 type engine struct {
+	original       *proxy.Server
+	originalInfo   Upstream
+	system         *registration
+	systemInfo     Upstream
 	mu             sync.Mutex
 	ctx            context.Context
 	cancel         context.CancelFunc
@@ -190,6 +195,9 @@ func newEngine(ctx context.Context, id string, parent windows.Handle, sessionID 
 	if err = configureAdapter(e.index, netip.PrefixFrom(adapter.Addr().Next(), adapter.Bits())); err != nil {
 		return nil, err
 	}
+	if err = e.startOriginalExit(); err != nil {
+		return nil, err
+	}
 	e.stack = newPacketStack(life, e.tun, e)
 	if err = e.stack.Start(); err != nil {
 		e.stack = nil
@@ -245,25 +253,7 @@ func (e *engine) attach(sessionID string, request *attach) error {
 	}
 	e.mu.Unlock()
 	if first {
-		lockCtx, cancel := context.WithTimeout(e.ctx, 20*time.Second)
-		unlock, err := networkTransaction(lockCtx)
-		cancel()
-		if err != nil {
-			return err
-		}
-		defer unlock()
-		routes, err := routeRows()
-		if err != nil {
-			return err
-		}
-		for _, p := range session.resources {
-			for _, r := range routes {
-				if r.Interface != e.index && r.Prefix.Bits() >= p.Bits() && r.Prefix.Overlaps(p) {
-					return errors.New("VPN 资源与当前网络路由冲突，请使用显式代理")
-				}
-			}
-		}
-		if err := session.rules.Enable(); err != nil {
+		if err := e.enableRules(session); err != nil {
 			return fmt.Errorf("启用软件接管规则：%w", err)
 		}
 	}
@@ -315,6 +305,9 @@ func (e *engine) detach(sessionID, id string) error {
 		}
 	}
 	session := e.sessions[sessionID]
+	if session != nil && session.system != nil {
+		last = false
+	}
 	e.mu.Unlock()
 	if last && session != nil {
 		return session.rules.Disable()
@@ -471,9 +464,17 @@ func (e *engine) NewConnection(ctx context.Context, conn net.Conn, metadata M.Me
 	}
 	var upstream net.Conn
 	life := e.ctx
-	if app != nil {
-		if err := e.validateAppTarget(app.session, metadata.Destination.Addr); err != nil {
+	if app == nil {
+		app, err = e.selectSystem(metadata.Destination.Addr)
+		if err != nil {
 			return err
+		}
+	}
+	if app != nil {
+		if app.session != "" {
+			if err := e.validateAppTarget(app.session, metadata.Destination.Addr); err != nil {
+				return err
+			}
 		}
 		life = app.ctx
 		upstream, err = app.dial.DialContext(life, "tcp", metadata.Destination.String())
@@ -520,6 +521,11 @@ func (e *engine) NewPacketConnection(ctx context.Context, conn N.PacketConn, met
 	}
 	if app != nil {
 		return errors.New("Windows 软件接管暂不支持内网 UDP，请使用 TCP")
+	}
+	if system, err := e.selectSystem(metadata.Destination.Addr); err != nil {
+		return err
+	} else if system != nil {
+		return errors.New("系统捕获暂不支持内网业务 UDP")
 	}
 	address, err := e.originalTarget(metadata.Destination.AddrPort())
 	if err != nil {
@@ -675,6 +681,9 @@ func (e *engine) Close() error {
 			e.closeErr = errors.Join(e.closeErr, session.rules.Disable())
 		}
 		e.cancel()
+		if e.original != nil {
+			e.closeErr = errors.Join(e.closeErr, e.original.Close())
+		}
 		e.mu.Lock()
 		for id, app := range e.apps {
 			app.cancel()

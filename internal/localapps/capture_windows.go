@@ -5,10 +5,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"net"
 	"sync"
 
 	"github.com/qy/easyconnect/internal/model"
 	"github.com/qy/easyconnect/internal/proxy"
+	"github.com/qy/easyconnect/internal/vpn"
 	"github.com/qy/easyconnect/internal/wincapture"
 )
 
@@ -77,7 +79,9 @@ func startCapture(ctx context.Context, p model.LocalApp, dial DialFunc) (managed
 	}
 	password := hex.EncodeToString(secret[:])
 	life, cancel := context.WithCancel(context.Background())
-	s := proxy.New(proxy.Options{Addr: "127.0.0.1:0", Auth: &proxy.Auth{Username: "capture", Credential: password}, Dial: dial, Context: life, SOCKSOnly: true})
+	s := proxy.New(proxy.Options{Addr: "127.0.0.1:0", Auth: &proxy.Auth{Username: "capture", Credential: password}, Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+		return dial(vpn.WithOriginalDial(ctx, session.OriginalDial), network, address)
+	}, Context: life, SOCKSOnly: true})
 	if err := s.Start(); err != nil {
 		cancel()
 		return nil, err

@@ -98,6 +98,8 @@ func RunHelper(ctx context.Context, id string, parentIdentity Identity) error {
 			backend, actionErr = newEngine(context.Background(), id, parent, req.Session, *req.Config)
 			if actionErr == nil {
 				reply.Prefix = backend.sessions[req.Session].aliases.String()
+				info := backend.originalInfo
+				reply.Upstream = &info
 			}
 		case "register":
 			if backend == nil || req.Config == nil {
@@ -113,7 +115,7 @@ func RunHelper(ctx context.Context, id string, parentIdentity Identity) error {
 			if backend != nil {
 				actionErr = backend.beginDrain()
 			}
-		case "attach", "detach", "publish", "unregister":
+		case "attach", "detach", "publish", "unregister", "system_on", "system_off":
 			if backend == nil {
 				actionErr = errors.New("网络助手尚未配置")
 				break
@@ -127,6 +129,10 @@ func RunHelper(ctx context.Context, id string, parentIdentity Identity) error {
 				actionErr = backend.publish(req.Session, req.Aliases)
 			case "unregister":
 				actionErr = backend.unregister(req.Session)
+			case "system_on":
+				actionErr = backend.enableSystem(req.Session, req.Upstream)
+			case "system_off":
+				actionErr = backend.disableSystem(req.Session)
 			}
 		default:
 			actionErr = errors.New("未知网络助手请求")

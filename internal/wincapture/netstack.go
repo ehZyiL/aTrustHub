@@ -129,6 +129,12 @@ func (s *packetStack) readLoop() {
 		if len(data) < header.IPv4MinimumSize || data[0]>>4 != 4 {
 			continue
 		}
+		// TCP and UDP DNS are the only supported forwarded protocols. In
+		// particular, do not let the local stack impersonate a remote ICMP
+		// echo response and make an unreachable VPN target appear healthy.
+		if protocol := data[9]; protocol != uint8(tcp.ProtocolNumber) && protocol != uint8(udp.ProtocolNumber) {
+			continue
+		}
 		// Wintun owns the original bytes until release. gVisor queues may
 		// outlive this callback, so transfer an independent buffer.
 		payload := buffer.MakeWithData(data)

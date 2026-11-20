@@ -2,9 +2,13 @@ package wincapture
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/qy/easyconnect/internal/proxy"
+	proxy2 "golang.org/x/net/proxy"
 )
 
 var sessionPool = newSessionPool(openSession)
@@ -28,6 +32,16 @@ func openSession(ctx context.Context, id string, config Config) (*Session, error
 		return nil, err
 	}
 	s.prefix = reply.Prefix
+	if reply.Upstream == nil || reply.Upstream.validate() != nil {
+		err := errors.New("网络助手没有提供可信原出口")
+		s.fail(err)
+		return nil, err
+	}
+	s.original, err = proxy.NewSOCKSDialer(reply.Upstream.Address, &proxy2.Auth{User: reply.Upstream.Username, Password: reply.Upstream.Password})
+	if err != nil {
+		s.fail(err)
+		return nil, err
+	}
 	go func() {
 		tick := time.NewTicker(3 * time.Second)
 		defer tick.Stop()

@@ -173,12 +173,38 @@ func (e *engine) unregister(id string) error {
 	}
 	e.mu.Unlock()
 	var result error
+	result = e.disableSystem(id)
 	for _, appID := range apps {
 		result = errors.Join(result, e.detach(id, appID))
 	}
 	// Retain the alias route and immutable identity until this helper drains.
 	// There are at most sixteen pools; exhaustion fails without reusing one.
 	return errors.Join(result, session.rules.Disable())
+}
+
+func (e *engine) enableRules(session *captureSession) error {
+	if session.rules.active {
+		return nil
+	}
+	lockCtx, cancel := context.WithTimeout(e.ctx, 20*time.Second)
+	unlock, err := networkTransaction(lockCtx)
+	cancel()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	routes, err := routeRows()
+	if err != nil {
+		return err
+	}
+	for _, p := range session.resources {
+		for _, r := range routes {
+			if r.Interface != e.index && r.Prefix.Bits() >= p.Bits() && r.Prefix.Overlaps(p) {
+				return errors.New("VPN 资源与当前网络路由冲突，请使用显式代理")
+			}
+		}
+	}
+	return session.rules.Enable()
 }
 
 func (e *engine) validateAppTarget(sessionID string, destination netip.Addr) error {

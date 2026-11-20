@@ -1,0 +1,101 @@
+package vpn
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"sync/atomic"
+	"testing"
+
+	"github.com/qy/easyconnect/internal/model"
+	"github.com/qy/easyconnect/internal/workeripc"
+)
+
+func TestCapturedUsesStrictOwnershipAndTrustedOriginalEgress(t *testing.T) {
+	a, b := routeTestSession("A"), routeTestSession("B")
+	a.info.Resources = &workeripc.ResourceSnapshot{IPRules: []workeripc.IPRule{{Min: "10.1.0.1", Max: "10.1.0.1", PortMin: 443, PortMax: 443, Protocol: "tcp"}}}
+	b.info.Resources = &workeripc.ResourceSnapshot{IPRules: []workeripc.IPRule{{Min: "10.2.0.1", Max: "10.2.0.1", PortMin: 443, PortMax: 443, Protocol: "tcp"}}}
+	m := routeTestManager(t, model.DefaultSettings(), a, b)
+	var original atomic.Int32
+	ctx := WithOriginalDial(context.Background(), func(context.Context, string, string) (net.Conn, error) {
+		original.Add(1)
+		return nil, errors.New("original fixture")
+	})
+	if _, err := m.DialCaptured(context.Background(), "tcp", "10.2.0.1:443"); err == nil {
+		t.Fatal("public context accepted as captured")
+	}
+	conn, err := m.DialCaptured(ctx, "tcp", "10.2.0.1:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := io.ReadAll(conn)
+	conn.Close()
+	if string(data) != "B" || a.strictCalls.Load() != 0 || b.strictCalls.Load() != 1 || original.Load() != 0 {
+		t.Fatal("B-only capture escaped owner")
+	}
+	if _, err := m.DialCaptured(ctx, "tcp", "192.0.2.80:443"); err == nil || original.Load() != 1 {
+		t.Fatal("unmanaged did not use trusted original exit")
+	}
+	m.Disconnect("B")
+	if _, err := m.DialCaptured(ctx, "tcp", "10.2.0.1:443"); err == nil || original.Load() != 1 || a.strictCalls.Load() != 0 {
+		t.Fatal("offline internal fell back")
+	}
+	for _, request := range []struct{ network, address string }{{"udp", "10.1.0.1:443"}, {"tcp6", "[2001:db8::1]:443"}, {"tcp", "b.test:443"}} {
+		if _, err := m.DialCaptured(ctx, request.network, request.address); err == nil {
+			t.Fatal("unsupported capture", request)
+		}
+	}
+}
+
+func TestCapturedMappingsKeepGatewayGenerationAndOriginalDomain(t *testing.T) {
+	a, b := routeTestSession("A"), routeTestSession("B")
+	a.info.Resources = &workeripc.ResourceSnapshot{DomainRules: []workeripc.DomainRule{{Domain: "a.test", PortMin: 443, PortMax: 443, Protocol: "tcp"}}}
+	m := routeTestManager(t, model.DefaultSettings(), a, b)
+	for i, id := range []string{"A", "B"} {
+		connection, err := m.LocalAppConnection(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefix, address, domain := "198.19.0.0/20", "198.19.0.1", "a.test"
+		if i == 1 {
+			prefix, address, domain = "198.19.16.0/20", "198.19.16.1", "b.test"
+		}
+		finish, err := connection.BeginPublication(prefix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer finish()
+		aliases := []workeripc.DNSAlias{{Address: address, Original: "10.0.0.8", TTL: 60}}
+		if err := m.mappings.Stage(connection.Key, domain, aliases); err != nil {
+			t.Fatal(err)
+		}
+		if err := connection.ConfirmAliases(aliases); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := WithOriginalDial(context.Background(), func(context.Context, string, string) (net.Conn, error) {
+		t.Error("mapped direct")
+		return nil, net.ErrClosed
+	})
+	for _, tc := range []struct{ address, want string }{{"198.19.0.1:443", "A"}, {"198.19.16.1:443", "B"}} {
+		conn, err := m.DialCaptured(ctx, "tcp", tc.address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := io.ReadAll(conn)
+		conn.Close()
+		if string(data) != tc.want {
+			t.Fatal("identical real IP crossed gateways", string(data))
+		}
+	}
+	if _, err := m.DialCaptured(ctx, "tcp", "198.19.0.2:443"); err == nil {
+		t.Fatal("unpublished alias accepted")
+	}
+	m.mu.Lock()
+	m.points["B"].gen++
+	m.mu.Unlock()
+	if _, err := m.DialCaptured(ctx, "tcp", "198.19.16.1:443"); err == nil {
+		t.Fatal("old alias rebound to new generation")
+	}
+}

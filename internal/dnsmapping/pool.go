@@ -221,6 +221,20 @@ func (r *Registry) Acquire(key, address string) (Target, func(), error) {
 	return e.Target, func() { once.Do(func() { r.mu.Lock(); p.streams--; r.prune(); r.mu.Unlock() }) }, nil
 }
 
+func (r *Registry) KeyForAddress(address netip.Addr) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key, p := range r.pools {
+		if p.prefix.Contains(address) {
+			if p.retired {
+				return "", errors.New("映射所属会话已退役")
+			}
+			return key, nil
+		}
+	}
+	return "", errors.New("没有已登记的映射身份")
+}
+
 func (r *Registry) Retire(key string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

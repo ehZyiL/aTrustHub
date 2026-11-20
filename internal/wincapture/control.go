@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qy/easyconnect/internal/proxy"
 	"github.com/qy/easyconnect/internal/workeripc"
 )
 
@@ -20,6 +21,7 @@ type controlTransport interface {
 
 type Session struct {
 	runtime   *Session
+	original  *proxy.SOCKSDialer
 	id        string
 	gate      chan struct{}
 	file      controlTransport
@@ -110,7 +112,7 @@ func (s *Session) requestScoped(ctx context.Context, req frame, scope *Session) 
 		return frame{}, err
 	}
 	timeout := 20 * time.Second
-	if req.Type == "configure" || req.Type == "register" || req.Type == "attach" || req.Type == "unregister" {
+	if req.Type == "configure" || req.Type == "register" || req.Type == "attach" || req.Type == "unregister" || req.Type == "system_on" || req.Type == "system_off" {
 		timeout = 60 * time.Second
 	}
 	deadline := time.Now().Add(timeout)

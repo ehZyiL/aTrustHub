@@ -54,137 +54,340 @@ func (a *app) localAppsSection(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Grow(1).MinHeight(0).Gap(10).Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "本机软件").FontSize(18).Bold()
-			ui.Row(c).Grow(1)
+			ui.Text(c, "本机软件").FontSize(15).Bold()
+			ui.Text(c, fmt.Sprintf("%d 个", len(a.cfg.LocalApps))).FontSize(11).TextColor(t.TextMuted)
+			// 提示行占满剩余宽度：窗口窄时先缩它，搜素框与按钮不被挤出去。
+			ui.Text(c, localAppsHint()).FontSize(11).TextColor(t.TextMuted).
+				Grow(1).MinWidth(0).Ellipsis("…").Tooltip(localAppsHint())
+			ui.SearchField(c, &a.localQuery).Placeholder("搜索名称、地址或接入点").
+				Label("搜索本机项目").Width(240)
+			// 工具栏级按钮跟其他页面保持同一尺寸（13），11 只用于列表行内。
 			if ui.PrimaryButton(c, "＋ 添加项目").Clicked() {
 				a.openLocalAppEditor("")
 			}
 		})
-		intro := "先连接 VPN，再启动浏览器或数据库转发。普通软件及子进程的透明接管仍在开发。"
-		if captureExperimentEnabled() {
-			intro = "先连接 VPN，再添加并启动软件。软件 TCP 接管需安装辅助服务；内网 UDP/IPv6 暂不支持。"
-			if runtime.GOOS == "windows" {
-				intro = "先连接 VPN，再添加并启动软件。Windows 软件 TCP 接管需要管理员授权网络助手；内网 UDP/IPv6 暂不支持。"
-			}
-		}
-		ui.Text(c, intro).FontSize(12).TextColor(t.TextMuted).Wrap()
-		ui.Text(c, "统计仅包含经过项目入口的 TCP 连接；成功表示 TCP 已建立。每次重新启动项目会重新计数。").FontSize(11).TextColor(t.TextMuted).Wrap()
 		if captureExperimentEnabled() {
 			a.captureSetupView(c)
 		}
-		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-			ui.Column(c).Gap(12).Children(func() {
-				if len(a.cfg.LocalApps) == 0 {
-					ui.Column(c).Padding(24).Gap(10).Children(func() {
-						ui.Text(c, "保存常用入口，下次一键启动").FontSize(16).Bold()
-						ui.Text(c, "浏览器可记住起始网址；数据库转发会提供 127.0.0.1 的本地地址。").FontSize(12).TextColor(t.TextMuted).Wrap()
-					})
+		if len(a.cfg.LocalApps) == 0 {
+			a.localAppsEmpty(c)
+			return
+		}
+		// 单栏列表：接入点做分组头，项目嵌套在下面；详情点行进弹窗。
+		a.localAppList(c)
+	})
+}
+
+// localAppsHint 把原来卡片上方的两段说明合成一行提示：解释留在提示行，
+// 需要全文时悬停即可，页面不再为它空出两三行。
+func localAppsHint() string {
+	hint := "先连接 VPN 再启动；统计只计经过项目入口的 TCP 连接，成功表示 TCP 已建立。"
+	if captureExperimentEnabled() {
+		hint = "先连接 VPN 再启动项目；软件接管需先安装网络助手，仅支持 IPv4 TCP；统计只计经过项目入口的连接。"
+		if runtime.GOOS == "windows" {
+			hint = "先连接 VPN 再启动项目；Windows 软件 TCP 接管需要管理员授权网络助手，仅支持 IPv4 TCP；统计只计经过项目入口的连接。"
+		}
+	}
+	return hint
+}
+
+func (a *app) localAppsEmpty(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c).Padding(32).Gap(10).Center().Radius(12).Border(1, t.Border).
+		Background(t.Surface).Children(func() {
+		ui.Text(c, "保存常用入口，下次一键启动").FontSize(15).Bold()
+		ui.Text(c, "浏览器可记住起始网址；数据库转发会提供 127.0.0.1 的本地地址。").FontSize(13).TextColor(t.TextMuted).Wrap().MaxWidth(460)
+		if ui.PrimaryButton(c, "添加第一个项目").Clicked() {
+			a.openLocalAppEditor("")
+		}
+	})
+}
+
+// localGroup 是一个接入点下的本机项目分组。
+// 项目本来就绑在接入点上，按接入点分开看比平铺一长串更好找。
+type localGroup struct {
+	id    string
+	name  string
+	state vpn.State
+	items []model.LocalApp
+}
+
+// localGroups 按配置里的接入点顺序分组；找不到接入点的项目归到最后一组，
+// 标为已移除，而不是从列表里消失。
+func (a *app) localGroups() []localGroup {
+	groups := make([]localGroup, 0, len(a.cfg.Points)+1)
+	index := map[string]int{}
+	for _, point := range a.cfg.Points {
+		index[point.ID] = len(groups)
+		g := localGroup{id: point.ID, name: point.Name, state: vpn.StateOffline}
+		if v, ok := a.mgr.View(point.ID); ok {
+			g.state = v.State
+		}
+		groups = append(groups, g)
+	}
+	orphan := -1
+	for _, p := range a.cfg.LocalApps {
+		i, ok := index[p.PointID]
+		if !ok {
+			if orphan < 0 {
+				orphan = len(groups)
+				groups = append(groups, localGroup{name: "接入点已删除"})
+			}
+			i = orphan
+		}
+		groups[i].items = append(groups[i].items, p)
+	}
+	return groups
+}
+
+// localAppList 是单栏列表：接入点当分组头，项目嵌在下面，行间发丝分隔。
+// 搜索时忽略折起状态，命中的分组自动展开，否则搜到东西也看不到。
+func (a *app) localAppList(c *ui.Context) {
+	t := c.Theme()
+	query := strings.TrimSpace(a.localQuery)
+	groups := a.localGroupsMatching(query)
+	panel := ui.Column(c).Grow(1).Radius(12).Border(1, t.Border).
+		Background(t.Surface)
+	panel.Children(func() {
+		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4).Children(func() {
+			if len(groups) == 0 {
+				ui.Column(c).Padding(24).Gap(4).Children(func() {
+					ui.Text(c, "没有匹配的项目").FontSize(13).Bold()
+					ui.Text(c, "换个名称、地址或接入点试试；清空搜索可以看到全部项目。").
+						FontSize(11).TextColor(t.TextMuted)
+				})
+				return
+			}
+			first := true
+			for _, g := range groups {
+				if !first {
+					ui.Divider(c)
 				}
-				for _, p := range a.cfg.LocalApps {
-					a.localAppCard(c, p)
+				first = false
+				// 搜索时全部展开，不然命中的项目还被折在组里。
+				collapsed := a.localCollapsed[g.id] && query == ""
+				a.localGroupHeader(c, g, collapsed)
+				if collapsed {
+					continue
 				}
-			})
+				for _, p := range g.items {
+					ui.Divider(c)
+					a.localAppRow(c, p)
+				}
+			}
 		})
 	})
 }
 
-func (a *app) localAppCard(c *ui.Context, p model.LocalApp) {
+// localGroupsMatching 按名称、方式、目标或接入点名过滤项目，空的组不返回。
+func (a *app) localGroupsMatching(query string) []localGroup {
+	q := strings.ToLower(strings.TrimSpace(query))
+	groups := a.localGroups()
+	if q == "" {
+		out := groups[:0]
+		for _, g := range groups {
+			if len(g.items) > 0 {
+				out = append(out, g)
+			}
+		}
+		return out
+	}
+	out := make([]localGroup, 0, len(groups))
+	for _, g := range groups {
+		var items []model.LocalApp
+		for _, p := range g.items {
+			hay := strings.ToLower(p.Name + " " + localModeLabel(p.Mode) + " " +
+				localTargetLine(p) + " " + g.name)
+			if strings.Contains(hay, q) {
+				items = append(items, p)
+			}
+		}
+		if len(items) > 0 {
+			g.items = items
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// localGroupHeader 是接入点分组头：状态灯、名称、状态和项目数，整行可点。
+func (a *app) localGroupHeader(c *ui.Context, g localGroup, collapsed bool) {
 	t := c.Theme()
-	v := localapps.View{}
-	if a.local != nil {
-		v = a.local.View(p.ID)
+	state := g.state.Label()
+	if g.id == "" {
+		state = "已移除"
 	}
-	point := a.cfg.Find(p.PointID)
-	pointName := "接入点已删除，请重新选择"
-	online := false
-	if point != nil {
-		pointName = point.Name
-		if state, ok := a.mgr.View(point.ID); ok {
-			online = state.State == vpn.StateOnline
-		}
-	}
-	ui.Column(c).Padding(16).Gap(8).Radius(10).Border(1, t.Border).Background(t.Surface).Children(func() {
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, p.Name).FontSize(15).Bold().Grow(1).Ellipsis("…")
-			ui.Badge(c, localModeLabel(p.Mode))
-			status := "未启动"
-			if v.Running {
-				status = "运行中"
-				if p.Mode == model.LocalAppCapture {
-					status = "TCP 接管中"
-				}
+	groupBar(c, collapsed, stateColor(t, g.state), g.name, state,
+		fmt.Sprintf("%d 个项目", len(g.items)), func() {
+			if a.localCollapsed == nil {
+				a.localCollapsed = map[string]bool{}
 			}
-			if v.Starting {
-				status = "正在准备接管…"
-			}
-			if v.Stopping {
-				status = "正在停止…"
-			}
-			if !online {
-				status = "VPN 未连接"
-			}
-			ui.Text(c, status).FontSize(12).TextColor(t.TextMuted)
+			a.localCollapsed[g.id] = !collapsed
+			a.invalidate()
+		}, nil)
+}
+
+func (a *app) localAppRow(c *ui.Context, p model.LocalApp) {
+	t := c.Theme()
+	v := a.localView(p.ID)
+	online, _ := a.localPointOnline(p)
+	status, tone := localStatusText(t, p, v, online)
+	row := ui.Row(c).Padding(10, 12).Gap(10).AlignItems(ui.Center).
+		Background(t.Surface)
+	row.OnClick(func() {
+		a.openLocalAppEditor(p.ID)
+	})
+	row.Children(func() {
+		localModeMark(c, t, p.Mode, p.Name)
+		ui.Column(c).Gap(3).Grow(1).MinWidth(0).Children(func() {
+			ui.Text(c, p.Name).FontSize(13).Bold().Ellipsis("…")
+			// 接入点已经写在分组头上，行里只留目标与方式。
+			ui.Text(c, localModeLabel(p.Mode)+" · "+localTargetLine(p)).FontSize(11).
+				TextColor(t.TextMuted).Ellipsis("…")
 		})
-		ui.Text(c, "接入点："+pointName).FontSize(12).TextColor(t.TextMuted)
-		if p.Mode == model.LocalAppBrowser {
-			ui.Text(c, "起始网址："+p.URL).FontSize(12).Ellipsis("…")
-		} else if p.Mode == model.LocalAppCapture {
-			ui.Text(c, "程序："+p.Executable).FontSize(12).Ellipsis("…")
-			ui.Text(c, "覆盖此次启动及普通新子进程。停止接管后软件继续运行，新连接恢复系统网络。").FontSize(11).TextColor(t.TextMuted).Wrap()
-			if v.Running {
-				dnsText := "网关未提供内网域名后缀，DNS 使用当前系统配置。"
-				if v.DNSDomains > 0 {
-					dnsText = fmt.Sprintf("已启用 %d 个内网 DNS 后缀；这些域名的系统解析由其他软件共享。", v.DNSDomains)
-				}
-				ui.Text(c, dnsText).FontSize(11).TextColor(t.TextMuted).Wrap()
+		ui.Text(c, status).FontSize(11).TextColor(tone).Ellipsis("…")
+		// 行里只放一个常用动作，其余详情、编辑、删除都在弹窗里。
+		switch {
+		case !localProjectBusy(v):
+			if ui.PrimaryButton(c, "启动").Label("启动 " + p.Name).FontSize(11).Clicked() {
+				a.startLocalApp(p.ID)
 			}
-		} else {
-			ui.Text(c, "远端："+p.RemoteAddress).FontSize(12)
-			if v.Running {
-				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "本地连接地址："+v.LocalAddress).FontSize(13).Bold()
-					if ui.Button(c, "复制地址").Label("复制转发地址 " + p.ID).Clicked() {
-						a.copyText(v.LocalAddress)
-					}
-				})
-				ui.Text(c, "在数据库工具中使用此本地地址。TLS 的服务器名称仍应按远端服务配置。").FontSize(11).TextColor(t.TextMuted).Wrap()
+		case v.Stopping:
+			// 停止过程中不给按钮，行上已经写了状态。
+		case p.Mode == model.LocalAppBrowser:
+			// 浏览器在独立窗口里关，列表不提供停止。
+		default:
+			label := "停止"
+			if v.Starting {
+				label = "取消"
+			}
+			if ui.Button(c, label).Label(label + " " + p.Name).FontSize(11).Clicked() {
+				go func() { _ = a.local.Stop(p.ID) }()
 			}
 		}
+	})
+}
+
+func (a *app) localView(id string) localapps.View {
+	if a.local == nil {
+		return localapps.View{}
+	}
+	return a.local.View(id)
+}
+
+// localPointOnline reports whether the project's access point is connected,
+// and the point name to show for it.
+func (a *app) localPointOnline(p model.LocalApp) (bool, string) {
+	point := a.cfg.Find(p.PointID)
+	if point == nil {
+		return false, "接入点已删除，请重新选择"
+	}
+	if state, ok := a.mgr.View(point.ID); ok {
+		return state.State == vpn.StateOnline, point.Name
+	}
+	return false, point.Name
+}
+
+// localStatusText is the one-line state shown in the project list. It follows
+// the same precedence the detail card used: a missing VPN wins over progress.
+func localStatusText(t *ui.Theme, p model.LocalApp, v localapps.View, online bool) (string, ui.Color) {
+	status := "未启动"
+	tone := t.TextMuted
+	if v.Running {
+		status = "运行中"
+		tone = t.Success
+		if p.Mode == model.LocalAppCapture {
+			status = "TCP 接管中"
+		}
+	}
+	if v.Starting {
+		status = "正在准备接管…"
+		tone = t.Warning
+	}
+	if v.Stopping {
+		status = "正在停止…"
+		tone = t.Warning
+	}
+	if !online {
+		status = "VPN 未连接"
+		tone = t.Warning
+	}
+	if v.Error != "" {
+		status += " · 需处理"
+		tone = t.Danger
+	}
+	return status, tone
+}
+
+// localTargetLine is the address line under a project's name: the start URL, the
+// executable, or the remote target of a fixed local port.
+func localTargetLine(p model.LocalApp) string {
+	switch p.Mode {
+	case model.LocalAppBrowser:
+		return p.URL
+	case model.LocalAppCapture:
+		return p.Executable
+	default:
+		if p.ListenPort > 0 {
+			return p.RemoteAddress + " → 127.0.0.1:" + strconv.Itoa(p.ListenPort)
+		}
+		return p.RemoteAddress
+	}
+}
+
+func localModeMark(c *ui.Context, t *ui.Theme, mode, name string) {
+	bg := t.Accent
+	switch mode {
+	case model.LocalAppTCPForward:
+		bg = t.Success
+	case model.LocalAppCapture:
+		bg = t.Warning
+	}
+	ui.Row(c).Size(26, 26).Radius(8).Background(bg).
+		AlignItems(ui.Center).Justify(ui.Center).Children(func() {
+		ui.Text(c, firstRune(name)).FontSize(13).Bold().
+			TextColor(ui.RGBA(255, 255, 255, 1))
+	})
+}
+
+// localAppStatusBlock 在编辑器顶部给出这个项目当前的运行情况：
+// 列表里看不到的本地地址、TCP 统计与错误都在这里，不用再多一层详情弹窗。
+func (a *app) localAppStatusBlock(c *ui.Context, p model.LocalApp) {
+	t := c.Theme()
+	v := a.localView(p.ID)
+	online, pointName := a.localPointOnline(p)
+	status, tone := localStatusText(t, p, v, online)
+	box := ui.Column(c).Padding(10, 12).Gap(6).Radius(12).
+		Border(1, t.Border).Background(t.Surface)
+	box.Children(func() {
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, status).FontSize(11).TextColor(tone)
+			ui.Text(c, "接入点 "+pointName).FontSize(11).TextColor(t.TextMuted).Ellipsis("…")
+			ui.Row(c).Grow(1)
+			if v.Running && v.LocalAddress != "" {
+				ui.Text(c, v.LocalAddress).Font("monospace").FontSize(11)
+				if ui.Button(c, "复制地址").Label("复制转发地址 " + p.ID).FontSize(11).Clicked() {
+					a.copyText(v.LocalAddress)
+				}
+			}
+		})
 		if v.Observed {
 			s := v.Connections
-			ui.Text(c, fmt.Sprintf("TCP 连接：%d 活跃 · %d 连接中 · %d 成功 · %d 失败", s.Active, s.Connecting, s.Opened, s.Failed)).FontSize(12).Wrap()
-			ui.Text(c, fmt.Sprintf("发送 %s · 接收 %s · 路径和规则见「访问日志」", trafficBytes(s.Sent), trafficBytes(s.Received))).FontSize(11).TextColor(t.TextMuted).Wrap()
+			ui.Text(c, fmt.Sprintf("TCP 连接：%d 活跃 · %d 连接中 · %d 成功 · %d 失败 · 发送 %s · 接收 %s",
+				s.Active, s.Connecting, s.Opened, s.Failed,
+				trafficBytes(s.Sent), trafficBytes(s.Received))).
+				FontSize(11).TextColor(t.TextMuted).Wrap()
+		}
+		if p.Mode == model.LocalAppCapture && v.Running {
+			dnsText := "网关未提供内网域名后缀，DNS 使用当前系统配置。"
+			if v.DNSDomains > 0 {
+				dnsText = fmt.Sprintf("已启用 %d 个内网 DNS 后缀；这些域名的系统解析由其他软件共享。", v.DNSDomains)
+			}
+			ui.Text(c, dnsText).FontSize(11).TextColor(t.TextMuted).Wrap()
 		}
 		if v.Error != "" {
-			ui.Text(c, v.Error).FontSize(12).TextColor(t.Danger).Wrap()
+			ui.Text(c, v.Error).FontSize(11).TextColor(t.Danger).Wrap()
 		}
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			if !localProjectBusy(v) {
-				if ui.PrimaryButton(c, "启动").Label("启动本机项目 " + p.ID).Clicked() {
-					a.startLocalApp(p.ID)
-				}
-			} else if v.Stopping {
-				ui.Text(c, "正在清理此项目的网络入口…").FontSize(11).TextColor(t.TextMuted)
-			} else if p.Mode == model.LocalAppCapture {
-				label := "停止接管"
-				if v.Starting {
-					label = "取消启动"
-				}
-				if ui.Button(c, label).Label("停止本机项目 " + p.ID).Clicked() {
-					go func() { _ = a.local.Stop(p.ID) }()
-				}
-			} else if p.Mode == model.LocalAppTCPForward {
-				if ui.Button(c, "停止转发").Label("停止本机项目 " + p.ID).Clicked() {
-					go func() { _ = a.local.Stop(p.ID) }()
-				}
-			} else {
-				ui.Text(c, "请在独立浏览器窗口中关闭；关闭后可重新启动。").FontSize(11).TextColor(t.TextMuted).Wrap()
-			}
-			ui.Row(c).Grow(1)
-			if ui.Button(c, "编辑").Label("编辑本机项目 " + p.ID).Clicked() {
-				a.openLocalAppEditor(p.ID)
-			}
-		})
 	})
 }
 
@@ -219,13 +422,19 @@ func (a *app) localAppEditorView(c *ui.Context) {
 	}
 	t := c.Theme()
 	ui.Modal(c, &d.open, func() {
-		ui.Column(c).Width(600).Gap(10).Children(func() {
+		ui.Column(c).Width(dialogWide).Gap(10).Children(func() {
 			title := "添加本机项目"
 			if d.id != "" {
 				title = "编辑本机项目"
 			}
-			ui.Text(c, title).FontSize(18).Bold()
-			ui.Scroll(c).MaxHeight(390).MinHeight(0).Children(func() {
+			dialogHeader(c, title, "点列表里的项目就能回到这里；改动配置前请先停止项目或关闭浏览器窗口。")
+			if d.id != "" {
+				if p := a.cfg.FindLocalApp(d.id); p != nil {
+					a.localAppStatusBlock(c, *p)
+				}
+			}
+			ui.Scroll(c).MaxHeight(a.dialogBodyHeight(380)).MinHeight(0).
+				ScrollbarInsets(6, 6, 6, 6).Children(func() {
 				ui.Column(c).Gap(10).Children(func() {
 					ui.Field(c, "项目名称", func() { ui.TextInput(c, &d.name).Placeholder("例如：工作浏览器 / 开发数据库") })
 					ui.Field(c, "接入方式", func() {
@@ -251,7 +460,7 @@ func (a *app) localAppEditorView(c *ui.Context) {
 						ui.Field(c, "浏览器可执行文件", func() {
 							ui.Row(c).Gap(8).Children(func() {
 								ui.TextInput(c, &d.executable).Placeholder("留空自动查找 Chrome / Edge / Chromium").Grow(1)
-								if ui.Button(c, "浏览…").Clicked() {
+								if ui.Button(c, "浏览…").FontSize(11).Clicked() {
 									paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "选择 Chromium 浏览器可执行文件"})
 									if err != nil {
 										d.err = err.Error()
@@ -267,7 +476,7 @@ func (a *app) localAppEditorView(c *ui.Context) {
 						ui.Field(c, "软件可执行文件", func() {
 							ui.Row(c).Gap(8).Children(func() {
 								ui.TextInput(c, &d.executable).Placeholder("选择 IDEA、数据库工具等程序").Grow(1)
-								if ui.Button(c, "浏览…").Clicked() {
+								if ui.Button(c, "浏览…").FontSize(11).Clicked() {
 									paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "选择软件可执行文件"})
 									if err != nil {
 										d.err = err.Error()
@@ -294,18 +503,18 @@ func (a *app) localAppEditorView(c *ui.Context) {
 				ui.Text(c, note).FontSize(11).TextColor(t.Warning).Wrap()
 			}
 			if d.err != "" {
-				ui.Text(c, d.err).FontSize(12).TextColor(t.Danger).Wrap()
+				ui.Text(c, d.err).FontSize(11).TextColor(t.Danger).Wrap()
 			}
-			ui.Row(c).Gap(8).Children(func() {
-				if d.id != "" && ui.Button(c, "删除项目").Clicked() {
+			dialogFooter(c, func() {
+				if d.id != "" && ui.Button(c, "删除项目").FontSize(11).Clicked() {
 					a.localDelete = d.id
 					d.open = false
 				}
 				ui.Row(c).Grow(1)
-				if ui.Button(c, "取消").Label("取消本机项目").Clicked() {
+				if ui.Button(c, "取消").Label("取消本机项目").FontSize(11).Clicked() {
 					d.open = false
 				}
-				if ui.PrimaryButton(c, "保存").Label("保存本机项目").Clicked() {
+				if ui.PrimaryButton(c, "保存").Label("保存本机项目").FontSize(11).Clicked() {
 					a.saveLocalApp()
 				}
 			})
@@ -385,10 +594,11 @@ func (a *app) localAppDeleteView(c *ui.Context) {
 	}
 	open := true
 	ui.Modal(c, &open, func() {
-		ui.Column(c).Width(420).Gap(12).Children(func() {
-			ui.Text(c, "删除这个本机项目？").FontSize(17).Bold()
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-				if ui.Button(c, "取消").Clicked() {
+		ui.Column(c).Width(dialogNarrow).Gap(10).Children(func() {
+			dialogHeader(c, "删除这个本机项目？", "只删配置，不影响已经打开的程序；需要的话之后可以重新添加。")
+			dialogFooter(c, func() {
+				ui.Row(c).Grow(1)
+				if ui.Button(c, "取消").FontSize(11).Clicked() {
 					a.localDelete = ""
 				}
 				if ui.Button(c, "确认删除").Clicked() {

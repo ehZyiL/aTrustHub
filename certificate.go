@@ -182,35 +182,35 @@ func (a *app) certificateProbeView(c *ui.Context) {
 		}
 	}
 	ui.Modal(c, &d.open, func() {
-		ui.Column(c).Width(600).Gap(12).Children(func() {
-			ui.Text(c, "网关证书 · "+d.name).FontSize(18).Bold()
-			ui.Text(c, model.FormatAccessAddress(d.server, d.port)).FontSize(12).Wrap()
-			ui.Text(c, "此操作只读取证书，不发送账号密码。指纹由程序计算，用于识别并记住这张证书。").FontSize(12).Wrap()
+		ui.Column(c).Width(dialogRegular).Gap(10).Children(func() {
+			dialogHeader(c, "网关证书", d.name+" · "+model.FormatAccessAddress(d.server, d.port))
+			ui.Text(c, "此操作只读取证书，不发送账号密码。指纹由程序计算，用于识别并记住这张证书。").
+				FontSize(11).TextColor(c.Theme().TextMuted).Wrap()
 			if d.running {
-				ui.Text(c, "正在读取网关证书…").FontSize(12)
+				ui.Text(c, "正在读取网关证书…").FontSize(11)
 			}
 			if info := d.info; info != nil {
 				ui.Scroll(c).MaxHeight(230).Children(func() {
 					ui.Column(c).Gap(7).Children(func() {
-						ui.Text(c, "证书名称："+logField(info.Subject)).FontSize(12).Wrap()
-						ui.Text(c, "颁发者："+logField(info.Issuer)).FontSize(12).Wrap()
-						ui.Text(c, fmt.Sprintf("有效期：%s 至 %s", time.Unix(info.NotBefore, 0).Format("2006-01-02"), time.Unix(info.NotAfter, 0).Format("2006-01-02"))).FontSize(12).Wrap()
+						ui.Text(c, "证书名称："+logField(info.Subject)).FontSize(13).Wrap()
+						ui.Text(c, "颁发者："+logField(info.Issuer)).FontSize(13).Wrap()
+						ui.Text(c, fmt.Sprintf("有效期：%s 至 %s", time.Unix(info.NotBefore, 0).Format("2006-01-02"), time.Unix(info.NotAfter, 0).Format("2006-01-02"))).FontSize(13).Wrap()
 						ui.Text(c, "SHA256："+info.SHA256).Font("monospace").FontSize(11).Wrap()
 						if info.MalformedSAN {
-							ui.Text(c, "证书的域名字段格式不兼容；信任后将仅对这张证书启用兼容处理。").FontSize(12).TextColor(c.Theme().Warning).Wrap()
+							ui.Text(c, "证书的域名字段格式不兼容；信任后将仅对这张证书启用兼容处理。").FontSize(13).TextColor(c.Theme().Warning).Wrap()
 						}
 						if now := time.Now().Unix(); now < info.NotBefore || now > info.NotAfter {
-							ui.Text(c, "该证书当前不在有效期内，请向管理员核实。").FontSize(12).TextColor(c.Theme().Warning).Wrap()
+							ui.Text(c, "该证书当前不在有效期内，请向管理员核实。").FontSize(13).TextColor(c.Theme().Warning).Wrap()
 						}
 						if d.changed() {
-							ui.Text(c, "证书已变更！请先向管理员核实是否换证，确认后才替换旧记录。").FontSize(12).TextColor(c.Theme().Danger).Wrap()
+							ui.Text(c, "证书已变更！请先向管理员核实是否换证，确认后才替换旧记录。").FontSize(13).TextColor(c.Theme().Danger).Wrap()
 							ui.Text(c, "原 SHA256："+normalizeCertificatePin(d.previousPin)).Font("monospace").FontSize(11).Wrap()
 						} else if d.previousPin != "" {
-							ui.Text(c, "与已保存的证书指纹一致。").FontSize(12).Wrap()
+							ui.Text(c, "与已保存的证书指纹一致。").FontSize(13).Wrap()
 						}
 					})
 				})
-				ui.Text(c, "读取成功不代表来源已验证。首次信任前，请通过管理员或其他可信渠道核实；也可复制指纹请管理员确认。").FontSize(12).Wrap()
+				ui.Text(c, "读取成功不代表来源已验证。首次信任前，请通过管理员或其他可信渠道核实；也可复制指纹请管理员确认。").FontSize(13).Wrap()
 				label := "我已核实网关来源，信任此证书"
 				if d.changed() {
 					label = "我已核实此次证书变更，替换已信任证书"
@@ -218,23 +218,25 @@ func (a *app) certificateProbeView(c *ui.Context) {
 				ui.Checkbox(c, &d.confirmed, label)
 			}
 			if d.err != "" {
-				ui.Text(c, d.err).FontSize(12).TextColor(c.Theme().Danger).Wrap()
+				ui.Text(c, d.err).FontSize(11).TextColor(c.Theme().Danger).Wrap()
 			}
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-				if ui.Button(c, "取消").Label("取消证书读取").Clicked() {
+			dialogFooter(c, func() {
+				if ui.Button(c, "取消").Label("取消证书读取").FontSize(11).Clicked() {
 					d.open = false
 				}
-				if d.info != nil && ui.Button(c, "复制指纹").Clicked() {
+				if d.info != nil && ui.Button(c, "复制指纹").FontSize(11).Clicked() {
 					a.copyText(d.info.SHA256)
 				}
-				if ui.Button(c, "重新读取").Disabled(d.running).Clicked() {
+				ui.Row(c).Grow(1)
+				if ui.Button(c, "重新读取").FontSize(11).Disabled(d.running).Clicked() {
 					a.startCertificateProbe()
 				}
 				label := "信任并重试连接"
 				if d.editorToken != "" {
 					label = "信任并填入"
 				}
-				if ui.PrimaryButton(c, label).Disabled(d.running || !d.confirmed || d.info == nil).Clicked() {
+				if ui.PrimaryButton(c, label).FontSize(11).
+					Disabled(d.running || !d.confirmed || d.info == nil).Clicked() {
 					a.acceptGatewayCertificate()
 				}
 			})

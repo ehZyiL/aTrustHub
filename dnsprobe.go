@@ -147,9 +147,8 @@ func (a *app) dnsProbeView(c *ui.Context) {
 		}
 	}
 	ui.Modal(c, &d.open, func() {
-		ui.Column(c).Width(580).Gap(12).Children(func() {
-			ui.Text(c, "内网 DNS 诊断 · "+d.name).FontSize(18).Bold()
-			ui.Text(c, d.summary).FontSize(12).Wrap()
+		ui.Column(c).Width(dialogRegular).Gap(10).Children(func() {
+			dialogHeader(c, "内网 DNS 诊断", d.name+" · "+d.summary)
 			ui.Field(c, "内网域名", func() { ui.TextInput(c, &d.domain).Placeholder("db.corp.example") })
 			ui.Field(c, "查询类型", func() { ui.Select(c, &d.kind, []string{"A", "AAAA", "CNAME", "TXT", "MX", "SRV"}) })
 			ui.Checkbox(c, &d.capture, "旧版 IP 授权兼容检查（不验证当前接管映射）")
@@ -172,16 +171,18 @@ func (a *app) dnsProbeView(c *ui.Context) {
 				}
 			})
 			if d.result != "" {
-				ui.Scroll(c).MaxHeight(210).Children(func() { ui.Text(c, d.result).FontSize(12).Wrap() })
+				ui.Scroll(c).MaxHeight(210).Children(func() { ui.Text(c, d.result).FontSize(13).Wrap() })
 			}
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+			dialogFooter(c, func() {
 				if d.running {
-					ui.Text(c, "查询中…").FontSize(12)
+					ui.Spinner(c)
+					ui.Text(c, "查询中…").FontSize(11).TextColor(c.Theme().TextMuted)
 				}
-				if ui.Button(c, "关闭").Clicked() {
+				ui.Row(c).Grow(1)
+				if ui.Button(c, "关闭").FontSize(11).Clicked() {
 					d.open = false
 				}
-				if ui.PrimaryButton(c, "查询").Disabled(d.running).Clicked() {
+				if ui.PrimaryButton(c, "查询").Label("查询 DNS").FontSize(11).Disabled(d.running).Clicked() {
 					a.startDNSProbe()
 				}
 			})

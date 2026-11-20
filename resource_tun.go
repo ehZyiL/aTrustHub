@@ -180,7 +180,7 @@ func (a *app) resourceTUNControls(c *ui.Context) {
 			ui.Row(c).Padding(5).OnClick(func() { a.logsOpen = true }).Tooltip("系统 TUN 与访问日志").Children(func() { ui.Icon(c, logIcon).Size(16, 16) })
 		}
 		if status.Error != "" {
-			ui.Text(c, "接管状态需检查").TextColor(c.Theme().Danger).Tooltip(status.Error)
+			ui.Text(c, "接管状态需检查").FontSize(11).TextColor(c.Theme().Danger).Tooltip(status.Error)
 			if ui.Button(c, "详情").Clicked() {
 				a.toast = status.Error
 			}

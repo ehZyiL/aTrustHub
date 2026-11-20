@@ -29,7 +29,7 @@ func TestAppCardSwitchWritesDisk(t *testing.T) {
 
 	entry := appEntry{PointID: id, PointName: "卡片点", App: vpn.App{ID: "app1", Name: "测试应用"}}
 	tt := ui.NewTester(func(c *ui.Context) {
-		ui.Column(c).Padding(10).Children(func() { a.appCard(c, entry) })
+		ui.Column(c).Padding(10).Children(func() { a.appRow(c, entry) })
 	}, 900, 300)
 	tt.Frame()
 	if err := tt.Click("隧道代理 测试应用"); err != nil {

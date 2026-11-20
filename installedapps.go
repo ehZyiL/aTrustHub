@@ -57,27 +57,27 @@ func (a *app) installedAppsPicker(c *ui.Context) {
 	default:
 	}
 	t := c.Theme()
-	ui.Column(c).Gap(6).Padding(8).Border(1, t.Border).Radius(6).Children(func() {
+	ui.Column(c).Gap(6).Padding(8).Border(1, t.Border).Radius(8).Children(func() {
 		ui.Row(c).Gap(6).Children(func() {
 			ui.TextInput(c, &d.appSearch).Placeholder("搜索 IDEA、Firefox、数据库工具…").Grow(1)
-			if ui.Button(c, "重新扫描").Disabled(catalog.pending != nil).Clicked() {
+			if ui.Button(c, "重新扫描").FontSize(11).Disabled(catalog.pending != nil).Clicked() {
 				a.loadInstalledApps()
 			}
-			if ui.Button(c, "收起列表").Clicked() {
+			if ui.Button(c, "收起列表").FontSize(11).Clicked() {
 				d.showInstalled = false
 			}
 		})
 		if catalog.pending != nil {
-			ui.Text(c, "正在读取已安装软件…").FontSize(12)
+			ui.Text(c, "正在读取已安装软件…").FontSize(13)
 			return
 		}
 		if catalog.err != "" {
-			ui.Text(c, catalog.err).FontSize(12).TextColor(t.Warning).Wrap()
+			ui.Text(c, catalog.err).FontSize(13).TextColor(t.Warning).Wrap()
 			return
 		}
 		query := strings.ToLower(strings.TrimSpace(d.appSearch))
 		shown := 0
-		ui.Scroll(c).MinHeight(80).MaxHeight(150).Children(func() {
+		ui.Scroll(c).MinHeight(80).MaxHeight(150).ScrollbarInsets(4, 4, 4, 4).Children(func() {
 			ui.Column(c).Gap(4).Children(func() {
 				for _, entry := range catalog.apps {
 					if !strings.Contains(strings.ToLower(entry.Name+" "+entry.ID), query) {
@@ -89,14 +89,14 @@ func (a *app) installedAppsPicker(c *ui.Context) {
 						break
 					}
 					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, entry.Name).FontSize(12).Grow(1).Ellipsis("…")
-						if ui.Button(c, "选择").Label("选择已安装软件 " + entry.ID).Clicked() {
+						ui.Text(c, entry.Name).FontSize(13).Grow(1).Ellipsis("…")
+						if ui.Button(c, "选择").Label("选择已安装软件 " + entry.ID).FontSize(11).Clicked() {
 							a.selectInstalledApp(entry)
 						}
 					})
 				}
 				if shown == 0 {
-					ui.Text(c, "未找到匹配的软件，可以手动选择程序文件").FontSize(12).Wrap()
+					ui.Text(c, "未找到匹配的软件，可以手动选择程序文件").FontSize(13).Wrap()
 				}
 			})
 		})

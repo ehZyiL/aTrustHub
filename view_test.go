@@ -387,7 +387,7 @@ func TestAppsTab(t *testing.T) {
 	a.tab = 1
 	tt := ui.NewTester(a.view, 1120, 800)
 	texts := strings.Join(tt.Texts(), "|")
-	for _, want := range []string{"应用中心", "18F-同步通道", "部门管理系统", "隧道模式（TCP/UDP协议）"} {
+	for _, want := range []string{"网关资源", "18F-同步通道", "部门管理系统", "隧道模式（TCP/UDP协议）"} {
 		if !strings.Contains(texts, want) {
 			t.Errorf("apps tab lacks %q; texts = %s", want, texts)
 		}

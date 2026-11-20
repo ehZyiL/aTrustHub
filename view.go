@@ -44,15 +44,44 @@ var logIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" strok
 
 // view builds one frame of the window: the header, the aggregate proxy,
 // the access points and their log.
+// ---- 样式基准 ----
+//
+// 字号只有五档：10 状态栏、11 次要文字、13 正文、15 区块标题、18 应用名。
+// 圆角只有四档：3/4 圆点、8 色块与芯片、12 面板与卡片、999 胶囊。
+// 按钮：列表、卡片、弹窗内的动作 11；页面工具栏 13。
+// 边框：面板一律 1px t.Border，面板内部靠 ui.Divider 分隔，不叠两层边框。
+// 间距：窗口内边距 16；页面块间 10~12；卡片 14；列表行 10×12；弹窗内容 10。
+// 滚动区：ScrollbarInsets(8,6,8,4)（弹窗正文用 6）；滑块 8 DIP、悬停才显示。
+// 弹窗：dialogHeader + dialogFooter + 三档宽度，正文高度用 dialogBodyHeight 兜底。
+
+// pageShortcuts 是 ⌘1–⌘4 对应的四个页面，顺序与分段导航一致。
+var pageShortcuts = []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4}
+
 func (a *app) view(c *ui.Context) {
+	// 先跟随系统外观换上柔和主题，再开始画：颜色、字号、圆角都跟原型一致。
+	if c.Theme().Dark {
+		c.SetTheme(softDark)
+	} else {
+		c.SetTheme(softLight)
+	}
 	t := c.Theme()
 	if a.toast != "" {
 		c.Toast(a.toast)
 		a.toast = ""
 	}
-	root := ui.Column(c).Fill().Padding(22).Gap(14).Background(t.Background)
+	root := ui.Column(c).Fill().Padding(16).Gap(10).Background(t.Background)
+	if b := root.Bounds(); b.H > 0 {
+		a.windowH = b.H
+	}
 	root.OnShortcut(ui.Cmd, ui.KeyN, a.openNewEditor)
 	root.OnShortcut(ui.Cmd, ui.KeyR, func() { a.mgr.ConnectAll(false) })
+	// ⌘1–⌘4 直接跳到四个页面，与分段导航和底部提示一致。
+	for page, key := range pageShortcuts {
+		root.OnShortcut(ui.Cmd, key, func() {
+			a.tab = page
+			a.invalidate()
+		})
+	}
 	root.Children(func() {
 		a.header(c)
 		a.tabBar(c)
@@ -64,11 +93,9 @@ func (a *app) view(c *ui.Context) {
 		case 3:
 			a.localAppsSection(c)
 		default:
-			// 系统代理没开时，统一入口没有参与任何转发，整块隐藏；
+			// 首屏：状态横幅汇总在线情况与统一入口，下面每个接入点一张卡片。
+			// 系统代理没开时统一入口没有参与任何转发，横幅里也不列它；
 			// 需要手动配置端口时在「设置」里看。
-			if a.sysProxyOn {
-				a.aggregateCard(c)
-			}
 			a.pointsSection(c)
 		}
 		if a.logsOpen {
@@ -82,12 +109,15 @@ func (a *app) view(c *ui.Context) {
 	a.routesView(c)
 	if a.routeDetailOpen {
 		ui.Modal(c, &a.routeDetailOpen, func() {
-			ui.Column(c).Width(620).Gap(10).Children(func() {
-				ui.Text(c, "连接路由详情").FontSize(18).Bold()
-				ui.Text(c, a.routeDetail).FontSize(12).Wrap()
-				if ui.Button(c, "关闭详情").Clicked() {
-					a.routeDetailOpen = false
-				}
+			ui.Column(c).Width(dialogWide).Gap(10).Children(func() {
+				dialogHeader(c, "连接路由详情", "这一条请求为什么选了这个出口")
+				ui.Text(c, a.routeDetail).FontSize(13).Wrap()
+				dialogFooter(c, func() {
+					ui.Row(c).Grow(1)
+					if ui.Button(c, "关闭详情").FontSize(11).Clicked() {
+						a.routeDetailOpen = false
+					}
+				})
 			})
 		})
 	}
@@ -104,7 +134,27 @@ func (a *app) view(c *ui.Context) {
 // qrCard was removed: WeCom's QR login now uses a WebView popup.
 
 func (a *app) tabBar(c *ui.Context) {
-	ui.Tabs(c, &a.tab, "接入点", appTabLabel(a.appCount()), accessTabLabel(), "本机软件")
+	t := c.Theme()
+	ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
+		ui.Segmented(c, &a.tab, "接入点", appTabLabel(a.appCount()), accessTabLabel(), "本机软件").
+			Label("主要页面")
+		ui.Row(c).Grow(1)
+		ui.Text(c, pageHint(a.tab)).FontSize(11).TextColor(t.TextMuted)
+	})
+}
+
+// pageHint 是分段导航右侧的一句话，说明当前页面在看什么。
+func pageHint(tab int) string {
+	switch tab {
+	case 1:
+		return "网关下发的资源，逐个开关隧道代理"
+	case 2:
+		return "哪些连接走了隧道，哪些用了原网络"
+	case 3:
+		return "浏览器、数据库转发与软件接管"
+	default:
+		return "每个接入点独立连接，资源按网关归属选择出口"
+	}
 }
 
 func accessTabLabel() string {
@@ -173,21 +223,21 @@ func (a *app) appsSection(c *ui.Context) {
 	}
 
 	ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
-		ui.Text(c, "应用中心").FontSize(14).Bold()
+		ui.Text(c, "网关资源").FontSize(15).Bold()
 		if ui.Button(c, "网络授权与路由").Clicked() {
 			a.openRoutes()
 		}
-		ui.Text(c, fmt.Sprintf("%d 个", len(all))).FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, fmt.Sprintf("%d 个", len(all))).FontSize(11).TextColor(t.TextMuted)
 		ui.Row(c).Grow(1)
 		// 只看已启用 / 未启用的应用，排查时不用在 158 个里翻。
 		ui.Segmented(c, &a.appFilterIndex, "所有", "已启用", "未启用").
-			Label("过滤应用")
+			Label("过滤资源")
 		a.appFilter = appFilterValue(a.appFilterIndex)
-		ui.SearchField(c, &a.appQuery).Placeholder("搜索应用名称、地址或标签").
-			Label("搜索应用").Width(240)
+		ui.SearchField(c, &a.appQuery).Placeholder("搜索资源名称、地址或标签").
+			Label("搜索资源").Width(240)
 	})
 
-	scroll := ui.Scroll(c).Grow(1).MinHeight(0)
+	scroll := ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4)
 	scroll.Children(func() {
 		ui.Column(c).Gap(14).Children(func() {
 			if len(all) == 0 {
@@ -219,40 +269,19 @@ func (a *app) appsSection(c *ui.Context) {
 				entries := groups[pid]
 				collapsed := a.appCollapsed[pid]
 				ui.Column(c).Gap(8).Children(func() {
-					// Clickable header to expand/collapse this point's group.
-					header := ui.Row(c).Gap(8).AlignItems(ui.Center).Justify(ui.SpaceBetween).Padding(6, 8).
-						Radius(8).Background(t.Surface).Border(1, t.Border)
-					header.OnClick(func() {
-						a.appCollapsed[pid] = !collapsed
-						a.invalidate()
-					})
-					// 左边的名字与数量贴在一起，右边单独一组按钮。
-					header.Children(func() {
-						ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-							arrow := "▸"
-							if !collapsed {
-								arrow = "▾"
-							}
-							ui.Text(c, arrow).FontSize(12).TextColor(t.TextMuted)
-							ui.Text(c, names[pid]).FontSize(13).Bold()
-							ui.Text(c, fmt.Sprintf("%d 个应用", len(entries))).
-								FontSize(11).TextColor(t.TextMuted)
-						})
-						// 该接入点的全部应用一次启停，靠右放，不必展开。
-						ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-							if ui.Button(c, "启用所有").Label("启用所有 " + names[pid]).Clicked() {
-								a.setAllAppsEnabled(pid, true)
-							}
-							if ui.Button(c, "停用所有").Label("停用所有 " + names[pid]).Clicked() {
-								a.setAllAppsEnabled(pid, false)
-							}
-						})
-					})
-					if !collapsed {
-						for _, entry := range entries {
-							a.appCard(c, entry)
+					// 一组资源装在一个面板里：分组头是面板顶部的一条色带，行间用发丝分隔。
+					panel := ui.Column(c).Radius(12).Border(1, t.Border).
+						Background(t.Surface)
+					panel.Children(func() {
+						a.appGroupHeader(c, pid, names[pid], len(entries), collapsed)
+						if collapsed {
+							return
 						}
-					}
+						for _, entry := range entries {
+							ui.Divider(c)
+							a.appRow(c, entry)
+						}
+					})
 				})
 			}
 		})
@@ -262,86 +291,130 @@ func (a *app) appsSection(c *ui.Context) {
 func (a *app) appsEmpty(c *ui.Context) {
 	t := c.Theme()
 	online, _, _ := a.mgr.Counts()
-	card := ui.Column(c).Padding(40).Gap(10).Center().Radius(12).
+	card := ui.Column(c).Padding(32).Gap(10).Center().Radius(12).
 		Border(1, t.Border).Background(t.Surface)
 	card.Children(func() {
 		if online == 0 {
-			ui.Text(c, "还没有登录的接入点").FontSize(16).Bold()
+			ui.Text(c, "还没有登录的接入点").FontSize(15).Bold()
 			ui.Text(c, "登录后，服务器下发的应用会显示在这里；"+
-				"隧道应用沿用登录后的分流规则。").FontSize(12).TextColor(t.TextMuted)
+				"隧道应用沿用登录后的分流规则。").FontSize(13).TextColor(t.TextMuted).
+				Wrap().MaxWidth(460)
 			if ui.PrimaryButton(c, "去登录接入点").Clicked() {
 				a.tab = 0
 			}
 			return
 		}
-		ui.Text(c, "已登录，服务器没有下发应用").FontSize(16).Bold()
+		ui.Text(c, "已登录，服务器没有下发应用").FontSize(15).Bold()
 		ui.Text(c, "此页显示网关资源。EasyConnect 目前请在接入点页面启动代理浏览器，或为软件填写代理地址。").
-			FontSize(12).TextColor(t.TextMuted)
+			FontSize(13).TextColor(t.TextMuted).Wrap().MaxWidth(460)
 	})
 }
 
-func (a *app) appCard(c *ui.Context, entry appEntry) {
+// appTunnelSwitch 画单个资源的「隧道代理」开关，卡片与行式列表共用。
+func (a *app) appTunnelSwitch(c *ui.Context, entry appEntry) {
 	t := c.Theme()
 	app := entry.App
-	card := ui.Column(c).Padding(12).Gap(8).Radius(12).
-		Border(1, t.Border).Background(t.Surface)
-	card.Children(func() {
-		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			a.appIcon(c, app.Name)
-			ui.Column(c).Gap(3).Grow(1).MinWidth(0).Children(func() {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, app.Name).FontSize(14).Bold()
-					if app.GroupName != "" {
-						ui.Text(c, app.GroupName).FontSize(10).TextColor(t.TextMuted)
-					}
-				})
-				if app.Description != "" {
-					ui.Text(c, app.Description).FontSize(11).TextColor(t.TextMuted).
-						Ellipsis("…")
-				}
-				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, app.TypeLabel()).FontSize(10).TextColor(t.Accent)
-					if !a.appEnabled(entry.PointID, app.ID) {
-						ui.Text(c, "已停用代理").FontSize(10).TextColor(t.Danger)
-					}
-					ui.Text(c, app.AddressSummary()).Font("monospace").
-						FontSize(10).TextColor(t.Text).Grow(1).Ellipsis("…")
-				})
-			})
-			// One switch per application: turning it off keeps that app's
-			// addresses out of the tunnel, which is the only way to settle an
-			// IP range clash with the local network or another point.
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "隧道代理").FontSize(11).TextColor(t.TextMuted)
-				// 开关必须绑定到堆上的稳定变量：绑局部变量时点击写回的是
-				// 已经失效的地址，状态既不会保存也不会还原。
-				key := entry.PointID + "/" + app.ID
-				on := a.appEnabled(entry.PointID, app.ID)
-				sw, ok := a.appSwitch[key]
-				if !ok {
-					v := on
-					sw = &v
-					if a.appSwitch == nil {
-						a.appSwitch = map[string]*bool{}
-					}
-					a.appSwitch[key] = sw
-				}
-				ui.Switch(c, sw).Label("隧道代理 " + app.Name).OnChange(func() {
-					a.setAppEnabled(entry.PointID, app.ID, *sw)
-				})
-			})
-			if ui.Button(c, "详情").Label("应用详情 " + app.Name).Clicked() {
-				a.openAppDetail(entry)
+	ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "隧道代理").FontSize(11).TextColor(t.TextMuted)
+		// 开关必须绑定到堆上的稳定变量：绑局部变量时点击写回的是
+		// 已经失效的地址，状态既不会保存也不会还原。
+		key := entry.PointID + "/" + app.ID
+		on := a.appEnabled(entry.PointID, app.ID)
+		sw, ok := a.appSwitch[key]
+		if !ok {
+			v := on
+			sw = &v
+			if a.appSwitch == nil {
+				a.appSwitch = map[string]*bool{}
 			}
+			a.appSwitch[key] = sw
+		}
+		ui.Switch(c, sw).Label("隧道代理 " + app.Name).OnChange(func() {
+			a.setAppEnabled(entry.PointID, app.ID, *sw)
 		})
 	})
 }
 
-func (a *app) appIcon(c *ui.Context, name string) {
-	ui.Row(c).Size(40, 40).Radius(10).Background(appColor(name)).
-		AlignItems(ui.Center).Justify(ui.Center).Children(func() {
-		ui.Text(c, firstRune(name)).FontSize(18).Bold().
-			TextColor(ui.RGBA(255, 255, 255, 1))
+// groupBar 画分组头共用的那一行：折叠箭头、可选状态灯、名称、可选状态文字、
+// 计数和右侧动作。资源分组与本机项目分组都用它，两处形状不会走样。
+func groupBar(c *ui.Context, collapsed bool, dot ui.Color, name, status, count string, onToggle func(), trailing func()) {
+	t := c.Theme()
+	arrow := "▾"
+	if collapsed {
+		arrow = "▸"
+	}
+	bar := ui.Row(c).Padding(8, 12).Gap(8).AlignItems(ui.Center).Background(t.Background)
+	bar.OnClick(onToggle)
+	bar.Children(func() {
+		ui.Text(c, arrow).FontSize(11).TextColor(t.TextMuted)
+		if dot != ui.Transparent {
+			ui.Row(c).Size(6, 6).Radius(3).Background(dot)
+		}
+		ui.Text(c, name).FontSize(13).Bold().Ellipsis("…")
+		if status != "" {
+			ui.Text(c, status).FontSize(11).TextColor(t.TextMuted)
+		}
+		ui.Row(c).Grow(1)
+		ui.Text(c, count).FontSize(11).TextColor(t.TextMuted)
+		if trailing != nil {
+			trailing()
+		}
+	})
+}
+
+// appGroupHeader 是资源分组头：网关名、资源数，右侧整组启停。
+func (a *app) appGroupHeader(c *ui.Context, pid, name string, count int, collapsed bool) {
+	groupBar(c, collapsed, ui.Transparent, name, "", fmt.Sprintf("%d 个应用", count), func() {
+		if a.appCollapsed == nil {
+			a.appCollapsed = map[string]bool{}
+		}
+		a.appCollapsed[pid] = !collapsed
+		a.invalidate()
+	}, func() {
+		if ui.Button(c, "启用所有").Label("启用所有 " + name).FontSize(11).Clicked() {
+			a.setAllAppsEnabled(pid, true)
+		}
+		if ui.Button(c, "停用所有").Label("停用所有 " + name).FontSize(11).Clicked() {
+			a.setAllAppsEnabled(pid, false)
+		}
+	})
+}
+
+// appRow 是资源页的一行：首字母色块、名称与地址、类型、隧道代理开关和详情入口。
+// 行式密度让上百个资源能一屏扫过；分类、描述与停用状态都挤在副标题里。
+func (a *app) appRow(c *ui.Context, entry appEntry) {
+	t := c.Theme()
+	app := entry.App
+	enabled := a.appEnabled(entry.PointID, app.ID)
+	row := ui.Row(c).Padding(10, 12).Gap(10).AlignItems(ui.Center)
+	row.Children(func() {
+		ui.Row(c).Size(26, 26).Radius(8).Background(appColor(app.Name)).
+			AlignItems(ui.Center).Justify(ui.Center).Children(func() {
+			ui.Text(c, firstRune(app.Name)).FontSize(13).Bold().
+				TextColor(ui.RGBA(255, 255, 255, 1))
+		})
+		ui.Column(c).Gap(2).Grow(1).MinWidth(0).Children(func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, app.Name).FontSize(13).Bold().Ellipsis("…")
+				if !enabled {
+					ui.Text(c, "已停用代理").FontSize(11).TextColor(t.Danger)
+				}
+			})
+			sub := app.AddressSummary()
+			if app.GroupName != "" {
+				sub = app.GroupName + " · " + sub
+			}
+			if app.Description != "" {
+				sub += " · " + app.Description
+			}
+			ui.Text(c, sub).FontSize(11).
+				TextColor(t.TextMuted).Ellipsis("…")
+		})
+		ui.Text(c, app.TypeLabel()).FontSize(11).TextColor(t.TextMuted)
+		a.appTunnelSwitch(c, entry)
+		if ui.Button(c, "详情").Label("应用详情 " + app.Name).FontSize(11).Clicked() {
+			a.openAppDetail(entry)
+		}
 	})
 }
 
@@ -362,15 +435,8 @@ func (a *app) appDetailView(c *ui.Context) {
 	t := c.Theme()
 	app := a.detailApp
 	ui.Modal(c, &a.detailOpen, func() {
-		ui.Column(c).Width(560).Gap(10).Children(func() {
-			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-				a.appIcon(c, app.Name)
-				ui.Column(c).Gap(2).Grow(1).Children(func() {
-					ui.Text(c, app.Name).FontSize(18).Bold()
-					ui.Text(c, a.detailPoint).FontSize(11).TextColor(t.TextMuted)
-				})
-			})
-			ui.Divider(c)
+		ui.Column(c).Width(dialogRegular).Gap(10).Children(func() {
+			dialogHeader(c, "应用详情", app.Name+" · "+a.detailPoint)
 			ui.Field(c, "应用名称", func() { ui.Text(c, app.Name).FontSize(13) })
 			ui.Field(c, "描述", func() {
 				desc := app.Description
@@ -395,11 +461,11 @@ func (a *app) appDetailView(c *ui.Context) {
 					ui.Scroll(c).MaxHeight(92).Children(func() {
 						ui.Column(c).Gap(4).Children(func() {
 							for _, line := range app.AddressLines() {
-								ui.Text(c, line).Font("monospace").FontSize(12)
+								ui.Text(c, line).Font("monospace").FontSize(13)
 							}
 						})
 					})
-					if ui.Button(c, "复制全部地址").Clicked() {
+					if ui.Button(c, "复制全部地址").FontSize(11).Clicked() {
 						a.copyText(strings.Join(app.AddressLines(), "\n"))
 					}
 				})
@@ -410,17 +476,17 @@ func (a *app) appDetailView(c *ui.Context) {
 						proxy := a.proxyFor(a.detailPointID)
 						if proxy != "" {
 							ui.Text(c, "这是隧道应用，需要用本应用的代理访问（SOCKS5 或 HTTP）："+proxy).
-								FontSize(12)
+								FontSize(13)
 							ui.Text(c, "浏览器里代理协议建议选 HTTP（其次 SOCKS5），地址端口用上面这个，再打开该地址。").
 								FontSize(11).TextColor(t.TextMuted)
 							ui.Row(c).Gap(8).Children(func() {
-								if ui.Button(c, "复制代理").Clicked() {
+								if ui.Button(c, "复制代理").FontSize(11).Clicked() {
 									a.copyText(proxy)
 								}
-								if ui.Button(c, "测试全部地址").Disabled(a.appTesting).Clicked() {
+								if ui.Button(c, "测试全部地址").FontSize(11).Disabled(a.appTesting).Clicked() {
 									a.testAppConnectivity(app)
 								}
-								if ui.Button(c, "用代理浏览器打开").Clicked() {
+								if ui.Button(c, "用代理浏览器打开").FontSize(11).Clicked() {
 									if err := openProxyBrowser(proxy, appOpenURL(app)); err != nil {
 										a.copyText(proxyBrowserCommand(proxy, appOpenURL(app)))
 										a.toast = "没能直接启动浏览器，已复制命令：" + err.Error()
@@ -456,7 +522,7 @@ func (a *app) appDetailView(c *ui.Context) {
 				ui.Field(c, "浏览器打开地址", func() {
 					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 						ui.Text(c, app.AccessEntry).FontSize(11).Grow(1).Ellipsis("…")
-						if ui.Button(c, "打开").Clicked() {
+						if ui.Button(c, "打开").FontSize(11).Clicked() {
 							if err := mygo.Shell.OpenExternal(app.AccessEntry); err != nil {
 								a.toast = "打不开地址：" + err.Error()
 							}
@@ -464,8 +530,9 @@ func (a *app) appDetailView(c *ui.Context) {
 					})
 				})
 			}
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-				if ui.PrimaryButton(c, "关闭").Clicked() {
+			dialogFooter(c, func() {
+				ui.Row(c).Grow(1)
+				if ui.PrimaryButton(c, "关闭").FontSize(11).Clicked() {
 					a.detailOpen = false
 				}
 			})
@@ -675,12 +742,12 @@ func (a *app) header(c *ui.Context) {
 	ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Gap(16).Children(func() {
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 			if a.icon != nil {
-				ui.Image(c, a.icon).Size(42, 42)
+				ui.Image(c, a.icon).Size(30, 30)
 			}
-			ui.Column(c).Gap(3).Children(func() {
-				ui.Text(c, appName).FontSize(24).Bold()
+			ui.Column(c).Gap(2).Children(func() {
+				ui.Text(c, appName).FontSize(18).Bold()
 				ui.Text(c, "EasyConnect / aTrust · 本地 HTTP 和 SOCKS5 代理").
-					FontSize(12).TextColor(t.TextMuted)
+					FontSize(11).TextColor(t.TextMuted)
 			})
 		})
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -693,7 +760,7 @@ func (a *app) header(c *ui.Context) {
 					color = t.Success
 				}
 				ui.Row(c).Size(7, 7).Radius(3.5).Background(color)
-				ui.Text(c, a.describeProgress()).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, a.describeProgress()).FontSize(11).TextColor(t.TextMuted)
 			})
 			a.resourceTUNControls(c)
 			// Keep the inherited aTrust mode separate from the worker runtime.
@@ -708,7 +775,7 @@ func (a *app) header(c *ui.Context) {
 					ui.Text(c, "全局 TUN").FontSize(13)
 					ui.Switch(c, &a.tunSwitch).Disabled(a.tunPending)
 					if a.tunPending {
-						ui.Text(c, "处理中…").FontSize(12).TextColor(t.TextMuted)
+						ui.Text(c, "处理中…").FontSize(11).TextColor(t.TextMuted)
 					}
 				})
 				if a.tunSwitch != shown {
@@ -759,84 +826,193 @@ func (a *app) header(c *ui.Context) {
 	})
 }
 
-func (a *app) aggregateCard(c *ui.Context) {
+// statusBanner 用一条横幅回答「内网现在能不能用」，并把统一入口、分流策略和
+// 批量动作收进来，取代原先独占一块的统一入口卡片。
+func (a *app) statusBanner(c *ui.Context, views []vpn.View) {
 	t := c.Theme()
-	card := ui.Column(c).Padding(14).Gap(10).Radius(12).
+	online, connecting, total := a.mgr.Counts()
+	agg := a.mgr.Aggregate()
+
+	failed := 0
+	firstErr := ""
+	names := make([]string, 0, len(views))
+	for _, v := range views {
+		switch v.State {
+		case vpn.StateOnline:
+			label := v.Name
+			if v.Latency >= time.Millisecond {
+				label += " " + v.Latency.Round(time.Millisecond).String()
+			}
+			if len(names) < 3 {
+				names = append(names, label)
+			}
+		case vpn.StateError:
+			failed++
+			if firstErr == "" {
+				firstErr = v.Name
+				if v.Error != "" {
+					firstErr += "：" + v.Error
+				}
+			}
+		}
+	}
+
+	dot := t.TextMuted
+	title := "尚未连接内网"
+	summary := fmt.Sprintf("%d 个接入点未连接，登录后即可使用代理浏览器与端口转发", total)
+	if total == 0 {
+		title = "内网尚未配置"
+		summary = "先添加一个 EasyConnect / aTrust 网关，登录后即可使用代理浏览器与端口转发"
+	}
+	if online > 0 {
+		dot = t.Success
+		title = "内网现在可用"
+		onlineNames := strings.Join(names, " · ")
+		if online > len(names) {
+			onlineNames += " 等"
+		}
+		summary = fmt.Sprintf("%d 个接入点在线（%s）", online, onlineNames)
+	}
+	if connecting > 0 {
+		summary += fmt.Sprintf(" · %d 个正在连接", connecting)
+	}
+	if failed > 0 {
+		summary += fmt.Sprintf(" · %d 个需要处理", failed)
+	}
+
+	card := ui.Column(c).Padding(12, 14).Gap(8).Radius(12).
 		Border(1, t.Border).Background(t.Surface)
 	card.Children(func() {
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "统一入口").FontSize(14).Bold()
-			agg := a.mgr.Aggregate()
-			dot := t.TextMuted
-			if agg.Running {
-				dot = t.Success
-			}
+		// 一条裤要带上说完了：状态、在线情况、统一入口和批量动作。
+		// 窗口窄时末尾的控件自动换行，不用另起一行版式。
+		ui.Row(c).AlignItems(ui.Center).Gap(10).Wrap().Children(func() {
 			ui.Row(c).Size(8, 8).Radius(4).Background(dot)
-			if agg.Running {
-				addr := "socks5://" + displayAddr(agg.Addr)
-				ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, addr).Font("monospace").FontSize(13).TextColor(t.Text)
-					ui.Row(c).Padding(3).Radius(6).AlignItems(ui.Center).
-						OnClick(func() { a.copyText(addr) }).
-						Tooltip("复制统一入口地址").Children(func() {
-						ui.Icon(c, copyIcon).Size(13, 13)
+			ui.Text(c, title).FontSize(13).Bold()
+			ui.Text(c, summary).FontSize(11).TextColor(t.TextMuted).
+				Grow(1).MinWidth(0).Ellipsis("…")
+			if a.sysProxyOn {
+				if agg.Running {
+					addr := "socks5://" + displayAddr(agg.Addr)
+					ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "统一入口").FontSize(11).TextColor(t.TextMuted)
+						ui.Text(c, addr).Font("monospace").FontSize(11).TextColor(t.Text)
+						ui.Row(c).Padding(3).Radius(8).AlignItems(ui.Center).
+							OnClick(func() { a.copyText(addr) }).
+							Tooltip("复制统一入口地址").Children(func() {
+							ui.Icon(c, copyIcon).Size(12, 12)
+						})
 					})
-				})
-			} else if agg.Error != "" {
-				ui.Text(c, "未监听："+agg.Error).FontSize(12).TextColor(t.Danger)
-			} else {
-				ui.Text(c, "未开启").FontSize(12).TextColor(t.TextMuted)
+				} else if agg.Error != "" {
+					ui.Text(c, "统一入口未监听："+agg.Error).FontSize(11).
+						TextColor(t.Danger).MaxWidth(200).Ellipsis("…").Tooltip(agg.Error)
+				} else {
+					ui.Text(c, "统一入口未开启").FontSize(11).TextColor(t.TextMuted)
+				}
+				ui.Text(c, "分流").FontSize(11).TextColor(t.TextMuted)
+				mode := a.cfg.Settings.Routing.Label()
+				sel := ui.Select(c, &mode, routingLabelStrings()).Width(104)
+				if sel.Changed() {
+					a.setRouting(routingFromLabel(mode))
+				}
 			}
-			ui.Row(c).Grow(1)
-			ui.Text(c, "分流").FontSize(12).TextColor(t.TextMuted)
-			mode := a.cfg.Settings.Routing.Label()
-			sel := ui.Select(c, &mode, routingLabelStrings()).Width(130)
-			if sel.Changed() {
-				a.setRouting(routingFromLabel(mode))
+			if firstErr != "" {
+				ui.Text(c, firstErr).FontSize(11).TextColor(t.Danger).
+					MaxWidth(180).Ellipsis("…").Tooltip(firstErr)
 			}
-			ui.Text(c, "端口 "+strconv.Itoa(a.cfg.Settings.AggregatePort)).
-				FontSize(12).TextColor(t.TextMuted)
+			if total > 0 {
+				if ui.Button(c, "全部登录").Label("全部接入点重新登录").FontSize(11).Clicked() {
+					a.mgr.ConnectAll(false)
+				}
+			}
 		})
-		ui.Text(c, "客户端连接这个 SOCKS5 地址后，先按资源归属选择网关；"+
-			"上面的策略仅用于明确配置的同业务出口。未命中受管资源时使用原网络。").FontSize(12).TextColor(t.TextMuted)
 	})
 }
 
+// pointsSection 是首屏：一条状态横幅说明整体情况，下面是每个接入点一张卡片，
+// 常规窗口宽度下一行三张。
 func (a *app) pointsSection(c *ui.Context) {
-	t := c.Theme()
 	views := a.mgr.Views()
-	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-		ui.Text(c, "接入点").FontSize(14).Bold()
-		ui.Text(c, fmt.Sprintf("%d 个", len(views))).FontSize(12).TextColor(t.TextMuted)
-		ui.Row(c).Grow(1)
-		if len(views) > 0 {
-			ui.Text(c, "每个接入点提供 HTTP / SOCKS5 共用端口，连接后可启动代理浏览器").
-				FontSize(11).TextColor(t.TextMuted)
-		}
-	})
-	scroll := ui.Scroll(c).Grow(1).MinHeight(0)
-	scroll.Children(func() {
-		ui.Column(c).Gap(10).Children(func() {
+	ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4).Children(func() {
+		ui.Column(c).Gap(12).Children(func() {
+			a.statusBanner(c, views)
 			if len(views) == 0 {
 				a.emptyState(c)
 				return
 			}
-			for _, v := range views {
-				a.pointCard(c, v)
+			// 窄窗口下三列会挤成一团，所以列数按上一帧的实际宽度决定。
+			grid := ui.Grid(c).Columns(a.pointColumns()).Gap(12)
+			grid.Children(func() {
+				for _, v := range views {
+					a.pointCard(c, v)
+				}
+			})
+			if w := grid.Bounds().W; w > 0 {
+				a.pointsWidth = w
 			}
+			a.recentFailures(c)
 		})
 	})
 }
 
+// recentFailures 把最近几条失败放到首屏卡片下面：首屏下半屏不再空着，
+// 需要处理的事一看就能去日志里查。
+func (a *app) recentFailures(c *ui.Context) {
+	t := c.Theme()
+	var fails []vpn.LogEntry
+	for _, e := range a.bus.Tail(200) {
+		if e.Source == vpn.AccessFail {
+			fails = append(fails, e)
+		}
+	}
+	if len(fails) == 0 {
+		return
+	}
+	if len(fails) > 4 {
+		fails = fails[len(fails)-4:]
+	}
+	panel := ui.Column(c).Radius(12).Border(1, t.Border).Background(t.Surface)
+	panel.Children(func() {
+		ui.Row(c).Padding(10, 12).AlignItems(ui.Center).Gap(8).Children(func() {
+			ui.Text(c, "最近的失败").FontSize(13).Bold()
+			ui.Text(c, fmt.Sprintf("最近 %d 条", len(fails))).FontSize(11).TextColor(t.TextMuted)
+			ui.Row(c).Grow(1)
+			if ui.Button(c, "查看访问日志").FontSize(11).Clicked() {
+				a.tab = 2
+			}
+		})
+		ui.Divider(c)
+		for _, e := range fails {
+			ui.Row(c).Padding(6, 12).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Size(5, 5).Radius(2.5).Background(t.Danger)
+				ui.Text(c, e.At.Format("15:04:05")).Font("monospace").
+					FontSize(11).TextColor(t.TextMuted)
+				ui.Text(c, e.Line).FontSize(11).Grow(1).MinWidth(0).Ellipsis("…")
+			})
+		}
+	})
+}
+
+// pointGridBreakpoint 是接入点卡片从三列降为两列的宽度阈值（DIP）。
+const pointGridBreakpoint = 980
+
+// pointColumns 让接入点卡片在窄窗口里保持可读：够宽时三列，否则两列。
+// 宽度取上一帧的实际可用宽度，首帧直接按三列画。
+func (a *app) pointColumns() int {
+	if a.pointsWidth > 0 && a.pointsWidth < pointGridBreakpoint {
+		return 2
+	}
+	return 3
+}
+
 func (a *app) emptyState(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Padding(40).Gap(10).Center().Radius(12).
+	ui.Column(c).Padding(32).Gap(10).Center().Radius(12).
 		Border(1, t.Border).Background(t.Surface).Children(func() {
-		ui.Text(c, "还没有接入点").FontSize(16).Bold()
-		ui.Text(c, "添加 EasyConnect / aTrust 服务器地址、用户名和密码，连接后启动代理浏览器。").FontSize(12).
-			TextColor(t.TextMuted).MaxWidth(460)
+		ui.Text(c, "还没有接入点").FontSize(15).Bold()
+		ui.Text(c, "添加 EasyConnect / aTrust 服务器地址、用户名和密码，连接后启动代理浏览器。").FontSize(13).
+			TextColor(t.TextMuted).Wrap().MaxWidth(460)
 		ui.Text(c, "多个接入点可以填同一账号的不同网关，也可以填不同账号。").
-			FontSize(12).TextColor(t.TextMuted)
+			FontSize(13).TextColor(t.TextMuted).Wrap().MaxWidth(460)
 		if ui.PrimaryButton(c, "添加第一个接入点").Clicked() {
 			a.openNewEditor()
 		}
@@ -848,21 +1024,21 @@ func (a *app) pointCard(c *ui.Context, v vpn.View) {
 	card := ui.Column(c).Key("point:"+v.ID).Padding(14).Gap(8).Radius(12).
 		Border(1, t.Border).Background(t.Surface)
 	card.Children(func() {
+		// 三列卡片里可用宽度有限：名称单行省略，地址与说明合成一行。
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Row(c).Size(10, 10).Radius(5).Background(stateColor(t, v.State))
-			ui.Column(c).Gap(2).Grow(1).MinWidth(0).Children(func() {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, v.Name).FontSize(15).Bold()
-					ui.Text(c, addrOf(v)).Font("monospace").FontSize(11).
-						TextColor(t.TextMuted)
-				})
-				ui.Text(c, subtitleOf(v)).FontSize(12).TextColor(t.TextMuted)
+			ui.Row(c).Size(8, 8).Radius(4).Background(stateColor(t, v.State))
+			ui.Column(c).Gap(3).Grow(1).MinWidth(0).Children(func() {
+				ui.Text(c, v.Name).FontSize(13).Bold().Ellipsis("…")
+				ui.Text(c, addrOf(v)).Font("monospace").FontSize(11).
+					TextColor(t.TextMuted).Ellipsis("…")
 			})
 			a.stateBadge(c, v.State)
-			a.pointButtons(c, v)
 		})
+		if sub := subtitleOf(v); sub != "" {
+			ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted).Ellipsis("…")
+		}
 
-		ui.Row(c).Gap(16).Children(func() {
+		ui.Row(c).GapX(12).GapY(4).Wrap().Children(func() {
 			if v.ClientIP != "" {
 				meta(c, t, "隧道 IP", v.ClientIP)
 			}
@@ -890,9 +1066,9 @@ func (a *app) pointCard(c *ui.Context, v vpn.View) {
 		})
 
 		if v.State == vpn.StateError && v.Error != "" {
-			ui.Text(c, v.Error).FontSize(12).TextColor(t.Danger)
+			ui.Text(c, v.Error).FontSize(13).TextColor(t.Danger)
 			if v.Protocol == model.ProtocolEasyConnect && vpn.IsGatewayCertificateError(v.Error) {
-				if ui.Button(c, "查看网关证书").Label("查看网关证书 " + v.Name).Clicked() {
+				if ui.Button(c, "查看网关证书").Label("查看网关证书 " + v.Name).FontSize(11).Clicked() {
 					a.openGatewayCertificate(v.ID)
 				}
 			}
@@ -913,7 +1089,7 @@ func (a *app) pointCard(c *ui.Context, v vpn.View) {
 			if v.TunnelErr != "" {
 				text += "：" + v.TunnelErr
 			}
-			ui.Text(c, text).FontSize(12).TextColor(colour).Ellipsis("…")
+			ui.Text(c, text).FontSize(13).TextColor(colour).Ellipsis("…")
 		}
 		summary := vpn.NodeSummary(v)
 		showMonitor := v.State == vpn.StateOnline && v.MonitorOn
@@ -932,6 +1108,9 @@ func (a *app) pointCard(c *ui.Context, v vpn.View) {
 				}
 			})
 		}
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
+			a.pointButtons(c, v)
+		})
 	})
 }
 
@@ -969,15 +1148,15 @@ func (a *app) sessionMonitor(c *ui.Context, v vpn.View) {
 func (a *app) pointButtons(c *ui.Context, v vpn.View) {
 	switch v.State {
 	case vpn.StateOnline:
-		if v.Protocol == model.ProtocolEasyConnect && ui.Button(c, "DNS 诊断").Label("DNS 诊断 "+v.Name).Clicked() {
+		if v.Protocol == model.ProtocolEasyConnect && ui.Button(c, "DNS 诊断").Label("DNS 诊断 "+v.Name).FontSize(11).Clicked() {
 			a.openDNSProbe(v.ID, v.Name)
 		}
-		if ui.Button(c, "代理浏览器").Label("代理浏览器 " + v.Name).Clicked() {
+		if ui.Button(c, "代理浏览器").Label("代理浏览器 " + v.Name).FontSize(11).Clicked() {
 			if err := openProxyBrowser(a.proxyFor(v.ID), "about:blank"); err != nil {
 				a.toast = err.Error()
 			}
 		}
-		if ui.Button(c, "断开").Label("断开 " + v.Name).Clicked() {
+		if ui.Button(c, "断开").Label("断开 " + v.Name).FontSize(11).Clicked() {
 			go func() {
 				a.localLife.Lock()
 				defer a.localLife.Unlock()
@@ -990,24 +1169,24 @@ func (a *app) pointButtons(c *ui.Context, v vpn.View) {
 		// Only the WeCom login keeps a session worth discarding by hand: it is
 		// the one where "退出登录" means "sign in as someone else next time".
 		if p := a.cfg.Find(v.ID); a.canLogout(p) {
-			if ui.Button(c, "退出登录").Label("退出登录 " + v.Name).Clicked() {
+			if ui.Button(c, "退出登录").Label("退出登录 " + v.Name).FontSize(11).Clicked() {
 				a.askLogout(v)
 			}
 		}
 	case vpn.StateConnecting:
-		if ui.Button(c, "取消").Label("取消 " + v.Name).Clicked() {
+		if ui.Button(c, "取消").Label("取消 " + v.Name).FontSize(11).Clicked() {
 			go a.mgr.Disconnect(v.ID)
 		}
 	default:
 		// One button, and the configured auth mode decides what it does:
 		// password logs in by itself, WeCom opens the QR popup, single
 		// sign-on needs the browser.
-		if ui.PrimaryButton(c, "登录").Label("登录 " + v.Name).Clicked() {
+		if ui.PrimaryButton(c, "登录").Label("登录 " + v.Name).FontSize(11).Clicked() {
 			a.tunLogf("登录点击：%s（%s）", v.Name, v.ID)
 			a.mgr.Connect(v.ID)
 		}
 	}
-	if ui.Button(c, "编辑").Label("编辑 " + v.Name).Clicked() {
+	if ui.Button(c, "编辑").Label("编辑 " + v.Name).FontSize(11).Clicked() {
 		a.openEditor(v)
 	}
 }
@@ -1021,19 +1200,19 @@ func (a *app) logPanel(c *ui.Context) {
 			ui.Text(c, fmt.Sprintf("最近 %d 条", len(entries))).FontSize(11).
 				TextColor(t.TextMuted)
 			ui.Row(c).Grow(1)
-			if ui.Button(c, "复制全部").Clicked() {
+			if ui.Button(c, "复制全部").FontSize(11).Clicked() {
 				var b strings.Builder
 				for _, e := range entries {
 					fmt.Fprintf(&b, "%s [%s] %s\n", e.At.Format("15:04:05"), e.Source, e.Line)
 				}
 				a.copyText(b.String())
 			}
-			if ui.Button(c, "清空").Clicked() {
+			if ui.Button(c, "清空").FontSize(11).Clicked() {
 				a.bus.Clear()
 			}
 		})
-		box := ui.Scroll(c).Height(170).Radius(8).Border(1, t.Border).
-			Background(t.Background).Padding(8)
+		box := ui.Scroll(c).Height(180).Radius(12).Border(1, t.Border).
+			Background(t.Surface).Padding(10).ScrollbarInsets(6, 6, 6, 6)
 		box.Children(func() {
 			ui.Column(c).Gap(2).Children(func() {
 				if len(entries) == 0 {
@@ -1044,10 +1223,10 @@ func (a *app) logPanel(c *ui.Context) {
 				for _, e := range entries {
 					ui.Row(c).Gap(8).AlignItems(ui.Start).Children(func() {
 						ui.Text(c, e.At.Format("15:04:05")).Font("monospace").
-							FontSize(10).TextColor(t.TextMuted)
-						ui.Text(c, "["+e.Source+"]").Font("monospace").FontSize(10).
+							FontSize(11).TextColor(t.TextMuted)
+						ui.Text(c, "["+e.Source+"]").Font("monospace").FontSize(11).
 							TextColor(t.Accent)
-						ui.Text(c, e.Line).Font("monospace").FontSize(10).
+						ui.Text(c, e.Line).Font("monospace").FontSize(11).
 							TextColor(t.Text).Grow(1).Wrap()
 					})
 				}
@@ -1067,10 +1246,10 @@ func (a *app) accessSection(c *ui.Context) {
 		}
 	}
 	ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
-		ui.Text(c, "访问日志").FontSize(14).Bold()
-		ui.Text(c, fmt.Sprintf("%d 条", len(entries))).FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "访问日志").FontSize(15).Bold()
+		ui.Text(c, fmt.Sprintf("%d 条", len(entries))).FontSize(11).TextColor(t.TextMuted)
 		ui.Row(c).Grow(1)
-		if ui.Button(c, "复制全部").Clicked() {
+		if ui.Button(c, "复制全部").FontSize(11).Clicked() {
 			var b strings.Builder
 			for _, e := range entries {
 				mark := "✔"
@@ -1086,9 +1265,9 @@ func (a *app) accessSection(c *ui.Context) {
 		}
 	})
 	ui.Text(c, "本机软件记录 TCP 建立结果；失败条目的路径表示尝试的出口。缺少核心报告时显示「路径未报告」。重复记录合并显示。").FontSize(11).TextColor(t.TextMuted).Wrap()
-	scroll := ui.Scroll(c).Grow(1).MinHeight(0)
+	scroll := ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4)
 	scroll.Children(func() {
-		box := ui.Column(c).Padding(10).Radius(10).Border(1, t.Border).
+		box := ui.Column(c).Padding(10).Radius(12).Border(1, t.Border).
 			Background(t.Surface)
 		box.Children(func() {
 			ui.Column(c).Gap(4).Children(func() {
@@ -1117,7 +1296,7 @@ func (a *app) accessSection(c *ui.Context) {
 						})
 						ui.Text(c, e.Line).Font("monospace").FontSize(11).
 							TextColor(t.Text).Grow(1).Wrap()
-						if e.Route != nil && ui.Button(c, "详情").Label("路由详情 "+e.Line).Clicked() {
+						if e.Route != nil && ui.Button(c, "详情").Label("路由详情 "+e.Line).FontSize(11).Clicked() {
 							a.routeDetail = e.Route.Detail()
 							a.routeDetailOpen = true
 						}
@@ -1135,6 +1314,7 @@ func (a *app) footer(c *ui.Context) {
 			TextColor(ui.Hex("#ffffff")).Clicked() {
 			a.askQuit()
 		}
+		ui.Text(c, "⌘1–⌘4 切换页面").FontSize(10).TextColor(t.TextMuted)
 		ui.Row(c).Grow(1)
 		ui.Text(c, "当前版本 "+appBuild).FontSize(10).TextColor(t.TextMuted)
 		if a.update != nil {
@@ -1173,7 +1353,7 @@ func metaCopy(c *ui.Context, t *ui.Theme, key, value, tooltip string, onClick fu
 	ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, key).FontSize(11).TextColor(t.TextMuted)
 		ui.Text(c, value).FontSize(11).Font("monospace").TextColor(t.Text)
-		ui.Row(c).Padding(3).Radius(6).AlignItems(ui.Center).
+		ui.Row(c).Padding(3).Radius(8).AlignItems(ui.Center).
 			OnClick(onClick).Tooltip(tooltip).Children(func() {
 			ui.Icon(c, copyIcon).Size(13, 13)
 		})
@@ -1187,26 +1367,14 @@ func meta(c *ui.Context, t *ui.Theme, key, value string) {
 	})
 }
 
-// stateBadge draws the access point state as a filled badge: green for
-// online, grey for not connected, red for failed.
+// stateBadge draws the access point state as a tinted pill: the same hue as
+// the status dot, at a tenth of its strength, so it never shouts.
 func (a *app) stateBadge(c *ui.Context, state vpn.State) {
 	t := c.Theme()
-	white := ui.RGBA(255, 255, 255, 1)
-	var bg, fg ui.Color
-	switch state {
-	case vpn.StateOnline:
-		bg, fg = t.Success, white
-	case vpn.StateError:
-		bg, fg = t.Danger, white
-	case vpn.StateConnecting:
-		bg, fg = t.Warning, white
-	default:
-		bg, fg = t.Surface, t.TextMuted
-	}
-	badge := ui.Badge(c, state.Label()).Background(bg).TextColor(fg)
-	if state != vpn.StateOnline && state != vpn.StateError && state != vpn.StateConnecting {
-		badge = badge.Border(1, t.Border)
-	}
+	colour := stateColor(t, state)
+	ui.Badge(c, state.Label()).
+		Background(t.Surface.Mix(colour, 0.14)).
+		TextColor(colour)
 }
 
 func stateColor(t *ui.Theme, state vpn.State) ui.Color {
@@ -1315,6 +1483,52 @@ func (a *app) setRouting(r model.Routing) {
 
 // ---- dialogs ----
 
+// 弹窗共用的宽度档位：确认类窄、详情类常规、表单类宽。
+const (
+	dialogNarrow  float32 = 460
+	dialogRegular float32 = 560
+	dialogWide    float32 = 640
+)
+
+// dialogHeader 是弹窗标题区：标题、可选的副标题，下面一条分隔线。
+// 所有弹窗都从这里开始，字号、间距和分隔线才不会各写一套。
+func dialogHeader(c *ui.Context, title, subtitle string) {
+	t := c.Theme()
+	ui.Column(c).Gap(3).Children(func() {
+		ui.Text(c, title).FontSize(15).Bold()
+		if subtitle != "" {
+			ui.Text(c, subtitle).FontSize(11).TextColor(t.TextMuted).Wrap()
+		}
+	})
+	ui.Divider(c)
+}
+
+// dialogFooter 是弹窗底部动作区：分隔线 + 一行按钮，左侧留给删除之类的
+// 次要动作，右侧放取消与确认。
+func dialogFooter(c *ui.Context, fn func()) {
+	ui.Divider(c)
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(fn)
+}
+
+// 弹窗正文的高度上下限（DIP）：太小看不见内容，太大则把页脚挤出面板。
+const (
+	dialogBodyMin float32 = 160
+	dialogBodyMax float32 = 520
+)
+
+// dialogBodyHeight 是弹窗内可滚动区域的高度上限：从窗口高度里扣掉标题、
+// 底部按钮、内边距和间距（reserved），这样按钮不会被挤出弹窗。
+func (a *app) dialogBodyHeight(reserved float32) float32 {
+	h := a.windowH - reserved
+	if h < dialogBodyMin {
+		h = dialogBodyMin
+	}
+	if h > dialogBodyMax {
+		h = dialogBodyMax
+	}
+	return h
+}
+
 func (a *app) editorView(c *ui.Context) {
 	if !a.editor.open {
 		return
@@ -1322,9 +1536,10 @@ func (a *app) editorView(c *ui.Context) {
 	t := c.Theme()
 	d := &a.editor
 	ui.Modal(c, &d.open, func() {
-		ui.Column(c).Width(600).Gap(10).Children(func() {
-			ui.Text(c, editorTitle(d)).FontSize(18).Bold()
-			ui.Scroll(c).MaxHeight(470).MinHeight(0).Children(func() {
+		ui.Column(c).Width(dialogWide).Gap(10).Children(func() {
+			dialogHeader(c, editorTitle(d), editorSubtitle(d))
+			ui.Scroll(c).MaxHeight(a.dialogBodyHeight(300)).MinHeight(0).
+				ScrollbarInsets(6, 6, 6, 6).Children(func() {
 				ui.Column(c).Gap(10).Children(func() {
 					ui.Field(c, "VPN 协议", func() { ui.Select(c, &d.protocol, []string{"EasyConnect", "aTrust"}) })
 					ui.Field(c, "名称", func() {
@@ -1352,7 +1567,7 @@ func (a *app) editorView(c *ui.Context) {
 							ui.Field(c, "网关证书 SHA256（可选）", func() {
 								ui.TextInput(c, &d.certificateSHA256).Placeholder("可点击下方按钮读取，无需手工查找")
 							})
-							if ui.Button(c, "读取网关证书…").Clicked() {
+							if ui.Button(c, "读取网关证书…").FontSize(11).Clicked() {
 								a.openEditorCertificate()
 							}
 							ui.Text(c, "读取后展示证书信息，由你确认是否信任；只对当前接入点生效。").FontSize(11).TextColor(t.TextMuted).Wrap()
@@ -1363,7 +1578,7 @@ func (a *app) editorView(c *ui.Context) {
 								ui.Select(c, &d.authModeLabel, authModeLabels()).Width(220)
 								d.authMode = string(authModeFromLabel(d.authModeLabel))
 							})
-							if ui.Button(c, "检测").Disabled(d.detecting).Clicked() {
+							if ui.Button(c, "检测").FontSize(11).Disabled(d.detecting).Clicked() {
 								a.detectEditor()
 							}
 						})
@@ -1440,7 +1655,7 @@ func (a *app) editorView(c *ui.Context) {
 								// Label and box on one line: the stacked field wrapped the
 								// caption onto two lines and looked out of place here.
 								ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-									ui.Text(c, "监测间隔（秒）").FontSize(12)
+									ui.Text(c, "监测间隔（秒）").FontSize(13)
 									ui.TextInput(c, &d.monitorEvery).Width(90)
 								})
 							}
@@ -1449,31 +1664,35 @@ func (a *app) editorView(c *ui.Context) {
 				})
 			})
 			if d.err != "" {
-				ui.Text(c, d.err).FontSize(12).TextColor(t.Danger)
+				ui.Text(c, d.err).FontSize(11).TextColor(t.Danger)
 			}
-			// Bottom row: delete on the left, cancel/save on the right.
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+			// 底部：删除在左，取消与保存在右。
+			dialogFooter(c, func() {
 				if d.editingID != "" {
 					if ui.Button(c, "删除此接入点").Background(t.Danger).
-						TextColor(ui.Hex("#ffffff")).
-						TextColor(ui.RGBA(255, 255, 255, 1)).Label("删除接入点 " + d.name).Clicked() {
+						TextColor(ui.RGBA(255, 255, 255, 1)).FontSize(11).
+						Label("删除接入点 " + d.name).Clicked() {
 						a.deleting = d.editingID
 						d.open = false
 					}
-				} else {
-					ui.Row(c)
 				}
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					if ui.Button(c, "取消").Clicked() {
-						d.open = false
-					}
-					if ui.PrimaryButton(c, "保存").Clicked() {
-						a.saveEditor()
-					}
-				})
+				ui.Row(c).Grow(1)
+				if ui.Button(c, "取消").FontSize(11).Clicked() {
+					d.open = false
+				}
+				if ui.PrimaryButton(c, "保存").Label("保存接入点").FontSize(11).Clicked() {
+					a.saveEditor()
+				}
 			})
 		})
 	})
+}
+
+func editorSubtitle(d *editorDraft) string {
+	if d.editingID == "" {
+		return "填好服务器地址与登录方式，保存后回到接入点卡片点「登录」"
+	}
+	return "改动会在下次登录时生效；需要重新认证的项目请一并更新"
 }
 
 func editorTitle(d *editorDraft) string {
@@ -1490,8 +1709,8 @@ func (a *app) settingsView(c *ui.Context) {
 	t := c.Theme()
 	d := &a.settings
 	ui.Modal(c, &d.open, func() {
-		ui.Column(c).Width(520).Gap(10).Children(func() {
-			ui.Text(c, "设置").FontSize(18).Bold()
+		ui.Column(c).Width(dialogNarrow).Gap(10).Children(func() {
+			dialogHeader(c, "设置", "监听地址、统一入口与自动化行为")
 			ui.Field(c, "监听地址", func() {
 				ui.TextInput(c, &d.host).Placeholder("127.0.0.1").Width(180)
 			})
@@ -1517,13 +1736,14 @@ func (a *app) settingsView(c *ui.Context) {
 				"改成 0.0.0.0，但 SOCKS5 没有认证，请只在自己信任的网络里这样做。").
 				FontSize(11).TextColor(t.TextMuted)
 			if d.err != "" {
-				ui.Text(c, d.err).FontSize(12).TextColor(t.Danger)
+				ui.Text(c, d.err).FontSize(11).TextColor(t.Danger)
 			}
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-				if ui.Button(c, "取消").Clicked() {
+			dialogFooter(c, func() {
+				ui.Row(c).Grow(1)
+				if ui.Button(c, "取消").FontSize(11).Clicked() {
 					d.open = false
 				}
-				if ui.PrimaryButton(c, "保存").Clicked() {
+				if ui.PrimaryButton(c, "保存").FontSize(11).Clicked() {
 					a.saveSettings()
 				}
 			})
@@ -1545,19 +1765,20 @@ func (a *app) deleteView(c *ui.Context) {
 	}
 	open := a.deleting != ""
 	ui.Modal(c, &open, func() {
-		ui.Column(c).Width(420).Gap(10).Children(func() {
-			ui.Text(c, "删除接入点").FontSize(17).Bold()
+		ui.Column(c).Width(dialogNarrow).Gap(10).Children(func() {
+			dialogHeader(c, "删除接入点", "只影响这个接入点，其他配置不变")
 			name := "这个接入点"
 			if p != nil {
 				name = "「" + p.Name + "」"
 			}
 			ui.Text(c, "删除 "+name+" 会断开它的登录，并删除保存的密码和 TOTP 密钥。").
-				FontSize(12).TextColor(t.Text)
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-				if ui.Button(c, "取消").Clicked() {
+				FontSize(13).TextColor(t.Text)
+			dialogFooter(c, func() {
+				ui.Row(c).Grow(1)
+				if ui.Button(c, "取消").FontSize(11).Clicked() {
 					a.deleting = ""
 				}
-				if ui.PrimaryButton(c, "确认删除").Clicked() {
+				if ui.PrimaryButton(c, "确认删除").FontSize(11).Clicked() {
 					a.removePoint(a.deleting)
 					a.deleting = ""
 				}
@@ -1629,15 +1850,15 @@ func (a *app) logoutView(c *ui.Context) {
 	}
 	open := a.logoutAsk != ""
 	ui.Modal(c, &open, func() {
-		ui.Column(c).Width(440).Gap(10).Children(func() {
-			ui.Text(c, "退出登录").FontSize(17).Bold()
-			ui.Text(c, body).FontSize(12).TextColor(t.Text)
-			ui.Text(c, hint).FontSize(11).TextColor(t.TextMuted)
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-				if ui.Button(c, "取消").Clicked() {
+		ui.Column(c).Width(dialogNarrow).Gap(10).Children(func() {
+			dialogHeader(c, "退出登录", body)
+			ui.Text(c, hint).FontSize(11).TextColor(t.TextMuted).Wrap()
+			dialogFooter(c, func() {
+				ui.Row(c).Grow(1)
+				if ui.Button(c, "取消").FontSize(11).Clicked() {
 					a.logoutAsk = ""
 				}
-				if ui.Button(c, "确认退出登录").Background(t.Danger).
+				if ui.Button(c, "确认退出登录").FontSize(11).Background(t.Danger).
 					TextColor(ui.Hex("#ffffff")).Clicked() {
 					id := a.logoutAsk
 					a.logoutAsk = ""
@@ -1668,8 +1889,8 @@ func (a *app) quitView(c *ui.Context) {
 	t := c.Theme()
 	open := a.quitAsk
 	ui.Modal(c, &open, func() {
-		ui.Column(c).Width(420).Gap(10).Children(func() {
-			ui.Text(c, "退出 "+appName).FontSize(17).Bold()
+		ui.Column(c).Width(dialogNarrow).Gap(10).Children(func() {
+			dialogHeader(c, "退出 "+appName, "退出前先确认这几件事")
 			online, _, _ := a.mgr.Counts()
 			line := "退出会断开所有隧道。"
 			if a.tunOn {
@@ -1678,14 +1899,15 @@ func (a *app) quitView(c *ui.Context) {
 			if online > 0 {
 				line += fmt.Sprintf("当前有 %d 个接入点在线。", online)
 			}
-			ui.Text(c, line).FontSize(12).TextColor(t.Text)
+			ui.Text(c, line).FontSize(13).TextColor(t.Text).Wrap()
 			ui.Text(c, "退出后数据库转发和软件接管会停止。软件窗口保留；停止接管的软件新连接恢复系统网络。").
 				FontSize(11).TextColor(t.TextMuted).Wrap()
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-				if ui.Button(c, "取消").Clicked() {
+			dialogFooter(c, func() {
+				ui.Row(c).Grow(1)
+				if ui.Button(c, "取消").FontSize(11).Clicked() {
 					a.quitAsk = false
 				}
-				if ui.Button(c, "确认退出").Background(t.Danger).
+				if ui.Button(c, "确认退出").FontSize(11).Background(t.Danger).
 					TextColor(ui.Hex("#ffffff")).Clicked() {
 					a.quitAsk = false
 					a.doQuit()

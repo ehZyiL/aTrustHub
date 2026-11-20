@@ -20,7 +20,7 @@ func (a *app) captureSetupView(c *ui.Context) {
 	controller := a.captureUI.controller
 	state := controller.Snapshot()
 	t := c.Theme()
-	ui.Column(c).Padding(12).Gap(6).Radius(8).Border(1, t.Border).Background(t.Surface).Children(func() {
+	ui.Column(c).Padding(14).Gap(6).Radius(12).Border(1, t.Border).Background(t.Surface).Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "Linux 软件接管助手").Bold().FontSize(13).Grow(1)
 			if ui.Button(c, "检查状态").Disabled(state.Busy).Clicked() {
@@ -38,7 +38,7 @@ func (a *app) captureSetupView(c *ui.Context) {
 		if state.Checked && !state.Ready && !state.Busy {
 			color = t.Warning
 		}
-		ui.Text(c, state.Message).TextColor(color).FontSize(12).Wrap()
+		ui.Text(c, state.Message).TextColor(color).FontSize(13).Wrap()
 		if !state.Ready || state.Installing {
 			ui.Text(c, "首次安装需要系统认证，密码只在系统窗口输入。安装时请保持此窗口打开。").FontSize(11).TextColor(t.TextMuted).Wrap()
 		}

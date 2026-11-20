@@ -92,8 +92,8 @@ func (a *app) authenticationView(c *ui.Context) {
 		return
 	}
 	ui.Modal(c, &d.open, func() {
-		ui.Column(c).Width(460).Gap(14).Children(func() {
-			ui.Text(c, "完成认证 · "+r.name).FontSize(18).Bold()
+		ui.Column(c).Width(dialogNarrow).Gap(10).Children(func() {
+			dialogHeader(c, "完成认证", r.name+" · 验证码仅用于当前登录，不会保存")
 			label := "动态口令"
 			switch r.challenge.Kind {
 			case "sms":
@@ -109,12 +109,14 @@ func (a *app) authenticationView(c *ui.Context) {
 				ui.Image(c, d.image).Size(240, 100)
 			}
 			ui.Field(c, label, func() { ui.TextInput(c, &d.value).Placeholder("请输入当前验证码") })
-			ui.Text(c, "验证码仅用于当前登录，不会保存。关闭弹窗将取消本次连接。").FontSize(12).Wrap()
-			ui.Row(c).Gap(10).Children(func() {
-				if ui.Button(c, "取消认证").Clicked() {
+			ui.Text(c, "关闭弹窗将取消本次连接。").FontSize(11).TextColor(c.Theme().TextMuted)
+			dialogFooter(c, func() {
+				ui.Row(c).Grow(1)
+				if ui.Button(c, "取消认证").FontSize(11).Clicked() {
 					answer("", context.Canceled)
 				}
-				if ui.PrimaryButton(c, "提交验证码").Disabled(strings.TrimSpace(d.value) == "").Clicked() {
+				if ui.PrimaryButton(c, "提交验证码").FontSize(11).
+					Disabled(strings.TrimSpace(d.value) == "").Clicked() {
 					answer(strings.TrimSpace(d.value), nil)
 				}
 			})

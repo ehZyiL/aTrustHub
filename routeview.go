@@ -163,21 +163,23 @@ func (a *app) routesView(c *ui.Context) {
 		return
 	}
 	ui.Modal(c, &d.open, func() {
-		ui.Column(c).Width(730).Gap(10).Children(func() {
-			ui.Text(c, "网络授权与路由").FontSize(18).Bold()
-			ui.Tabs(c, &d.tab, "路由预览", "授权资源", "用户策略")
-			ui.Scroll(c).Height(430).Children(func() {
+		ui.Column(c).Width(dialogWide).Gap(10).Children(func() {
+			dialogHeader(c, "网络授权与路由", "只读预览：不查询 DNS、不连业务端口、不分配映射地址")
+			// 弹窗内的分段也用与主界面一致的胶囊导航。
+			ui.Segmented(c, &d.tab, "路由预览", "授权资源", "用户策略").Label("授权视图")
+			ui.Scroll(c).MaxHeight(a.dialogBodyHeight(260)).MinHeight(0).
+				ScrollbarInsets(6, 6, 6, 6).Children(func() {
 				ui.Column(c).Gap(10).Children(func() {
 					switch d.tab {
 					case 0:
-						ui.Text(c, "预览只读取当前规则，不查询 DNS、不连接业务端口，也不分配映射地址。").FontSize(12).Wrap()
+						ui.Text(c, "预览只读取当前规则，不查询 DNS、不连接业务端口，也不分配映射地址。").FontSize(13).Wrap()
 						ui.Field(c, "目标（主机:端口）", func() { ui.TextInput(c, &d.target).Placeholder("db.corp.example:443") })
 						ui.Field(c, "协议", func() { ui.Select(c, &d.network, []string{"tcp", "udp", "tcp6", "udp6"}) })
 						ui.Field(c, "入口绑定", func() { ui.Select(c, &d.binding, a.routeChoices("自动归属")) })
 						if ui.PrimaryButton(c, "预览路由").Clicked() {
 							a.previewRoute()
 						}
-						ui.Text(c, d.result).FontSize(12).Wrap()
+						ui.Text(c, d.result).FontSize(13).Wrap()
 					case 1:
 						a.routeResources(c)
 					case 2:
@@ -186,18 +188,21 @@ func (a *app) routesView(c *ui.Context) {
 				})
 			})
 			if d.err != "" {
-				ui.Text(c, d.err).TextColor(c.Theme().Danger).Wrap()
+				ui.Text(c, d.err).FontSize(11).TextColor(c.Theme().Danger).Wrap()
 			}
-			if ui.Button(c, "关闭").Clicked() {
-				d.open = false
-			}
+			dialogFooter(c, func() {
+				ui.Row(c).Grow(1)
+				if ui.Button(c, "关闭").FontSize(11).Clicked() {
+					d.open = false
+				}
+			})
 		})
 	})
 }
 
 func (a *app) routeResources(c *ui.Context) {
 	d := &a.routes
-	ui.Text(c, "网关授权只读；DNS 声明用于归属解析，不授予业务端口权限。离线记录仅用于防止错误回退。").FontSize(12).Wrap()
+	ui.Text(c, "网关授权只读；DNS 声明用于归属解析，不授予业务端口权限。离线记录仅用于防止错误回退。").FontSize(13).Wrap()
 	ui.Select(c, &d.filter, a.routeChoices("所有网关"))
 	ui.SearchField(c, &d.query).Placeholder("搜索域名、地址或网关")
 	query := strings.ToLower(strings.TrimSpace(d.query))
@@ -238,20 +243,20 @@ func (a *app) routeResources(c *ui.Context) {
 			}
 			count++
 			ui.Column(c).Padding(6).Gap(3).Children(func() {
-				ui.Text(c, line).FontSize(12).Wrap()
-				ui.Text(c, fmt.Sprintf("来源 %s · %s · 会话 %d · 资源 %s", g.Name, state, g.Generation, g.Version)).FontSize(10).TextColor(c.Theme().TextMuted).Wrap()
+				ui.Text(c, line).FontSize(13).Wrap()
+				ui.Text(c, fmt.Sprintf("来源 %s · %s · 会话 %d · 资源 %s", g.Name, state, g.Generation, g.Version)).FontSize(11).TextColor(c.Theme().TextMuted).Wrap()
 			})
 		}
 	}
 	if count == 0 {
-		ui.Text(c, "没有匹配的网络授权记录").FontSize(12)
+		ui.Text(c, "没有匹配的网络授权记录").FontSize(13)
 	}
 	ui.Text(c, "使用路由预览检查具体端口的归属冲突；最近实际出口可在访问日志的详情中查看。").FontSize(11).Wrap()
 }
 
 func (a *app) routePolicies(c *ui.Context) {
 	d := &a.routes
-	ui.Text(c, "用户策略按列表顺序首次匹配生效。指定网关仍须通过授权；同业务出口只有明确添加后才能相互重试。").FontSize(12).Wrap()
+	ui.Text(c, "用户策略按列表顺序首次匹配生效。指定网关仍须通过授权；同业务出口只有明确添加后才能相互重试。").FontSize(13).Wrap()
 	ui.Field(c, "域名 / IP / CIDR", func() { ui.TextInput(c, &d.pattern).Placeholder("git.corp.example 或 10.20.0.0/24") })
 	ui.Field(c, "协议", func() { ui.Select(c, &d.protocol, []string{"tcp", "udp", "all"}) })
 	ui.Field(c, "端口范围", func() { ui.TextInput(c, &d.ports).Placeholder("443 或 1-65535") })

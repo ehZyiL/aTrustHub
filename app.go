@@ -53,9 +53,20 @@ type app struct {
 	localEditor  localAppDraft
 	localCatalog installedAppsCatalog
 	localDelete  string
-	localLife    sync.Mutex
-	captureUI    platformCaptureSetup
-	dir          string
+	// localQuery filters the project list by name, target or access point.
+	localQuery string
+	// localCollapsed remembers which access points' project groups are folded
+	// (true = folded). A group starts out open.
+	localCollapsed map[string]bool
+	// pointsWidth is the access point grid's width from the last frame, so the
+	// tile count can follow a narrow window.
+	pointsWidth float32
+	// windowH is the window content height from the last frame; dialogs use it
+	// to size their scrolling body so the footer stays inside the panel.
+	windowH   float32
+	localLife sync.Mutex
+	captureUI platformCaptureSetup
+	dir       string
 	// keepAlive 记住每个隧道连续探测失败的次数。
 	keepAlive tunKeepAlive
 	icon      ui.ImageSource

@@ -79,6 +79,18 @@ func (a *app) view(c *ui.Context) {
 	a.editorView(c)
 	a.settingsView(c)
 	a.dnsProbeView(c)
+	a.routesView(c)
+	if a.routeDetailOpen {
+		ui.Modal(c, &a.routeDetailOpen, func() {
+			ui.Column(c).Width(620).Gap(10).Children(func() {
+				ui.Text(c, "连接路由详情").FontSize(18).Bold()
+				ui.Text(c, a.routeDetail).FontSize(12).Wrap()
+				if ui.Button(c, "关闭详情").Clicked() {
+					a.routeDetailOpen = false
+				}
+			})
+		})
+	}
 	a.deleteView(c)
 	a.logoutView(c)
 	a.quitView(c)
@@ -162,6 +174,9 @@ func (a *app) appsSection(c *ui.Context) {
 
 	ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
 		ui.Text(c, "应用中心").FontSize(14).Bold()
+		if ui.Button(c, "网络授权与路由").Clicked() {
+			a.openRoutes()
+		}
 		ui.Text(c, fmt.Sprintf("%d 个", len(all))).FontSize(12).TextColor(t.TextMuted)
 		ui.Row(c).Grow(1)
 		// 只看已启用 / 未启用的应用，排查时不用在 158 个里翻。
@@ -1101,6 +1116,10 @@ func (a *app) accessSection(c *ui.Context) {
 						})
 						ui.Text(c, e.Line).Font("monospace").FontSize(11).
 							TextColor(t.Text).Grow(1).Wrap()
+						if e.Route != nil && ui.Button(c, "详情").Label("路由详情 "+e.Line).Clicked() {
+							a.routeDetail = e.Route.Detail()
+							a.routeDetailOpen = true
+						}
 					})
 				}
 			})

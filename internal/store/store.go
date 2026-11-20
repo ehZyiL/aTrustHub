@@ -121,10 +121,12 @@ func (s *Store) Config() model.Config {
 func (s *Store) Update(fn func(*model.Config) error) (model.Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := fn(&s.cfg); err != nil {
+	next := cloneConfig(s.cfg)
+	if err := fn(&next); err != nil {
 		return cloneConfig(s.cfg), err
 	}
-	s.cfg.Normalize()
+	next.Normalize()
+	s.cfg = cloneConfig(next)
 	return cloneConfig(s.cfg), nil
 }
 

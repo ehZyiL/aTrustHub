@@ -40,7 +40,7 @@ func (m *Manager) routeSnapshot(boundID string) ([]routing.Gateway, map[string]r
 		if version == "" {
 			version = resourceVersion(ep.info.Resources)
 		}
-		gateways = append(gateways, routing.Gateway{ID: id, Name: ep.cfg.Name, Generation: ep.gen, Version: version, Online: !m.closed && (ep.cfg.InPool || boundID == id) && ep.state == StateOnline && (ep.sess != nil || ep.tunServed), Strict: strict || ep.tunServed, Current: ep.info.Resources, Known: ep.knownResources})
+		gateways = append(gateways, routing.Gateway{ID: id, Name: ep.cfg.Name, Generation: ep.gen, Version: version, Online: !m.closed && ep.state == StateOnline && (ep.sess != nil || ep.tunServed), Excluded: !ep.cfg.InPool, Strict: strict || ep.tunServed, Current: ep.info.Resources, Known: ep.knownResources})
 		sessions[id] = routedSession{candidate: candidate{id: id, name: ep.cfg.Name, sess: ep.sess, apps: ep.info.Apps, served: ep.tunServed}, endpoint: ep, gen: ep.gen, version: version}
 	}
 	return gateways, sessions, m.settings
@@ -49,7 +49,7 @@ func (m *Manager) routeSnapshot(boundID string) ([]routing.Gateway, map[string]r
 // PreviewRoute has no DNS, network, metrics or allocation side effects.
 func (m *Manager) PreviewRoute(request routing.Request) routing.Decision {
 	gateways, _, settings := m.routeSnapshot(request.GatewayID)
-	return routing.Decide(request, gateways, settings.SharedExits)
+	return routing.Decide(request, gateways, settings.SharedExits, settings.RoutePolicies...)
 }
 
 func (m *Manager) currentRoute(c routedSession, boundID string) bool {
@@ -60,20 +60,20 @@ func (m *Manager) currentRoute(c routedSession, boundID string) bool {
 }
 
 func (m *Manager) dialResource(ctx context.Context, network, addr string) (net.Conn, error) {
-	return m.dialRoute(ctx, routing.Request{Network: network, Address: addr}, nil)
+	return m.dialRoute(ctx, routing.Request{Network: network, Address: addr, Entry: "统一代理"}, nil)
 }
 
 // dialBound retains a launcher's session identity. Public traffic keeps its
 // original path; a known resource owned by another gateway is never borrowed.
 func (m *Manager) dialBound(ctx context.Context, network, addr, id string, gen int, ep *endpoint, mapped bool) (net.Conn, error) {
-	return m.dialRoute(ctx, routing.Request{Network: network, Address: addr, GatewayID: id, AllowUnmanaged: true, Mapped: mapped}, &routedSession{candidate: candidate{id: id}, endpoint: ep, gen: gen})
+	return m.dialRoute(ctx, routing.Request{Network: network, Address: addr, GatewayID: id, AllowUnmanaged: true, Mapped: mapped, Entry: "指定网关入口"}, &routedSession{candidate: candidate{id: id}, endpoint: ep, gen: gen})
 }
 
 func (m *Manager) dialRoute(ctx context.Context, request routing.Request, required *routedSession) (net.Conn, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	network, addr := request.Network, request.Address
+	network := request.Network
 	gateways, sessions, settings := m.routeSnapshot(request.GatewayID)
 	if required != nil {
 		current, ok := sessions[required.id]
@@ -81,10 +81,10 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 			return nil, net.ErrClosed
 		}
 	}
-	decision := routing.Decide(request, gateways, settings.SharedExits)
+	decision := routing.Decide(request, gateways, settings.SharedExits, settings.RoutePolicies...)
 	if decision.Action == "blocked" {
 		err := errors.New(decision.Reason)
-		m.logAccessFail(addr, "", err)
+		m.logRoute(request, decision, routedSession{}, 0, 0, err)
 		return nil, err
 	}
 	total, each := settings.TotalTimeoutMS, settings.DialTimeoutMS
@@ -97,6 +97,7 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(total)*time.Millisecond)
 	defer cancel()
 	if decision.Action == "direct" {
+		started := time.Now()
 		conn, err := directDial(ctx, network, decision.Target)
 		if required != nil && !m.currentRoute(sessions[required.id], request.GatewayID) {
 			if conn != nil {
@@ -104,6 +105,7 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 			}
 			return nil, net.ErrClosed
 		}
+		m.logRoute(request, decision, routedSession{}, 1, time.Since(started), err)
 		return conn, err
 	}
 	if settings.Routing == model.RoutingHash {
@@ -125,7 +127,7 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 		}
 		tried[selected.id] = true
 		c := sessions[selected.id]
-		if !m.currentRoute(c, request.GatewayID) {
+		if !m.currentRoute(c, decision.GatewayID) {
 			lastErr = net.ErrClosed
 			continue
 		}
@@ -144,7 +146,7 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 			err = attempt.Err()
 		}
 		stop()
-		if !m.currentRoute(c, request.GatewayID) {
+		if !m.currentRoute(c, decision.GatewayID) {
 			err = net.ErrClosed
 		}
 		if err != nil {
@@ -153,11 +155,11 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 			}
 			lastErr = err
 			m.recordRouteResult(c, false, time.Since(started))
-			m.logAccessFail(addr, c.name, err)
+			m.logRoute(request, decision, c, len(tried), time.Since(started), err)
 			continue
 		}
 		m.recordRouteResult(c, true, time.Since(started))
-		m.logAccess(decision.Target, decision.Target, c.candidate)
+		m.logRoute(request, decision, c, len(tried), time.Since(started), nil)
 		return conn, nil
 	}
 	if lastErr == nil {

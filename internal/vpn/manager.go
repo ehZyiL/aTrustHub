@@ -295,7 +295,7 @@ func (m *Manager) Apply(cfg model.Config) {
 
 	m.mu.Lock()
 	old := m.settings
-	m.settings = cfg.Settings
+	m.settings = cfg.Settings.Clone()
 
 	seen := make(map[string]bool, len(cfg.Points))
 	for _, p := range cfg.Points {

@@ -222,13 +222,14 @@ func (p *AccessPoint) SetAppDisabled(id string, disabled bool) bool {
 type Settings struct {
 	// ListenHost is the address both the per-access-point and the
 	// aggregate proxies bind to. Loopback by default.
-	ListenHost       string          `json:"listenHost"`
-	AggregatePort    int             `json:"aggregatePort"`
-	AggregateEnabled bool            `json:"aggregateEnabled"`
-	Routing          Routing         `json:"routing"`
-	SharedExits      []routing.Group `json:"sharedExits,omitempty"`
-	DialTimeoutMS    int             `json:"dialTimeoutMs,omitempty"`
-	TotalTimeoutMS   int             `json:"totalTimeoutMs,omitempty"`
+	ListenHost       string           `json:"listenHost"`
+	AggregatePort    int              `json:"aggregatePort"`
+	AggregateEnabled bool             `json:"aggregateEnabled"`
+	Routing          Routing          `json:"routing"`
+	SharedExits      []routing.Group  `json:"sharedExits,omitempty"`
+	RoutePolicies    []routing.Policy `json:"routePolicies,omitempty"`
+	DialTimeoutMS    int              `json:"dialTimeoutMs,omitempty"`
+	TotalTimeoutMS   int              `json:"totalTimeoutMs,omitempty"`
 	// HealthIntervalSec is how often an online access point is probed
 	// through its tunnel; 0 disables probing.
 	HealthIntervalSec int  `json:"healthIntervalSec"`
@@ -323,7 +324,7 @@ func (c *Config) Normalize() {
 // Normalize fills the default settings.
 func (s *Settings) Normalize() {
 	if s.ListenHost == "" && s.AggregatePort == 0 && s.Routing == "" &&
-		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 {
+		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 {
 		*s = DefaultSettings()
 		return
 	}
@@ -482,6 +483,16 @@ func (c *Config) Validate() error {
 
 // Validate checks the settings.
 func (s *Settings) Validate() error {
+	seenPolicies := map[string]bool{}
+	for _, p := range s.RoutePolicies {
+		if err := p.Validate(); err != nil {
+			return err
+		}
+		if seenPolicies[p.ID] {
+			return errors.New("路由策略 ID 重复")
+		}
+		seenPolicies[p.ID] = true
+	}
 	if s.DialTimeoutMS < 0 || s.DialTimeoutMS > 45000 || s.TotalTimeoutMS < 0 || s.TotalTimeoutMS > 120000 {
 		return errors.New("拨号预算无效：单次不超过 45 秒，总计不超过 120 秒")
 	}
@@ -515,6 +526,15 @@ func (s *Settings) Validate() error {
 		return errors.New("健康检查间隔不能为负")
 	}
 	return nil
+}
+
+func (s Settings) Clone() Settings {
+	s.RoutePolicies = append([]routing.Policy(nil), s.RoutePolicies...)
+	s.SharedExits = append([]routing.Group(nil), s.SharedExits...)
+	for i := range s.SharedExits {
+		s.SharedExits[i].Gateways = append([]string(nil), s.SharedExits[i].Gateways...)
+	}
+	return s
 }
 
 // Validate checks one access point.

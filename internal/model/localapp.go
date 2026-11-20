@@ -139,6 +139,7 @@ func (c *Config) FindLocalApp(id string) *LocalApp {
 // Clone returns an independent configuration snapshot for editors and workers.
 func (c Config) Clone() Config {
 	out := c
+	out.Settings = c.Settings.Clone()
 	out.Points = append([]AccessPoint(nil), c.Points...)
 	for i := range out.Points {
 		out.Points[i].InternalDomains = append([]string(nil), c.Points[i].InternalDomains...)

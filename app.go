@@ -130,6 +130,9 @@ type app struct {
 	authRequest      *authenticationRequest
 	authDraft        authenticationDraft
 	dnsProbe         dnsProbeDraft
+	routes           routeDraft
+	routeDetailOpen  bool
+	routeDetail      string
 	certificateProbe certificateProbeDraft
 	// settings is the settings dialog.
 	settings settingsDraft

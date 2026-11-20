@@ -14,6 +14,7 @@ type LogEntry struct {
 	At     time.Time
 	Source string
 	Line   string
+	Route  *RouteEvent
 }
 
 // LogBus keeps the last lines the app and ZJU-Connect printed, for the
@@ -78,6 +79,12 @@ func (b *LogBus) Add(source, format string) {
 // log and moves it to the end, so a repeated access shows once with its latest
 // time instead of piling up.
 func (b *LogBus) Upsert(source, line string) {
+	b.upsert(source, line, nil)
+}
+
+func (b *LogBus) upsertRoute(source, line string, event RouteEvent) { b.upsert(source, line, &event) }
+
+func (b *LogBus) upsert(source, line string, event *RouteEvent) {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return
@@ -92,7 +99,7 @@ func (b *LogBus) Upsert(source, line string) {
 			break
 		}
 	}
-	b.lines = append(b.lines, LogEntry{At: at, Source: source, Line: line})
+	b.lines = append(b.lines, LogEntry{At: at, Source: source, Line: line, Route: event})
 	// Only a first sighting goes to the file; repeats just refresh the panel.
 	if b.sink != nil && !replaced {
 		_, _ = fmt.Fprintf(b.sink, "%s [%s] %s\n", at.Format("2006-01-02 15:04:05"), source, line)
@@ -136,6 +143,12 @@ func (b *LogBus) Tail(n int) []LogEntry {
 	}
 	out := make([]LogEntry, n)
 	copy(out, b.lines[len(b.lines)-n:])
+	for i := range out {
+		if out[i].Route != nil {
+			v := *out[i].Route
+			out[i].Route = &v
+		}
+	}
 	return out
 }
 

@@ -35,3 +35,15 @@ func TestRoutingConfigRoundTripAndValidation(t *testing.T) {
 		t.Fatal("accepted overlong attempt")
 	}
 }
+
+func TestRouteSettingsCloneIsIndependent(t *testing.T) {
+	s := DefaultSettings()
+	s.RoutePolicies = []routing.Policy{{ID: "p", Pattern: "corp.test", Protocol: "tcp", PortMin: 443, PortMax: 443, Action: "block"}}
+	s.SharedExits = []routing.Group{{ID: "g", Gateways: []string{"A", "B"}}}
+	c := (Config{Settings: s}).Clone()
+	c.Settings.RoutePolicies[0].Action = "direct"
+	c.Settings.SharedExits[0].Gateways[0] = "C"
+	if s.RoutePolicies[0].Action != "block" || s.SharedExits[0].Gateways[0] != "A" {
+		t.Fatal("shared configuration slices")
+	}
+}

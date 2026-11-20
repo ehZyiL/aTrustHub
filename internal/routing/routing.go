@@ -22,6 +22,7 @@ type Request struct {
 	GatewayID      string // trusted binding supplied by the caller, never SOCKS metadata
 	AllowUnmanaged bool   // bound browser/proxy may use the original network for unknown targets
 	Mapped         bool   // trusted capture adapter has checked this session's assigned alias prefix
+	Entry          string // caller-supplied trusted entry label for diagnostics
 }
 
 type Gateway struct {
@@ -29,6 +30,7 @@ type Gateway struct {
 	Generation     int
 	Version        string
 	Online, Strict bool
+	Excluded       bool // aggregate exclusion; explicit bindings still work
 	Current        *workeripc.ResourceSnapshot
 	Known          *workeripc.ResourceSnapshot // attribution only; never authorizes a dial
 }
@@ -43,8 +45,11 @@ type Decision struct {
 	Action     string // vpn, direct, blocked
 	Target     string
 	Reason     string
+	RuleID     string
+	GatewayID  string // effective binding after user policy
 	Owners     []string
 	Candidates []Candidate
+	Matches    []Match
 }
 
 // Group explicitly declares equivalent exits for one target policy. Sharing
@@ -187,7 +192,7 @@ func claim(s *workeripc.ResourceSnapshot, host string, port int, network string)
 	return
 }
 
-func Decide(r Request, gateways []Gateway, groups []Group) Decision {
+func Decide(r Request, gateways []Gateway, groups []Group, policies ...Policy) Decision {
 	d := Decision{Action: "blocked"}
 	host, port, network, err := ParseRequest(r)
 	if err != nil {
@@ -195,6 +200,17 @@ func Decide(r Request, gateways []Gateway, groups []Group) Decision {
 		return d
 	}
 	d.Target = net.JoinHostPort(host, strconv.Itoa(port))
+	if ip, e := netip.ParseAddr(host); e == nil && netip.MustParsePrefix(workeripc.CaptureAliasBlock).Contains(ip) && !r.Mapped {
+		d.Reason = "合成地址缺少有效的会话映射身份，请重新解析"
+		return d
+	}
+	var action, reason string
+	r, d.RuleID, action, reason = applyPolicy(r, host, port, network, policies)
+	d.GatewayID = r.GatewayID
+	if action != "" {
+		d.Action, d.Reason = action, reason
+		return d
+	}
 	if r.Mapped {
 		ip, e := netip.ParseAddr(host)
 		if e != nil || !netip.MustParsePrefix(workeripc.CaptureAliasBlock).Contains(ip) || r.GatewayID == "" || network != "tcp" {
@@ -255,6 +271,7 @@ func Decide(r Request, gateways []Gateway, groups []Group) Decision {
 	}
 	for _, g := range owners {
 		d.Owners = append(d.Owners, g.ID)
+		d.Matches = append(d.Matches, matches(g, host, port, network)...)
 	}
 	if len(owners) > 1 && !equivalent(groups, owners, host, port, network) {
 		d.Reason = "资源归属冲突，请指定网关或配置同业务出口"
@@ -270,7 +287,7 @@ func Decide(r Request, gateways []Gateway, groups []Group) Decision {
 	}
 	for _, g := range owners {
 		_, allow, dnsOnly := claim(g.Current, host, port, network)
-		if !g.Online {
+		if !g.Online || (g.Excluded && r.GatewayID != g.ID) {
 			d.Reason = "所属网关不可用"
 			continue
 		}

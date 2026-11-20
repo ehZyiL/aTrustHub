@@ -55,8 +55,9 @@ var logIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" strok
 var pageShortcuts = []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4}
 
 func (a *app) view(c *ui.Context) {
-	// 原型 C 是深色场景启动台：固定暗色，不跟随系统外观。
-	c.SetTheme(softDark)
+	// 原型是暗色启动台，但颜色模式由设置里的偏好决定：
+	// 跟随系统时听系统的，浅色 / 深色则把外观固定下来。
+	c.SetTheme(a.appearanceTheme(c.Theme().Dark))
 	t := c.Theme()
 	if a.toast != "" {
 		c.Toast(a.toast)
@@ -1761,6 +1762,11 @@ func (a *app) generalSection(c *ui.Context) {
 	ui.Field(c, "分流模式", func() {
 		ui.Select(c, &d.routing, routingLabelStrings()).Width(160)
 	})
+	ui.Field(c, "颜色模式", func() {
+		ui.Select(c, &d.appearance, appearanceLabels()).Width(160)
+	})
+	ui.Text(c, "跟随系统时，窗口外观跟着操作系统的深浅设置变；浅色与深色会把外观固定下来。").
+		FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
 	ui.Column(c).Gap(4).Children(func() {
 		ui.Checkbox(c, &d.aggregate, "开启统一入口 SOCKS5")
 		ui.Checkbox(c, &d.autoReconnect, "连接断开时自动重连")
@@ -2420,6 +2426,7 @@ func (a *app) openSettings() {
 	a.settings = settingsDraft{
 		open:          true,
 		section:       a.settings.section,
+		appearance:    appearanceLabel(a.savedAppearance()),
 		host:          s.ListenHost,
 		port:          strconv.Itoa(s.AggregatePort),
 		interval:      strconv.Itoa(s.HealthIntervalSec),
@@ -2469,6 +2476,7 @@ func (a *app) saveSettings() {
 		cfg.Settings.AggregateEnabled = d.aggregate
 		cfg.Settings.AutoReconnect = d.autoReconnect
 		cfg.Settings.HideDock = d.hideDock
+		cfg.Settings.Appearance = appearanceFromLabel(d.appearance)
 		cfg.Settings.SecretStore = secretStoreFromLabel(d.secretStore)
 		return cfg.Settings.Validate()
 	})

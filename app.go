@@ -227,7 +227,9 @@ type settingsDraft struct {
 	// section 是设置页的当前分区（通用/网络与接管/日志/关于）。
 	section int
 	// mode 是接管方式下拉的绑定值，每帧从真实状态回读。
-	mode          string
+	mode string
+	// appearance 是颜色模式下拉的草稿值（跟随系统 / 浅色 / 深色）。
+	appearance    string
 	host          string
 	port          string
 	interval      string

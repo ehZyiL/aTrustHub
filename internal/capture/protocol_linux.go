@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	// Version 5 requires stable cgroup identity during natural-exit cleanup.
-	// Older helpers speak the same frames but must be upgraded before use.
-	ProtocolVersion = 5
+	// Version 6 carries retired mapping reservations before pool allocation.
+	// Version 5 also required stable cgroup identity during exit cleanup.
+	ProtocolVersion = 6
 	maxFrame        = 64 << 10
 	maxSessions     = 16
 	LauncherFlag    = "--managed-capture-program"
@@ -69,6 +69,7 @@ type AliasRef struct {
 type aliasRequest struct {
 	DNS      resolved.Config   `json:"dns"`
 	Networks []netpolicy.Range `json:"networks,omitempty"`
+	Reserved []string          `json:"reserved,omitempty"`
 }
 
 type attachRequest struct {

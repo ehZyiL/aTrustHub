@@ -44,7 +44,7 @@ func startProbeProgram(t *testing.T, path string) *exec.Cmd {
 }
 
 func TestCapturePreflightFindsNativeInstanceAndPreservesProcess(t *testing.T) {
-	p := captureProfile()
+	p := captureProfile(t)
 	p.Executable = copyProbeProgram(t, t.TempDir())
 	cmd := startProbeProgram(t, p.Executable)
 	assertRunning := func(path string) {
@@ -93,7 +93,7 @@ func TestCapturePreflightFindsNativeInstanceAndPreservesProcess(t *testing.T) {
 }
 
 func TestCapturePreflightChecksFilesAndCancellation(t *testing.T) {
-	p := captureProfile()
+	p := captureProfile(t)
 	p.Executable = copyProbeProgram(t, t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -159,7 +159,7 @@ func TestCapturePreflightRunsBeforeDNSAndAllowsRetry(t *testing.T) {
 		launches.Add(1)
 		return &fakeCapture{done: make(chan struct{})}, nil
 	}
-	p := captureProfile()
+	p := captureProfile(t)
 	p.Executable = copyProbeProgram(t, t.TempDir())
 	cmd := startProbeProgram(t, p.Executable)
 	cfg := CaptureConfig{Key: "preflight", Domains: []string{"corp.test"}, MappedDNS: func(context.Context, []byte, string) (workeripc.Message, error) {

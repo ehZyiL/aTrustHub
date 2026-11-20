@@ -19,8 +19,8 @@ func TestUserPolicyCannotWidenAuthorizationOrRebindMapping(t *testing.T) {
 	if d = Decide(r, g, nil, p); d.Action != "blocked" {
 		t.Fatal(d)
 	}
-	r = Request{Network: "tcp", Address: "198.19.0.10:443", GatewayID: "A", Mapped: true}
-	p.Pattern = "198.19.0.0/16"
+	r = Request{Network: "tcp", Address: "198.19.0.10:443", OriginalAddress: "corp.test:443", GatewayID: "A", Mapped: true}
+	p.Pattern = "corp.test"
 	for _, action := range []string{"gateway", "direct", "block"} {
 		p.Action = action
 		p.GatewayID = ""

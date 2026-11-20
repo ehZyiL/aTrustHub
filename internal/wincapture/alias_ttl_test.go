@@ -68,3 +68,32 @@ func TestPublishShorterRefreshKeepsLongerExpiration(t *testing.T) {
 		t.Fatalf("extended expires was shrunk: %v", extended.expires)
 	}
 }
+
+func TestExpiredPublishedAddressCannotBeRebound(t *testing.T) {
+	e := &engine{aliases: netip.MustParsePrefix("198.19.0.0/20"), adapter: netip.MustParsePrefix("198.18.0.0/30"), mappings: map[netip.Addr]aliasEntry{}}
+	a := workeripc.DNSAlias{Address: "198.19.0.10", Original: "10.0.0.8", TTL: 1}
+	if err := e.publish([]workeripc.DNSAlias{a}); err != nil {
+		t.Fatal(err)
+	}
+	ip := netip.MustParseAddr(a.Address)
+	entry := e.mappings[ip]
+	entry.expires = time.Now().Add(-time.Second)
+	e.mappings[ip] = entry
+	a.Original = "10.0.0.9"
+	if err := e.publish([]workeripc.DNSAlias{a}); err == nil {
+		t.Fatal("expired identity rebound")
+	}
+}
+
+func TestSessionConfigAllowsUpdatedAllocationExclusions(t *testing.T) {
+	a := Config{Gateway: "vpn.test", Domains: []string{"corp.test"}, DNSAddress: "127.0.0.1:12345"}
+	b := a
+	b.ReservedPools = []string{"198.19.0.0/20"}
+	if !sameSessionConfig(a, b) {
+		t.Fatal("allocation exclusions invalidated established session")
+	}
+	b.Domains = []string{"other.test"}
+	if sameSessionConfig(a, b) {
+		t.Fatal("changed DNS scope accepted")
+	}
+}

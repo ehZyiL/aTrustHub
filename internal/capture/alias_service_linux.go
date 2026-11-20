@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qy/easyconnect/internal/dnsmapping"
 	"github.com/qy/easyconnect/internal/netpolicy"
 	"github.com/qy/easyconnect/internal/resolved"
 	"github.com/qy/easyconnect/internal/workeripc"
@@ -30,6 +31,9 @@ func (s *Service) aliasDir() string { return filepath.Join(s.dir, "aliases") }
 // prepareAliases runs before publishing DNS or starting a target process.
 // The lease survives individual scope detach, so a worker never changes pools.
 func (s *Service) prepareAliases(ctx context.Context, owner string, req aliasRequest) (*sharedAliases, error) {
+	if err := dnsmapping.ValidateReservations(req.Reserved); err != nil {
+		return nil, err
+	}
 	if err := req.DNS.Validate(); err != nil {
 		return nil, err
 	}
@@ -54,7 +58,7 @@ func (s *Service) prepareAliases(ctx context.Context, owner string, req aliasReq
 	if err != nil {
 		return nil, err
 	}
-	var reserved []string
+	reserved := append([]string(nil), req.Reserved...)
 	for _, a := range s.aliases {
 		reserved = append(reserved, a.route.Prefix)
 	}
@@ -318,16 +322,20 @@ type AliasLease struct {
 	process    *Process
 }
 
-func PrepareAliases(ctx context.Context, config resolved.Config, networks []netpolicy.Range) (*AliasLease, error) {
-	return prepareAliasLease(ctx, config, networks, SocketPath(os.Getuid()), 0)
+func PrepareAliases(ctx context.Context, config resolved.Config, networks []netpolicy.Range, reservations ...[]string) (*AliasLease, error) {
+	return prepareAliasLease(ctx, config, networks, SocketPath(os.Getuid()), 0, reservations...)
 }
 
-func prepareAliasLease(ctx context.Context, config resolved.Config, networks []netpolicy.Range, socket string, helperUID uint32) (*AliasLease, error) {
+func prepareAliasLease(ctx context.Context, config resolved.Config, networks []netpolicy.Range, socket string, helperUID uint32, reservations ...[]string) (*AliasLease, error) {
 	c, err := dialControl(ctx, socket, helperUID)
 	if err != nil {
 		return nil, err
 	}
-	res, err := c.call(ctx, frame{Type: "alias_prepare", Alias: &aliasRequest{DNS: config, Networks: networks}})
+	var reserved []string
+	if len(reservations) > 0 {
+		reserved = reservations[0]
+	}
+	res, err := c.call(ctx, frame{Type: "alias_prepare", Alias: &aliasRequest{DNS: config, Networks: networks, Reserved: reserved}})
 	if err != nil || !res.Active || !sessionPattern.MatchString(res.ID) {
 		c.conn.Close()
 		if err == nil {

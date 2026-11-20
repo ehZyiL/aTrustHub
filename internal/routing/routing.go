@@ -17,12 +17,13 @@ import (
 )
 
 type Request struct {
-	Network        string
-	Address        string
-	GatewayID      string // trusted binding supplied by the caller, never SOCKS metadata
-	AllowUnmanaged bool   // bound browser/proxy may use the original network for unknown targets
-	Mapped         bool   // trusted capture adapter has checked this session's assigned alias prefix
-	Entry          string // caller-supplied trusted entry label for diagnostics
+	Network         string
+	Address         string
+	GatewayID       string // trusted binding supplied by the caller, never SOCKS metadata
+	AllowUnmanaged  bool   // bound browser/proxy may use the original network for unknown targets
+	Mapped          bool   // trusted capture adapter has checked this session's assigned alias prefix
+	Entry           string // caller-supplied trusted entry label for diagnostics
+	OriginalAddress string // verified mapped domain and port, never supplied by a public proxy
 }
 
 type Gateway struct {
@@ -205,7 +206,16 @@ func Decide(r Request, gateways []Gateway, groups []Group, policies ...Policy) D
 		return d
 	}
 	var action, reason string
-	r, d.RuleID, action, reason = applyPolicy(r, host, port, network, policies)
+	policyHost := host
+	if r.Mapped {
+		original, originalPort, _, e := ParseRequest(Request{Network: r.Network, Address: r.OriginalAddress})
+		if e != nil || originalPort != port {
+			d.Reason = "映射缺少有效原始目标"
+			return d
+		}
+		policyHost = original
+	}
+	r, d.RuleID, action, reason = applyPolicy(r, policyHost, port, network, policies)
 	d.GatewayID = r.GatewayID
 	if action != "" {
 		d.Action, d.Reason = action, reason

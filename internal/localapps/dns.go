@@ -17,13 +17,17 @@ import (
 )
 
 type CaptureConfig struct {
-	Key       string
-	Gateway   string
-	Domains   []string
-	Exchange  splitdns.ExchangeFunc
-	Networks  []netpolicy.Range
-	MappedDNS func(context.Context, []byte, string) (workeripc.Message, error)
-	Active    func() bool
+	Key              string
+	Gateway          string
+	Domains          []string
+	Exchange         splitdns.ExchangeFunc
+	Networks         []netpolicy.Range
+	MappedDNS        func(context.Context, []byte, string) (workeripc.Message, error)
+	ConfirmAliases   func([]workeripc.DNSAlias) error
+	BeginPublication func(string) (func(), error)
+	ReservedPools    []string
+	AliasNetworks    []netpolicy.Range
+	Active           func() bool
 }
 
 // DNSDomains mirrors the worker's internal-name selection. It never adds the

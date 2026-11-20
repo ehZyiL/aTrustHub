@@ -22,6 +22,7 @@ import (
 
 	atrustclient "github.com/mythologyli/zju-connect/client/atrust"
 
+	"github.com/qy/easyconnect/internal/dnsmapping"
 	"github.com/qy/easyconnect/internal/model"
 	"github.com/qy/easyconnect/internal/proxy"
 	"github.com/qy/easyconnect/internal/routing"
@@ -169,6 +170,7 @@ type Manager struct {
 	points     map[string]*endpoint
 	settings   model.Settings
 	dnsCache   splitdns.Cache
+	mappings   dnsmapping.Registry
 
 	connector Connector
 	creds     CredentialFunc
@@ -370,6 +372,7 @@ func (m *Manager) stopEndpointLocked(id string, closes *[]closeLater) {
 	if ep == nil {
 		return
 	}
+	m.mappings.Retire(fmt.Sprintf("%p/%d", ep, ep.gen))
 	ep.gen++
 	if ep.info.Resources != nil {
 		ep.knownResources = rememberResources(ep.knownResources, ep.info.Resources)
@@ -665,6 +668,7 @@ func (m *Manager) watch(id string, gen int, sess Session) {
 	p := cur.proxy
 	cur.proxy = nil
 	cur.sess = nil
+	m.mappings.Retire(fmt.Sprintf("%p/%d", cur, cur.gen))
 	cur.gen++
 	if cur.info.Resources != nil {
 		cur.knownResources = rememberResources(cur.knownResources, cur.info.Resources)

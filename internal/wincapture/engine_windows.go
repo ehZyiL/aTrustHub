@@ -12,6 +12,7 @@ import (
 
 	"github.com/miekg/dns"
 	tun "github.com/mythologyli/sing-tun"
+	"github.com/qy/easyconnect/internal/dnsmapping"
 	"github.com/qy/easyconnect/internal/proxy"
 	"github.com/qy/easyconnect/internal/workeripc"
 	"github.com/sagernet/sing/common/buf"
@@ -47,6 +48,7 @@ type engine struct {
 	parent           windows.Handle
 	apps             map[string]*registration
 	mappings         map[netip.Addr]aliasEntry
+	issued           map[netip.Addr]netip.Addr
 	slots            chan struct{}
 	resources        []netip.Prefix
 	rules            ruleSet
@@ -95,7 +97,31 @@ func newEngine(ctx context.Context, id string, parent windows.Handle, config Con
 			}
 		}
 	}
-	adapter, aliases, err := choosePrefixes(existing, resources)
+	allocationRoutes := append([]Route(nil), existing...)
+	for _, raw := range config.ReservedPools {
+		allocationRoutes = append(allocationRoutes, Route{Prefix: netip.MustParsePrefix(raw)})
+	}
+	addresses, addressErr := net.InterfaceAddrs()
+	if addressErr != nil {
+		return nil, addressErr
+	}
+	for _, address := range addresses {
+		if prefix, e := netip.ParsePrefix(address.String()); e == nil && prefix.Addr().Is4() {
+			allocationRoutes = append(allocationRoutes, Route{Prefix: netip.PrefixFrom(prefix.Addr(), 32)})
+		}
+	}
+	adapter, aliases, err := choosePrefixes(allocationRoutes, resources)
+	if err != nil {
+		return nil, err
+	}
+	occupied := append([]netip.Prefix(nil), resources...)
+	occupied = append(occupied, adapter)
+	for _, r := range allocationRoutes {
+		if r.Prefix.Bits() >= 15 {
+			occupied = append(occupied, r.Prefix)
+		}
+	}
+	aliases, err = dnsmapping.Choose(occupied, config.AliasNetworks)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +286,9 @@ func (e *engine) publish(aliases []workeripc.DNSAlias) error {
 		}
 	}
 	updates := map[netip.Addr]aliasEntry{}
+	if e.issued == nil {
+		e.issued = make(map[netip.Addr]netip.Addr)
+	}
 	for _, alias := range aliases {
 		a, ea := netip.ParseAddr(alias.Address)
 		o, eo := netip.ParseAddr(alias.Original)
@@ -268,6 +297,9 @@ func (e *engine) publish(aliases []workeripc.DNSAlias) error {
 		}
 		if old, ok := e.mappings[a]; ok && old.original != o {
 			return errors.New("DNS 映射在有效期内发生冲突")
+		}
+		if original, ok := e.issued[a]; ok && original != o {
+			return errors.New("已发布映射不能改变原始地址")
 		}
 		if old, ok := updates[a]; ok && old.original != o {
 			return errors.New("重复 DNS 映射冲突")
@@ -286,6 +318,7 @@ func (e *engine) publish(aliases []workeripc.DNSAlias) error {
 	}
 	for addr, entry := range updates {
 		e.mappings[addr] = entry
+		e.issued[addr] = entry.original
 	}
 	return nil
 }

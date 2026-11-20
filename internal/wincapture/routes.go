@@ -6,6 +6,7 @@ import (
 	"math/bits"
 	"net/netip"
 
+	"github.com/qy/easyconnect/internal/dnsmapping"
 	"github.com/qy/easyconnect/internal/netpolicy"
 )
 
@@ -88,13 +89,13 @@ func choosePrefixes(routes []Route, resources []netip.Prefix) (netip.Prefix, net
 		return true
 	}
 	var adapter, aliases netip.Prefix
-	for i := 0; i < 16; i++ {
-		candidate := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 19, byte(i * 16), 0}), 20)
-		if available(candidate) {
-			aliases = candidate
-			break
+	occupied := append([]netip.Prefix(nil), resources...)
+	for _, r := range routes {
+		if r.Prefix.Bits() >= 15 {
+			occupied = append(occupied, r.Prefix)
 		}
 	}
+	aliases, _ = dnsmapping.Choose(occupied, nil)
 	for i := 0; i < 256; i++ {
 		candidate := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 18, byte(i), 0}), 30)
 		if available(candidate) {

@@ -42,7 +42,7 @@ func (c *captureProcess) Close() error {
 }
 
 func windowsConfig(ctx context.Context, config CaptureConfig) wincapture.Config {
-	result := wincapture.Config{Networks: config.Networks, Gateway: config.Gateway}
+	result := wincapture.Config{Networks: config.Networks, Gateway: config.Gateway, ReservedPools: config.ReservedPools, AliasNetworks: config.AliasNetworks}
 	if binding, ok := ctx.Value(dnsContextKey{}).(*dnsBinding); ok {
 		result.DNSAddress, result.Domains = binding.address, binding.domains
 	}

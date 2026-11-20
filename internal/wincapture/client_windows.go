@@ -42,7 +42,7 @@ func Acquire(ctx context.Context, key string, config Config) (*Session, func(), 
 		if sessionPool.key != key {
 			return nil, nil, errors.New("Windows 首版一次只支持一个 VPN 会话的软件接管，请先停止其他会话的接管")
 		}
-		if !reflect.DeepEqual(config, sessionPool.config) {
+		if !sameSessionConfig(config, sessionPool.config) {
 			return nil, nil, errors.New("软件接管资源已改变，请重新连接 VPN")
 		}
 		select {
@@ -71,6 +71,14 @@ func Acquire(ctx context.Context, key string, config Config) (*Session, func(), 
 			}
 		})
 	}, nil
+}
+
+func sameSessionConfig(a, b Config) bool {
+	// These only constrain initial allocation; refreshing them must not stop
+	// another application using the already committed session/prefix.
+	a.ReservedPools, b.ReservedPools = nil, nil
+	a.AliasNetworks, b.AliasNetworks = nil, nil
+	return reflect.DeepEqual(a, b)
 }
 
 func openSession(ctx context.Context, config Config) (*Session, error) {

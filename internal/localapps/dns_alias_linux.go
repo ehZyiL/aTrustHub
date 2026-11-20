@@ -23,7 +23,8 @@ func (l linuxAliasPublisher) Publish(ctx context.Context, aliases []workeripc.DN
 }
 
 func prepareMappedDNS(ctx context.Context, address string, config CaptureConfig) (aliasBinding, error) {
-	lease, err := capture.PrepareAliases(ctx, resolved.Config{Address: address, Domains: config.Domains}, config.Networks)
+	resources := append(append(config.Networks[:0:0], config.Networks...), config.AliasNetworks...)
+	lease, err := capture.PrepareAliases(ctx, resolved.Config{Address: address, Domains: config.Domains}, resources, config.ReservedPools)
 	if err != nil {
 		return nil, err
 	}

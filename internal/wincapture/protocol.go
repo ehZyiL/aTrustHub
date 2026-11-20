@@ -9,18 +9,21 @@ import (
 	"net/netip"
 	"strings"
 
+	"github.com/qy/easyconnect/internal/dnsmapping"
 	"github.com/qy/easyconnect/internal/netpolicy"
 	"github.com/qy/easyconnect/internal/workeripc"
 )
 
-const ProtocolVersion = 2
+const ProtocolVersion = 3
 const maxFrame = 256 << 10
 
 type Config struct {
-	Gateway    string            `json:"gateway"`
-	Networks   []netpolicy.Range `json:"networks,omitempty"`
-	DNSAddress string            `json:"dnsAddress,omitempty"`
-	Domains    []string          `json:"domains,omitempty"`
+	Gateway       string            `json:"gateway"`
+	Networks      []netpolicy.Range `json:"networks,omitempty"`
+	DNSAddress    string            `json:"dnsAddress,omitempty"`
+	Domains       []string          `json:"domains,omitempty"`
+	ReservedPools []string          `json:"reservedPools,omitempty"`
+	AliasNetworks []netpolicy.Range `json:"aliasNetworks,omitempty"`
 }
 
 type Upstream struct {
@@ -39,6 +42,19 @@ func (u Upstream) validate() error {
 }
 
 func (c Config) validate() error {
+	if err := dnsmapping.ValidateReservations(c.ReservedPools); err != nil {
+		return err
+	}
+	if len(c.AliasNetworks) > 4096 {
+		return errors.New("映射冲突检查资源过多")
+	}
+	for _, r := range c.AliasNetworks {
+		lo, e1 := netip.ParseAddr(r.Min)
+		hi, e2 := netip.ParseAddr(r.Max)
+		if e1 != nil || e2 != nil || lo.BitLen() != hi.BitLen() || lo.Compare(hi) > 0 {
+			return errors.New("映射冲突检查范围无效")
+		}
+	}
 	if c.Gateway == "" || len(c.Gateway) > 253 || strings.ContainsAny(c.Gateway, " /\\\r\n\t\x00@?#") {
 		return errors.New("缺少或无效的 VPN 网关主机名")
 	}

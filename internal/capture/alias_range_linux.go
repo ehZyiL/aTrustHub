@@ -1,14 +1,13 @@
 package capture
 
 import (
-	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"net/netip"
 	"strings"
 
+	"github.com/qy/easyconnect/internal/dnsmapping"
 	"github.com/qy/easyconnect/internal/netpolicy"
-	"github.com/qy/easyconnect/internal/workeripc"
 )
 
 // chooseAliasPrefix allocates from kernel state while the caller holds the
@@ -106,38 +105,11 @@ func chooseAliasPrefix(state kernelState, resources []netpolicy.Range, reserved 
 	for _, entry := range state.nft {
 		inspect(entry)
 	}
-	var seed [4]byte
-	if _, err := rand.Read(seed[:]); err != nil {
+	prefix, err := dnsmapping.Choose(occupied, resources)
+	if err != nil {
 		return "", err
 	}
-	start := int(binary.BigEndian.Uint32(seed[:]) % 32)
-	for offset := 0; offset < 32; offset++ {
-		candidate := aliasCandidate((start + offset) % 32)
-		if !netip.MustParsePrefix(workeripc.CaptureAliasBlock).Contains(candidate.Addr()) {
-			continue
-		}
-		conflict := false
-		for _, p := range occupied {
-			if p.Overlaps(candidate) {
-				conflict = true
-				break
-			}
-		}
-		if conflict {
-			continue
-		}
-		for _, r := range resources {
-			lo, hi, _ := r.Addresses()
-			if lo.Is4() && rangesOverlapPrefix(lo, hi, candidate) {
-				conflict = true
-				break
-			}
-		}
-		if !conflict {
-			return candidate.String(), nil
-		}
-	}
-	return "", errors.New("虚拟地址范围与现有路由、代理地址池或 VPN 资源冲突，请继续使用显式代理")
+	return prefix.String(), nil
 }
 
 func aliasCandidate(i int) netip.Prefix {

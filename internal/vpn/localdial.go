@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/miekg/dns"
+	"github.com/qy/easyconnect/internal/dnsmapping"
+	"github.com/qy/easyconnect/internal/netpolicy"
+	"github.com/qy/easyconnect/internal/routing"
 	"github.com/qy/easyconnect/internal/workeripc"
 	"net"
 	"net/netip"
@@ -11,12 +15,16 @@ import (
 )
 
 type AppConnection struct {
-	Key       string
-	Dial      func(context.Context, string, string) (net.Conn, error)
-	Active    func() bool
-	DNS       func(context.Context, []byte) ([]byte, error)
-	MappedDNS func(context.Context, []byte, string) (workeripc.Message, error)
-	Resources *workeripc.ResourceSnapshot
+	Key              string
+	Dial             func(context.Context, string, string) (net.Conn, error)
+	Active           func() bool
+	DNS              func(context.Context, []byte) ([]byte, error)
+	MappedDNS        func(context.Context, []byte, string) (workeripc.Message, error)
+	ConfirmAliases   func([]workeripc.DNSAlias) error
+	BeginPublication func(string) (func(), error)
+	Resources        *workeripc.ResourceSnapshot
+	ReservedPools    []string
+	AliasNetworks    []netpolicy.Range
 }
 
 // LocalAppDialer binds a launcher to the current session generation. A later
@@ -46,8 +54,31 @@ func (m *Manager) LocalAppConnection(id string) (AppConnection, error) {
 	}
 	connection.Active = active
 	connection.Resources = sess.Info().Resources
-	var aliasMu sync.RWMutex
-	var aliasPrefix netip.Prefix
+	connection.Resources = cloneResources(connection.Resources)
+	connection.ReservedPools = m.mappings.Reservations(connection.Key)
+	connection.AliasNetworks = m.aliasNetworks()
+	identity := dnsmapping.Identity{Key: connection.Key, GatewayID: id, Generation: gen, Version: resourceVersion(connection.Resources)}
+	connection.BeginPublication = func(prefix string) (func(), error) {
+		if !active() {
+			return nil, net.ErrClosed
+		}
+		finish, err := m.mappings.Begin(identity, prefix, m.aliasNetworks())
+		if err != nil {
+			return nil, err
+		}
+		if !active() {
+			m.mappings.Retire(connection.Key)
+			finish()
+			return nil, net.ErrClosed
+		}
+		return finish, nil
+	}
+	connection.ConfirmAliases = func(aliases []workeripc.DNSAlias) error {
+		if !active() {
+			return net.ErrClosed
+		}
+		return m.mappings.Confirm(connection.Key, aliases)
+	}
 	if resolver, ok := sess.(interface {
 		ExchangeMappedDNS(context.Context, []byte, string) (workeripc.Message, error)
 	}); ok {
@@ -55,22 +86,26 @@ func (m *Manager) LocalAppConnection(id string) (AppConnection, error) {
 			if !active() {
 				return workeripc.Message{}, net.ErrClosed
 			}
+			q := new(dns.Msg)
+			if q.Unpack(packet) != nil || len(q.Question) != 1 {
+				return workeripc.Message{}, errors.New("无效 DNS 请求")
+			}
+			name, e := routing.NormalizeHost(q.Question[0].Name)
+			if e != nil {
+				return workeripc.Message{}, e
+			}
+			finish, e := connection.BeginPublication(prefix)
+			if e != nil {
+				return workeripc.Message{}, e
+			}
+			defer finish()
 			result, err := resolver.ExchangeMappedDNS(ctx, packet, prefix)
 			if !active() {
+				m.mappings.Retire(connection.Key)
 				return workeripc.Message{}, net.ErrClosed
 			}
 			if err == nil {
-				p, e := netip.ParsePrefix(prefix)
-				if e != nil || p != p.Masked() || p.Bits() < 20 || p.Bits() > 24 || !netip.MustParsePrefix(workeripc.CaptureAliasBlock).Contains(p.Addr()) {
-					return workeripc.Message{}, errors.New("无效映射池")
-				}
-				aliasMu.Lock()
-				if aliasPrefix.IsValid() && aliasPrefix != p {
-					aliasMu.Unlock()
-					return workeripc.Message{}, errors.New("会话映射池不能变更")
-				}
-				aliasPrefix = p
-				aliasMu.Unlock()
+				err = m.mappings.Stage(connection.Key, name, result.DNSAliases)
 			}
 			return result, err
 		}
@@ -93,19 +128,71 @@ func (m *Manager) LocalAppConnection(id string) (AppConnection, error) {
 		if !active() {
 			return nil, errors.New("该软件所属的 VPN 会话已结束，请重新启动接管")
 		}
-		host, _, _ := net.SplitHostPort(address)
+		host, port, _ := net.SplitHostPort(address)
 		ip, _ := netip.ParseAddr(host)
-		aliasMu.RLock()
-		mapped := aliasPrefix.IsValid() && aliasPrefix.Contains(ip)
-		aliasMu.RUnlock()
-		c, err := m.dialBound(ctx, network, address, id, gen, ep, mapped)
+		mapped := netip.MustParsePrefix(workeripc.CaptureAliasBlock).Contains(ip)
+		var release func()
+		original := ""
+		if mapped {
+			target, done, err := m.mappings.Acquire(connection.Key, ip.String())
+			if err != nil {
+				return nil, err
+			}
+			release = done
+			original = net.JoinHostPort(target.Domain, port)
+		}
+		c, err := m.dialBound(ctx, network, address, id, gen, ep, mapped, original)
 		if !active() {
 			if c != nil {
 				_ = c.Close()
 			}
+			if release != nil {
+				release()
+			}
 			return nil, net.ErrClosed
+		}
+		if release != nil {
+			if err != nil {
+				release()
+			} else {
+				c = &mappedConn{Conn: c, release: release}
+			}
 		}
 		return c, err
 	}
 	return connection, nil
+}
+
+func (m *Manager) aliasNetworks() []netpolicy.Range {
+	var resources []netpolicy.Range
+	for _, g := range m.ResourceGateways() {
+		if g.Current != nil {
+			for _, r := range g.Current.IPRules {
+				resources = append(resources, netpolicy.Range{Min: r.Min, Max: r.Max})
+			}
+			for _, r := range g.Current.StaticDNS {
+				for _, ip := range r.Addresses {
+					resources = append(resources, netpolicy.Range{Min: ip, Max: ip})
+				}
+			}
+		}
+	}
+	return resources
+}
+
+type mappedConn struct {
+	net.Conn
+	release func()
+	once    sync.Once
+}
+
+func (c *mappedConn) Close() error { err := c.Conn.Close(); c.once.Do(c.release); return err }
+func (c *mappedConn) CloseWrite() error {
+	if w, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return w.CloseWrite()
+	}
+	return nil
+}
+func (c *mappedConn) FlowResult() workeripc.FlowResult {
+	return workeripc.ConnectionResult(c.Conn, nil)
 }

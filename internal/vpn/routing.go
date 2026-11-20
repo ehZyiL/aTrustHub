@@ -65,8 +65,12 @@ func (m *Manager) dialResource(ctx context.Context, network, addr string) (net.C
 
 // dialBound retains a launcher's session identity. Public traffic keeps its
 // original path; a known resource owned by another gateway is never borrowed.
-func (m *Manager) dialBound(ctx context.Context, network, addr, id string, gen int, ep *endpoint, mapped bool) (net.Conn, error) {
-	return m.dialRoute(ctx, routing.Request{Network: network, Address: addr, GatewayID: id, AllowUnmanaged: true, Mapped: mapped, Entry: "指定网关入口"}, &routedSession{candidate: candidate{id: id}, endpoint: ep, gen: gen})
+func (m *Manager) dialBound(ctx context.Context, network, addr, id string, gen int, ep *endpoint, mapped bool, original ...string) (net.Conn, error) {
+	r := routing.Request{Network: network, Address: addr, GatewayID: id, AllowUnmanaged: true, Mapped: mapped, Entry: "指定网关入口"}
+	if len(original) > 0 {
+		r.OriginalAddress = original[0]
+	}
+	return m.dialRoute(ctx, r, &routedSession{candidate: candidate{id: id}, endpoint: ep, gen: gen})
 }
 
 func (m *Manager) dialRoute(ctx context.Context, request routing.Request, required *routedSession) (net.Conn, error) {

@@ -169,10 +169,16 @@ func (r *Registry) Stage(key, domain string, aliases []workeripc.DNSAlias) error
 		}
 		updates[a.Address] = next
 	}
-	for ip, e := range updates {
-		if _, ok := p.entries[ip]; !ok && len(p.entries) >= 8192 {
-			return errors.New("映射容量不足")
+	newEntries := 0
+	for ip := range updates {
+		if _, ok := p.entries[ip]; !ok {
+			newEntries++
 		}
+	}
+	if len(p.entries)+newEntries > 8192 {
+		return errors.New("映射容量不足")
+	}
+	for ip, e := range updates {
 		p.entries[ip] = e
 	}
 	return nil

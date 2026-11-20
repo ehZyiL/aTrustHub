@@ -1,12 +1,37 @@
 package dnsmapping
 
 import (
+	"fmt"
 	"github.com/qy/easyconnect/internal/netpolicy"
 	"github.com/qy/easyconnect/internal/workeripc"
 	"net/netip"
 	"testing"
 	"time"
 )
+
+func TestStageCapacityFailureLeavesWholeBatchUnchanged(t *testing.T) {
+	r := Registry{}
+	finish, err := r.Begin(Identity{Key: "A", GatewayID: "A"}, "198.19.0.0/20", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer finish()
+	// Seed the defensive table limit without depending on allocation policy.
+	entries := r.pools["A"].entries
+	for i := 0; i < 8191; i++ {
+		entries[fmt.Sprint(i)] = entry{}
+	}
+	aliases := []workeripc.DNSAlias{
+		{Address: "198.19.0.1", Original: "10.0.0.1", TTL: 60},
+		{Address: "198.19.0.2", Original: "10.0.0.2", TTL: 60},
+	}
+	if err := r.Stage("A", "db.test", aliases); err == nil {
+		t.Fatal("over-capacity publication accepted")
+	}
+	if len(entries) != 8191 {
+		t.Fatal("failed batch partially changed mappings", len(entries))
+	}
+}
 
 func TestAllocatorAvoidsOSResourceAndRetiredPools(t *testing.T) {
 	p, err := Choose([]netip.Prefix{netip.MustParsePrefix("198.19.0.0/20")}, []netpolicy.Range{{Min: "198.19.16.1", Max: "198.19.31.255"}})

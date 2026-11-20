@@ -1,4 +1,5 @@
-package wincapture
+// Package packetstack connects an IPv4 TUN device to the shared TCP and DNS stack.
+package packetstack
 
 // This adapter follows sing-tun's stack_gvisor.go forwarding model, using the
 // gVisor API already selected by the reference repositories. The old sing-tun
@@ -27,10 +28,19 @@ import (
 	M "github.com/sagernet/sing/common/metadata"
 )
 
-type packetStack struct {
+const MTU = 1400
+
+// Device exchanges complete IPv4 packets. ReadPacket returns an owned buffer.
+// The caller closes the underlying device before closing the stack to unblock reads.
+type Device interface {
+	ReadPacket() ([]byte, error)
+	WritePacket([]byte) error
+}
+
+type Stack struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
-	tun     tun.WinTun
+	device  Device
 	handler tun.Handler
 	stack   *stack.Stack
 	link    *channel.Endpoint
@@ -38,17 +48,17 @@ type packetStack struct {
 	once    sync.Once
 }
 
-func newPacketStack(ctx context.Context, device tun.WinTun, handler tun.Handler) *packetStack {
+func New(ctx context.Context, device Device, handler tun.Handler) *Stack {
 	life, cancel := context.WithCancel(ctx)
-	return &packetStack{ctx: life, cancel: cancel, tun: device, handler: handler}
+	return &Stack{ctx: life, cancel: cancel, device: device, handler: handler}
 }
 
-func (s *packetStack) Start() error {
+func (s *Stack) Start() error {
 	s.stack = stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol, icmp.NewProtocol4},
 	})
-	s.link = channel.New(1024, 1400, "")
+	s.link = channel.New(1024, MTU, "")
 	if err := s.stack.CreateNIC(1, s.link); err != nil {
 		s.stack.Close()
 		s.link.Close()
@@ -115,10 +125,10 @@ type boundPacketConn struct{ *gonet.UDPConn }
 // the Handler's destination identifies the remote server, not that client.
 func (c *boundPacketConn) WriteTo(b []byte, _ net.Addr) (int, error) { return c.Write(b) }
 
-func (s *packetStack) readLoop() {
+func (s *Stack) readLoop() {
 	defer s.wg.Done()
 	for {
-		data, err := s.readOwnedPacket()
+		data, err := s.device.ReadPacket()
 		if err != nil {
 			if s.ctx.Err() == nil {
 				s.handler.NewError(s.ctx, err)
@@ -135,8 +145,6 @@ func (s *packetStack) readLoop() {
 		if protocol := data[9]; protocol != uint8(tcp.ProtocolNumber) && protocol != uint8(udp.ProtocolNumber) {
 			continue
 		}
-		// Wintun owns the original bytes until release. gVisor queues may
-		// outlive this callback, so transfer an independent buffer.
 		payload := buffer.MakeWithData(data)
 		packet := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: payload, IsForwardedPacket: true})
 		s.link.InjectInbound(ipv4.ProtocolNumber, packet)
@@ -144,24 +152,7 @@ func (s *packetStack) readLoop() {
 	}
 }
 
-func (s *packetStack) readOwnedPacket() ([]byte, error) {
-	// NativeTun.ReadFunc keeps the driver's session reference until the copy
-	// completes. ReadPacket releases that reference before its release callback,
-	// which could otherwise race adapter.Close during disconnect.
-	if reader, ok := s.tun.(interface{ ReadFunc(func([]byte)) error }); ok {
-		var data []byte
-		err := reader.ReadFunc(func(packet []byte) { data = append([]byte(nil), packet...) })
-		return data, err
-	}
-	packet, release, err := s.tun.ReadPacket()
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-	return append([]byte(nil), packet...), nil
-}
-
-func (s *packetStack) writeLoop() {
+func (s *Stack) writeLoop() {
 	defer s.wg.Done()
 	for {
 		packet := s.link.ReadContext(s.ctx)
@@ -169,7 +160,7 @@ func (s *packetStack) writeLoop() {
 			return
 		}
 		view := packet.ToView()
-		_, err := s.tun.Write(view.AsSlice())
+		err := s.device.WritePacket(view.AsSlice())
 		view.Release()
 		packet.DecRef()
 		if err != nil {
@@ -182,8 +173,7 @@ func (s *packetStack) writeLoop() {
 	}
 }
 
-// The caller closes Wintun first to release a blocked ReadPacket.
-func (s *packetStack) Close() error {
+func (s *Stack) Close() error {
 	s.once.Do(func() {
 		s.cancel()
 		if s.stack != nil {

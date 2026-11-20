@@ -1,4 +1,4 @@
-package wincapture
+package packetstack
 
 import (
 	"bytes"
@@ -30,31 +30,23 @@ type memoryTun struct {
 	once   sync.Once
 }
 
-func (d *memoryTun) ReadPacket() ([]byte, func(), error) {
+func (d *memoryTun) ReadPacket() ([]byte, error) {
 	p := d.client.ReadContext(d.ctx)
 	if p == nil {
-		return nil, nil, io.EOF
+		return nil, io.EOF
 	}
 	v := p.ToView()
 	p.DecRef()
-	return v.AsSlice(), v.Release, nil
+	defer v.Release()
+	return append([]byte(nil), v.AsSlice()...), nil
 }
-func (d *memoryTun) Write(data []byte) (int, error) {
+func (d *memoryTun) WritePacket(data []byte) error {
 	packet := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(append([]byte(nil), data...))})
 	d.client.InjectInbound(ipv4.ProtocolNumber, packet)
 	packet.DecRef()
-	return len(data), nil
+	return nil
 }
-func (d *memoryTun) Read(data []byte) (int, error) {
-	p, release, err := d.ReadPacket()
-	if err != nil {
-		return 0, err
-	}
-	defer release()
-	return copy(data, p), nil
-}
-func (*memoryTun) CreateVectorisedWriter() N.VectorisedWriter { return nil }
-func (d *memoryTun) Close() error                             { d.once.Do(d.cancel); return nil }
+func (d *memoryTun) Close() error { d.once.Do(d.cancel); return nil }
 
 type echoHandler struct {
 	seen     chan M.Metadata
@@ -94,7 +86,7 @@ func TestPacketStackTCPHalfCloseAndUDP(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	client := stack.New(stack.Options{NetworkProtocols: []stack.NetworkProtocolFactory{ipv4.NewProtocol}, TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol}})
-	link := channel.New(128, 1400, "")
+	link := channel.New(128, MTU, "")
 	if err := client.CreateNIC(1, link); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +98,7 @@ func TestPacketStackTCPHalfCloseAndUDP(t *testing.T) {
 	life, stop := context.WithCancel(ctx)
 	device := &memoryTun{ctx: life, cancel: stop, client: link}
 	handler := &echoHandler{seen: make(chan M.Metadata, 2), failures: make(chan error, 2)}
-	server := newPacketStack(ctx, device, handler)
+	server := New(ctx, device, handler)
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/miekg/dns"
 	tun "github.com/mythologyli/sing-tun"
 	"github.com/qy/easyconnect/internal/dnsmapping"
+	"github.com/qy/easyconnect/internal/packetstack"
 	"github.com/qy/easyconnect/internal/proxy"
 	"github.com/qy/easyconnect/internal/workeripc"
 	"github.com/sagernet/sing/common/buf"
@@ -177,7 +178,7 @@ func newEngine(ctx context.Context, id string, parent windows.Handle, sessionID 
 	// With no Inet*Address/AutoRoute, sing-tun creates the adapter/session
 	// without setting DNS or installing a default route. Configure our own
 	// address and limited routes explicitly using IP Helper APIs.
-	e.tun, err = tun.New(tun.Options{Name: name, MTU: 1400})
+	e.tun, err = tun.New(tun.Options{Name: name, MTU: packetstack.MTU})
 	if err != nil {
 		return nil, windowsError("创建 Wintun 接管网卡", err)
 	}
@@ -199,7 +200,7 @@ func newEngine(ctx context.Context, id string, parent windows.Handle, sessionID 
 	if err = e.startOriginalExit(); err != nil {
 		return nil, err
 	}
-	e.stack = newPacketStack(life, e.tun, e)
+	e.stack = packetstack.New(life, wintunPackets{e.tun}, e)
 	if err = e.stack.Start(); err != nil {
 		e.stack = nil
 		return nil, fmt.Errorf("启动接管网络栈：%w", err)

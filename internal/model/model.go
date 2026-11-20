@@ -235,6 +235,9 @@ type Settings struct {
 	// through its tunnel; 0 disables probing.
 	HealthIntervalSec int  `json:"healthIntervalSec"`
 	AutoReconnect     bool `json:"autoReconnect"`
+	// Appearance is the window colour mode: "system" follows the desktop,
+	// "light" and "dark" pin it. Empty means "system".
+	Appearance string `json:"appearance,omitempty"`
 	// SecretStore is where access point passwords are kept: "file" for the
 	// local 0600 secrets.json, or "keychain" for the macOS Keychain. It is
 	// read at startup, so a change takes effect after a restart.
@@ -347,6 +350,12 @@ func (s *Settings) Normalize() {
 	}
 	if s.HealthIntervalSec < 0 {
 		s.HealthIntervalSec = 0
+	}
+	// 颜色模式只认三档，旧配置里的空值或其他值一律归到跟随系统。
+	switch s.Appearance {
+	case "light", "dark", "system":
+	default:
+		s.Appearance = "system"
 	}
 }
 

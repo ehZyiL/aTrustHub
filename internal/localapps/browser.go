@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/qy/easyconnect/internal/model"
 )
@@ -70,13 +71,20 @@ func RunBrowserSupervisor(input io.Reader, output io.Writer) error {
 		return report(err)
 	}
 	defer os.RemoveAll(dir)
-	cmd := exec.Command(p.Executable,
-		"--proxy-server=socks5://"+req.Proxy,
-		"--user-data-dir="+dir,
+	exts := populateUserData(p.Executable, dir)
+	args := []string{
+		"--proxy-server=socks5://" + req.Proxy,
+		"--user-data-dir=" + dir,
+		"--show-bookmarks-bar",
+		"--enable-extensions",
 		"--no-first-run", "--no-default-browser-check", "--disable-quic",
 		"--dns-over-https-mode=off", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
-		p.URL,
-	)
+	}
+	if len(exts) > 0 {
+		args = append(args, "--load-extension="+strings.Join(exts, ","))
+	}
+	args = append(args, p.URL)
+	cmd := exec.Command(p.Executable, args...)
 	cmd.Dir = p.WorkDir
 	if err := cmd.Start(); err != nil {
 		return report(fmt.Errorf("启动浏览器失败：%w", err))

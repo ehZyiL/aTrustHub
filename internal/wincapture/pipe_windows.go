@@ -124,9 +124,10 @@ func startHelper(ctx context.Context) (*os.File, error) {
 		}
 		if state == windows.WAIT_OBJECT_0 {
 			var n uint32
-			err = windows.GetOverlappedResult(h, &overlap, &n, false)
-			pending = false
-			if err != nil {
+			err = windows.GetOverlappedResult(h, &overlap, &n, true)
+			if err == nil {
+				pending = false
+			} else if !errors.Is(err, windows.ERROR_IO_INCOMPLETE) {
 				return nil, windowsError("完成管道连接 GetOverlappedResult", err)
 			}
 		}
@@ -219,9 +220,8 @@ func verifyExecutable(process windows.Handle, expected string) error {
 	if err := windows.QueryFullProcessImageName(process, 0, &path[0], &n); err != nil {
 		return windowsError("QueryFullProcessImageName", err)
 	}
-	a, err1 := os.Stat(expected)
-	b, err2 := os.Stat(windows.UTF16ToString(path[:n]))
-	if err1 != nil || err2 != nil || !os.SameFile(a, b) {
+	parentPath := windows.UTF16ToString(path[:n])
+	if !strings.EqualFold(filepath.Dir(parentPath), filepath.Dir(expected)) {
 		return errors.New("网络助手与主程序必须来自同一安装目录")
 	}
 	return nil

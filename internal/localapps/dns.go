@@ -40,17 +40,58 @@ func DNSDomains(resources *workeripc.ResourceSnapshot) ([]string, error) {
 	for _, r := range resources.StaticDNS {
 		names = append(names, r.Name)
 	}
-	seen := map[string]bool{}
-	for _, name := range names {
-		name = strings.Trim(strings.TrimSpace(name), ".")
+	// Check user-configured internal domains strictly: do not let a public root
+	// or dangerous pattern hijack system-wide DNS resolution.
+	for _, raw := range resources.InternalDomains {
+		name := strings.Trim(strings.TrimSpace(raw), ".")
 		name = strings.TrimPrefix(name, "*.")
+		if name == "" {
+			return nil, errors.New("网关 DNS 后缀格式不兼容")
+		}
+		if strings.Contains(raw, "..") || strings.ContainsAny(raw, "* /\\@:\n\r~") {
+			return nil, errors.New("网关 DNS 后缀范围过大或格式不兼容")
+		}
 		ascii, err := idna.Lookup.ToASCII(name)
 		if err != nil {
 			return nil, errors.New("网关 DNS 后缀格式不兼容")
 		}
 		ascii = strings.ToLower(ascii)
-		if _, ok := dns.IsDomainName(ascii + "."); !ok || !strings.Contains(ascii, ".") || strings.ContainsAny(ascii, "* /\\@:\n\r") {
+		if _, ok := dns.IsDomainName(ascii + "."); !ok || !strings.Contains(ascii, ".") {
 			return nil, errors.New("网关 DNS 后缀范围过大或格式不兼容")
+		}
+	}
+
+	// Gateway resources may contain raw IPs, host:port pairs, wildcards, underscores,
+	// internal aliases, or empty entries. Filter them robustly instead of failing
+	// capture setup for the whole software item.
+	seen := map[string]bool{}
+	for _, raw := range names {
+		name := strings.Trim(strings.TrimSpace(raw), ".")
+		name = strings.TrimPrefix(name, "*.")
+		if name == "" {
+			continue
+		}
+		if host, _, err := net.SplitHostPort(name); err == nil && host != "" {
+			name = host
+		}
+		if net.ParseIP(name) != nil {
+			continue
+		}
+		if strings.Contains(name, "..") || strings.ContainsAny(name, "* /\\@:\n\r~") {
+			continue
+		}
+		if strings.Contains(name, "_") {
+			// RFC 5890 IDNA forbids underscores; internal hosts with underscores cannot
+			// be registered as system DNS suffixes. Skip gracefully.
+			continue
+		}
+		ascii, err := idna.Lookup.ToASCII(name)
+		if err != nil {
+			continue
+		}
+		ascii = strings.ToLower(ascii)
+		if _, ok := dns.IsDomainName(ascii + "."); !ok || !strings.Contains(ascii, ".") {
+			continue
 		}
 		seen[ascii] = true
 	}

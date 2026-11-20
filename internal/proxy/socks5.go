@@ -240,11 +240,18 @@ func (s *Server) handle(conn net.Conn) {
 	if err != nil {
 		return
 	}
+	if first[0] == 0x04 {
+		if s.opts.SOCKSOnly {
+			return
+		}
+		s.handleSOCKS4(conn, br)
+		return
+	}
 	if first[0] != 0x05 {
 		if s.opts.SOCKSOnly {
 			return
 		}
-		// Not SOCKS5: treat it as an HTTP proxy request (CONNECT or a
+		// Not SOCKS5 or SOCKS4: treat it as an HTTP proxy request (CONNECT or a
 		// plain absolute-URI request). Many browsers and proxy switchers
 		// handle HTTP proxies better, and CONNECT carries the hostname so
 		// the tunnel resolves DNS.

@@ -37,7 +37,7 @@ const appName = "EasyConnect Hub"
 // app is everything the window shows and the manager that does the work.
 // appBuild is shown in the footer and the startup log so an old running
 // instance is easy to tell apart from a freshly built one.
-const appBuild = "0.1.0-dev-certificate-trust.1"
+const appBuild = "0.1.0-dev-certificate-trust.2"
 
 //go:embed resources/icon.png
 var embeddedAppIcon []byte

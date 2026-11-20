@@ -23,6 +23,34 @@ func TestDNSDomainsNormalizeWithoutTakingPublicRoot(t *testing.T) {
 	}
 }
 
+func TestDNSDomainsGatewayDirtyResourceTolerance(t *testing.T) {
+	snap := &workeripc.ResourceSnapshot{
+		DomainRules: []workeripc.DomainRule{
+			{Domain: "valid.company.com"},
+			{Domain: "*.wildcard.company.com"},
+			{Domain: "underscore_host.company.com"},
+			{Domain: "10.20.30.40"},
+			{Domain: "host.withport.com:8443"},
+			{Domain: ""},
+			{Domain: "*"},
+		},
+		StaticDNS: []workeripc.DNSRecord{
+			{Name: "valid.static.com"},
+			{Name: "shortname"},
+			{Name: "192.168.1.1"},
+			{Name: ""},
+		},
+	}
+	result, err := DNSDomains(snap)
+	if err != nil {
+		t.Fatalf("unexpected error on dirty gateway resources: %v", err)
+	}
+	want := []string{"host.withport.com", "valid.company.com", "valid.static.com", "wildcard.company.com"}
+	if !reflect.DeepEqual(result, want) {
+		t.Fatalf("result = %v, want = %v", result, want)
+	}
+}
+
 func TestDNSFailureStopsCaptureAndReportsReason(t *testing.T) {
 	m := NewManager(nil)
 	defer m.Close()

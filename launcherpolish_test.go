@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/qy/easyconnect/internal/model"
 	"github.com/qy/easyconnect/internal/vpn"
 )
 
@@ -79,6 +80,32 @@ func TestQuickTilesCarryActions(t *testing.T) {
 	}
 	if !sawDisconnect {
 		t.Error("在线接入点的磁贴应当能断开")
+	}
+}
+
+// 只有一个接入点时列表直接平铺：不该出现协议组头。
+func TestSmallSetRendersFlat(t *testing.T) {
+	a := testApp(t)
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Points = append(cfg.Points, model.AccessPoint{
+			ID:       "only",
+			Name:     "唯一网关",
+			Protocol: model.ProtocolEasyConnect,
+			Server:   "https://vpn.example.edu.cn",
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg = a.store.Config()
+	a.mgr.Apply(a.cfg)
+	tt := ui.NewTester(a.view, 1120, 780)
+	tt.Frame()
+	texts := strings.Join(tt.Texts(), "|")
+	for _, unwanted := range []string{"easyconnect", "atrust"} {
+		if strings.Contains(texts, unwanted) {
+			t.Errorf("单个接入点不该摆协议组头，却出现了 %q；texts = %s", unwanted, texts)
+		}
 	}
 }
 

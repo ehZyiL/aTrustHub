@@ -509,6 +509,11 @@ func (s *Settings) Validate() error {
 	}
 	seenGroups := make(map[string]bool)
 	for _, group := range s.SharedExits {
+		if group.DNSFailover {
+			if err := (routing.DNSBinding{ID: group.ID, Pattern: group.Pattern, GatewayID: "group"}).Validate(); err != nil {
+				return errors.New("DNS 备用出口必须使用域名")
+			}
+		}
 		if group.ID == "" || seenGroups[group.ID] || len(group.Gateways) < 2 || !routing.ValidPattern(group.Pattern) || group.PortMin < 1 || group.PortMax > 65535 || group.PortMax < group.PortMin || (group.Protocol != "tcp" && group.Protocol != "udp" && group.Protocol != "all") {
 			return errors.New("同业务出口配置无效")
 		}

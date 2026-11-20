@@ -1,6 +1,8 @@
 # EasyConnect Hub · Linux 测试版
 
-当前为 `0.1.0-dev-multigateway-tun.7` 开发版，支持 EasyConnect 登录、代理浏览器、数据库 TCP 转发与多网关系统 TUN。系统 TUN 的业务 IPv4 UDP 限已授权 EasyConnect L3 会话，真实网关应答待验。已知内网 IPv6 资源会在申请系统 TUN 前拒绝。网络助手协议为 8，需使用本包更新已安装的旧助手；worker 协议仍为 6。
+当前为 `0.1.0-dev-multigateway-tun.8` 开发版，支持 EasyConnect 登录、代理浏览器、数据库 TCP 转发与多网关系统 TUN。系统 TUN 的业务 IPv4 UDP 限已授权 EasyConnect L3 会话，真实网关应答待验。已知内网 IPv6 资源会在申请系统 TUN 前拒绝。网络助手协议为 8，需使用本包更新已安装的旧助手；worker 协议仍为 6。
+
+“网络授权与路由 → 用户策略”的同业务出口组可明确勾选“名称服务也等价”。新 DNS 查询按组内顺序选择在线的名称归属网关；固定 DNS 归属仍优先。它只在网关离线时切换，不在解析超时后跨网关查询，也不改绑已发布的地址；默认关闭。包内 `measure-tun-performance.py` 用于后续受控 HTTP 服务的性能对照，需要 Python 3 和 curl，使用 `--help` 查看参数。
 Linux 软件 TCP 接管实验入口默认显示，无需环境变量。早期版本已在 Fedora 45 x86_64 启动原生窗口；本批系统 TUN 的 Fedora 宿主实测待验。
 无需 Docker 或 v2rayN；基础代理以普通用户运行，软件接管需要先安装系统辅助服务。
 

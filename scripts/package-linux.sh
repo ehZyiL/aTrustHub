@@ -42,6 +42,7 @@ for module in github.com/egoist/mygo github.com/mythologyli/sing-tun github.com/
   install -m 0644 "$module_dir/LICENSE" "$bundle/LICENSES/$module_name.txt"
 done
 install -m 0644 "$app_root/LINUX-QUICKSTART.md" "$bundle/README.md"
+install -m 0644 "$app_root/scripts/measure-tun-performance.py" "$bundle/measure-tun-performance.py"
 cat > "$bundle/COMPONENTS.txt" <<EOF
 EasyConnect Hub Linux bundle
 Architecture: $target_arch

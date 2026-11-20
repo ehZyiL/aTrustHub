@@ -8,6 +8,8 @@ import (
 	"github.com/qy/easyconnect/internal/routing"
 	"github.com/qy/easyconnect/internal/splitdns"
 	"github.com/qy/easyconnect/internal/workeripc"
+	"io"
+	"net"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -42,6 +44,89 @@ type routeDNSSession struct {
 	*routeSession
 	queries  atomic.Int32
 	exchange func(context.Context, []byte) ([]byte, error)
+}
+
+func TestEquivalentDNSNewQueryChangesSessionOnlyAfterPrimaryOffline(t *testing.T) {
+	a, b := routeTestSession("A"), routeTestSession("B")
+	settings := model.DefaultSettings()
+	settings.SharedExits = []routing.Group{{ID: "same-service", Pattern: "b.test", Protocol: "tcp", PortMin: 443, PortMax: 443, Gateways: []string{"A", "B"}, DNSFailover: true}}
+	m := routeTestManager(t, settings, a, b)
+	da, db := &routeDNSSession{routeSession: a}, &routeDNSSession{routeSession: b}
+	m.mu.Lock()
+	m.points["A"].sess, m.points["B"].sess = da, db
+	m.mu.Unlock()
+	q, _ := new(dns.Msg).SetQuestion("b.test.", dns.TypeA).Pack()
+	keyA, validA, err := m.SelectMappedDNS(q)
+	if err != nil || !validA() {
+		t.Fatal(keyA, err)
+	}
+	if _, err = m.ExchangeResourceDNS(context.Background(), q); err != nil {
+		t.Fatal(err)
+	}
+	if da.queries.Load() != 1 || db.queries.Load() != 0 {
+		t.Fatal("query was broadcast")
+	}
+	m.Disconnect("A")
+	keyB, validB, err := m.SelectMappedDNS(q)
+	if err != nil || !validB() || keyA == keyB || validA() {
+		t.Fatal("backup reused the old mapped session identity", keyA, keyB, err)
+	}
+	if _, err = m.ExchangeResourceDNS(context.Background(), q); err != nil || db.queries.Load() != 1 {
+		t.Fatal("backup reused another gateway cache", err, db.queries.Load())
+	}
+	backup, err := m.LocalAppConnection("B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	finish, err := backup.BeginPublication("198.19.16.0/20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer finish()
+	aliases := []workeripc.DNSAlias{{Address: "198.19.16.1", Original: "10.0.0.8", TTL: 60}}
+	if err = m.mappings.Stage(backup.Key, "b.test", aliases); err != nil {
+		t.Fatal(err)
+	}
+	if err = backup.ConfirmAliases(aliases); err != nil {
+		t.Fatal(err)
+	}
+	newA := &routeDNSSession{routeSession: routeTestSession("A"), exchange: func(context.Context, []byte) ([]byte, error) {
+		return nil, errors.New("DNS timeout")
+	}}
+	m.mu.Lock()
+	ep := m.points["A"]
+	ep.gen++
+	ep.state, ep.sess, ep.info = StateOnline, newA, cloneSessionInfo(newA.Info())
+	m.mu.Unlock()
+	if validB() {
+		t.Fatal("previous backup selection remained valid after primary recovery")
+	}
+	if _, err = m.ExchangeResourceDNS(context.Background(), q); err == nil || newA.queries.Load() != 1 || db.queries.Load() != 1 {
+		t.Fatal("timeout was hidden by retrying another DNS gateway", err)
+	}
+	ctx := WithOriginalDial(context.Background(), func(context.Context, string, string) (net.Conn, error) {
+		t.Error("mapped DNS fell back to the original network")
+		return nil, net.ErrClosed
+	})
+	conn, err := m.DialCaptured(ctx, "tcp", "198.19.16.1:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(conn)
+	conn.Close()
+	if err != nil || string(body) != "B" || newA.strictCalls.Load() != 0 {
+		t.Fatal("published backup identity changed on primary recovery", string(body), err)
+	}
+	m.Disconnect("B")
+	if _, err = m.DialCaptured(ctx, "tcp", "198.19.16.1:443"); err == nil || newA.strictCalls.Load() != 0 {
+		t.Fatal("offline backup alias was rebound to the primary")
+	}
+	m.mu.Lock()
+	m.settings.SharedExits[0].DNSFailover = false
+	m.mu.Unlock()
+	if _, _, err = m.SelectMappedDNS(q); err == nil {
+		t.Fatal("disabled DNS sharing continued to resolve ambiguous names")
+	}
 }
 
 func (s *routeDNSSession) ExchangeDNS(ctx context.Context, packet []byte) ([]byte, error) {

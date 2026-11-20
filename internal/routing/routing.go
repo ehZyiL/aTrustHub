@@ -57,12 +57,13 @@ type Decision struct {
 // Group explicitly declares equivalent exits for one target policy. Sharing
 // a CIDR or domain is insufficient to infer this relationship.
 type Group struct {
-	ID       string   `json:"id"`
-	Pattern  string   `json:"pattern"`
-	Protocol string   `json:"protocol"`
-	PortMin  int      `json:"portMin"`
-	PortMax  int      `json:"portMax"`
-	Gateways []string `json:"gateways"`
+	ID          string   `json:"id"`
+	Pattern     string   `json:"pattern"`
+	Protocol    string   `json:"protocol"`
+	PortMin     int      `json:"portMin"`
+	PortMax     int      `json:"portMax"`
+	Gateways    []string `json:"gateways"`
+	DNSFailover bool     `json:"dnsFailover,omitempty"` // Explicitly equivalent name service; new queries may use an online backup.
 }
 
 func NormalizeHost(host string) (string, error) {

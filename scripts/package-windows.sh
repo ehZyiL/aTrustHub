@@ -47,6 +47,7 @@ for module in github.com/egoist/mygo github.com/mythologyli/sing-tun github.com/
 done
 install -m 0644 "$app_root/packaging/windows/Wintun-LICENSE.txt" "$bundle/LICENSES/Wintun-LICENSE.txt"
 install -m 0644 "$app_root/WINDOWS-QUICKSTART.md" "$bundle/README.md"
+install -m 0644 "$app_root/scripts/measure-tun-performance.py" "$bundle/measure-tun-performance.py"
 cat > "$bundle/COMPONENTS.txt" <<EOF
 EasyConnect Hub Windows bundle
 Architecture: $target_arch

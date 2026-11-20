@@ -102,7 +102,7 @@ sudo ./install-capture-helper.sh
 请先取消仍在等待的系统认证窗口，避免重复发起请求；安装后点击“检查状态”。
 
 需要 cgroup v2、可用的 systemd 用户管理器、`/usr/bin/ip`、`/usr/bin/nft` 与 `/usr/bin/busctl`。
-启用分域 DNS 还需要 systemd-resolved 使用 stub 解析入口、支持 `ListDelegates`（本机 systemd 262 已验证）。
+启用分域 DNS 需要 systemd-resolved 使用 stub 解析入口。旧版明确返回不支持 `ListDelegates` 时按没有 DNS 委托处理；其他检查错误仍拒绝启用。有 DNS 委托的配置尚未完成共存适配。独立 systemd 257 隔离实例已验证分域 DNS 和同池模式切换，Fedora 宿主仍需验收。
 现有 DNS 委托、重叠的内网后缀或不支持的解析栈会被明确拒绝；已有公网根域规则可保留。
 安装脚本会把助手和服务放入系统目录，并启动当前用户的服务实例；助手仅接收该用户的本地控制连接。
 GUI 和目标软件始终以普通用户运行。安装本身不添加流量接管规则；启动实验项目后才建立规则。
@@ -164,7 +164,7 @@ sudo ./uninstall-capture-helper.sh
 尚未完成：域名资源和系统 TUN UDP 的真实网关验收、IPv6 内网支持、真实 IDEA/数据库工具验证、切网/睡眠和长期共存验收。
 主窗口的 **系统 TUN** 使用已登录、加入统一资源池的网关。它接管已知 IPv4 资源的 TCP 与已登记后缀的系统 DNS，并提供业务 UDP 试验。未命中资源的目标沿用原有网络；已有精确网络路由、DNS 后缀或策略标记冲突时，Hub 会显示错误。测试 UDP 前需从配套包更新已安装的 Linux 助手。Fedora 宿主上与其他 VPN 共存仍待实机验收。
 
-系统 TUN 和按软件接管不能同时启用。切换前先关闭当前接管；如果已经解析过内网域名，新模式分配的 DNS 映射池可能不同。遇到提示时只需重新登录对应网关，再开启需要的接管模式。仅用 IP 资源不涉及映射池切换。
+系统 TUN 和按软件接管不能同时启用。切换前先关闭当前接管；同一在线 worker 代次复用原 DNS 映射池，正常切换无需重新登录。助手崩溃、租约失效或外部路由占用该池时会明确报错；这类恢复可能需要重新登录。模式关闭会结束原有连接，切换后需重新连接业务。
 
 Linux 不提供系统代理开关。已设置显式代理或使用自带 DoH 的软件，需按其自身配置分流。
 原“应用”页现名为“网关资源”；“本机软件”页管理本机代理入口。
@@ -213,6 +213,11 @@ DNS 系统接口验证运行 `bash scripts/test-resolved-linux.sh`；TCP/DNS 联
 `bash scripts/test-capture-dns-linux.sh`。它们在新的用户、网络、挂载命名空间中启动独立 D-Bus 与
 systemd-resolved，使用虚构内网域名验证分域转发、双启动组共享、UDP/IPv6 拒绝及故障清理。
 使用原用户的 systemd 管理器创建临时 scope，宿主路由和 DNS 不变。
+
+同池切换与真实 DNS 的组合回归：先用 `go test -c -o build/capture.test ./internal/capture` 构建，
+再运行 `ECH_DNS_TEST_EXEC="$PWD/build/capture.test" ECH_DNS_TEST_PATTERN='^TestSystemSharedAliasPoolTransferInResolvedNamespace$' python3 scripts/probe-resolved-namespace.py`。
+测试在独立用户、网络和挂载命名空间中启动 D-Bus 与 resolved，验证软件池移交、系统 DNS 发布、停止后的缓存原出口恢复及外部解析策略保留。
+开发环境缺少 daemon 时，可通过 `ECH_RESOLVED_EXEC` 和 `LD_LIBRARY_PATH` 指定独立解包且版本匹配的 resolved 与依赖，无需替换宿主服务。
 
 域名映射与完整助手流程验证：`bash scripts/test-alias-linux.sh`。
 覆盖跨仓库 worker IPC、域名端口权限、未选中原出口、双软件、缓存恢复、控制器异常退出、

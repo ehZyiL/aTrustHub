@@ -31,13 +31,16 @@ pathlib.Path('/etc/resolv.conf').symlink_to('/run/systemd/resolve/stub-resolv.co
 pathlib.Path('/run/dbus/probe.conf').write_text('<busconfig><type>system</type><listen>unix:path=/run/dbus/system_bus_socket</listen><policy context="default"><allow user="*"/><allow own="*"/><allow send_destination="*"/><allow receive_sender="*"/></policy></busconfig>')
 subprocess.run(['/usr/bin/ip','link','set','lo','up'],check=True)
 env={'PATH':'/usr/bin:/usr/sbin','DBUS_SYSTEM_BUS_ADDRESS':'unix:path=/run/dbus/system_bus_socket','SYSTEMD_LOG_TARGET':'console','SYSTEMD_LOG_LEVEL':'info'}
+if os.environ.get('LD_LIBRARY_PATH'):
+    env['LD_LIBRARY_PATH']=os.environ['LD_LIBRARY_PATH']
 bus=subprocess.Popen(['/usr/bin/dbus-daemon','--nofork','--config-file=/run/dbus/probe.conf'],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
 resolved=None
 try:
     for _ in range(50):
         if pathlib.Path('/run/dbus/system_bus_socket').exists(): break
         time.sleep(.02)
-    resolved=subprocess.Popen(['/usr/lib/systemd/systemd-resolved'],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+    resolved_exec=os.environ.get('ECH_RESOLVED_EXEC','/usr/lib/systemd/systemd-resolved')
+    resolved=subprocess.Popen([resolved_exec],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
     for _ in range(100):
         if resolved.poll() is not None: break
         r=subprocess.run(['/usr/bin/busctl','--system','--no-pager','--timeout=1','get-property','org.freedesktop.resolve1','/org/freedesktop/resolve1','org.freedesktop.resolve1.Manager','ResolvConfMode'],env=env,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)

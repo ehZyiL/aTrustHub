@@ -21,6 +21,8 @@ type fakeSystemLease struct {
 	request       capture.SystemConfig
 	publish       func(string, []workeripc.DNSAlias) error
 	err           error
+	closeErr      error
+	closes        int
 }
 
 func (f *fakeSystemLease) configure(config capture.SystemConfig) (capture.SystemState, error) {
@@ -48,12 +50,42 @@ func (f *fakeSystemLease) Publish(_ context.Context, id string, aliases []worker
 	return f.publish(id, aliases)
 }
 func (f *fakeSystemLease) Ping(context.Context) error { return f.err }
-func (f *fakeSystemLease) Close() error               { return nil }
+func (f *fakeSystemLease) Close() error               { f.closes++; return f.closeErr }
 
 type transferableAlias struct {
 	fakeAliasBinding
 	prefix string
 	ref    capture.AliasRef
+}
+
+func TestLinuxSystemCloseReleasesDNSLeaseWhenHelperCloseFails(t *testing.T) {
+	pool := &dnsPool{prepare: func(context.Context, string, CaptureConfig) (aliasBinding, error) {
+		return &transferableAlias{fakeAliasBinding: fakeAliasBinding{done: make(chan struct{})}, prefix: "198.19.0.0/20",
+			ref: capture.AliasRef{ID: strings.Repeat("a", 32), Token: strings.Repeat("b", 64)}}, nil
+	}}
+	t.Cleanup(pool.close)
+	config := aliasTestConfig("A/1")
+	binding, err := pool.acquire(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeErr := errors.New("system helper cleanup pending")
+	lease := &fakeSystemLease{closeErr: closeErr}
+	r := &linuxSystemCapture{lease: lease, bindings: map[string]*dnsBinding{config.Key: binding}, cancel: func() {}, done: make(chan struct{})}
+	if err := r.Close(); !errors.Is(err, closeErr) {
+		t.Fatalf("Close() error=%v, want helper cleanup error", err)
+	}
+	pool.mu.Lock()
+	refs := pool.entries[config.Key].refs
+	pool.mu.Unlock()
+	if refs != 0 || len(r.bindings) != 0 {
+		t.Fatal("helper failure retained the mode reference", refs)
+	}
+	// A later close can still retry the privileged helper cleanup.
+	lease.closeErr = nil
+	if err := r.Close(); err != nil || r.lease != nil || lease.closes != 2 {
+		t.Fatal("helper cleanup retry was not preserved", lease.closes, err)
+	}
 }
 
 func (a *transferableAlias) Prefix() string         { return a.prefix }

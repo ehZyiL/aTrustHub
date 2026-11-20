@@ -394,15 +394,17 @@ func (r *linuxSystemCapture) Close() error {
 		r.publish, r.original = nil, nil
 		r.mu.Unlock()
 	}
+	var cleanupErr error
 	if r.lease != nil {
 		if err := r.lease.Close(); err != nil {
-			return err
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else {
+			r.lease = nil
 		}
-		r.lease = nil
 	}
 	for key, binding := range r.bindings {
 		binding.release()
 		delete(r.bindings, key)
 	}
-	return nil
+	return cleanupErr
 }

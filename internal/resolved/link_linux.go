@@ -149,9 +149,20 @@ func checkDomains(ctx context.Context, run Command, want []string, ownIndex int)
 	}
 	// Delegate scopes are not exposed in the manager's Domains array. Until
 	// their configuration can be compared, decline rather than send parallel DNS.
+	return checkDelegates(ctx, run)
+}
+
+func checkDelegates(ctx context.Context, run Command) error {
 	b, err := bus(ctx, run, "call", "org.freedesktop.resolve1", managerPath, managerInterface, "ListDelegates")
 	if err != nil {
-		return errors.New("无法检查 systemd-resolved DNS 委托，需要支持 ListDelegates 的版本")
+		// DNS delegates were added to resolve1 in systemd 258. Older daemons
+		// cannot have configured delegates, so the specific UnknownMethod reply
+		// is an empty list; transport, permission and all other errors still
+		// fail closed.
+		if strings.Contains(err.Error(), "Unknown method ListDelegates") {
+			return nil
+		}
+		return fmt.Errorf("无法检查 systemd-resolved DNS 委托: %w", err)
 	}
 	var delegates struct {
 		Data json.RawMessage `json:"data"`

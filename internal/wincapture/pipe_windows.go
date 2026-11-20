@@ -39,7 +39,7 @@ func validID(id string) bool {
 // The desktop creates a single-instance, local-only pipe before UAC. Both
 // endpoints verify the other's OS process identity. Secrets use this pipe,
 // never the command line, registry, environment or a temporary config file.
-func startHelper(ctx context.Context) (*os.File, error) {
+func startHelper(ctx context.Context) (*helperTransport, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -155,6 +155,10 @@ func startHelper(ctx context.Context) (*os.File, error) {
 	if !token.IsElevated() {
 		return nil, errors.New("网络助手未获管理员权限")
 	}
+	helperIdentity, err := processIdentity(peer, pid)
+	if err != nil {
+		return nil, fmt.Errorf("记录网络助手身份：%w", err)
+	}
 	f := os.NewFile(uintptr(h), name)
 	if err = f.SetDeadline(time.Now().Add(15 * time.Second)); err != nil {
 		f.Close()
@@ -162,7 +166,7 @@ func startHelper(ctx context.Context) (*os.File, error) {
 		return nil, windowsError("设置助手管道超时 SetDeadline", err)
 	}
 	owned = false
-	return f, nil
+	return &helperTransport{File: f, id: id, identity: helperIdentity}, nil
 }
 
 func connectDesktop(ctx context.Context, id string, expected Identity) (*os.File, windows.Handle, error) {

@@ -54,6 +54,7 @@ func TestHelperFraming(t *testing.T) {
 		t.Fatalf("roundtrip: %+v %v", got, err)
 	}
 	for _, data := range []string{
+		`{"version":6,"type":"configure"}` + "\n",
 		`{"version":99,"type":"ping"}` + "\n",
 		`{"version":1,"type":"attach","attach":{"process":{"pid":1}}}` + "\n",
 		fmt.Sprintf(`{"version":%d,"type":"ping","unexpected":"value"}`, ProtocolVersion) + "\n",

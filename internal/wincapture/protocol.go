@@ -14,7 +14,7 @@ import (
 	"github.com/qy/easyconnect/internal/workeripc"
 )
 
-const ProtocolVersion = 6
+const ProtocolVersion = 7
 const maxFrame = 256 << 10
 
 type Config struct {

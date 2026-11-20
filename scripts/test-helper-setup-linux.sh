@@ -41,7 +41,7 @@ chmod +x "$test_root/usr/bin/systemctl"
 cat > "$test_root/bundle/easyconnect-hub-capture" <<'MOCK'
 #!/bin/bash
 if [[ ${1:-} == --protocol-version ]]; then
-  printf '%s\n' "${CANDIDATE_PROTOCOL:-7}"
+  printf '%s\n' "${CANDIDATE_PROTOCOL:-8}"
   exit 0
 fi
 printf 'new-helper %s\n' "$*" >> /calls
@@ -117,7 +117,7 @@ reset_case
 old_helper
 expected=$(cat "$helper")
 : > /active
-export CANDIDATE_PROTOCOL=6
+export CANDIDATE_PROTOCOL=7
 expect_failure 1 bash /bundle/install-capture-helper.sh --uid 1000
 unset CANDIDATE_PROTOCOL
 [[ $(cat "$helper") == "$expected" && -f /active && ! -s /calls ]]

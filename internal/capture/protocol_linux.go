@@ -18,7 +18,7 @@ import (
 
 const (
 	// Version 7 adds owned system TUN scopes. Worker IPC remains independent.
-	ProtocolVersion = 7
+	ProtocolVersion = 8
 	maxFrame        = 64 << 10
 	maxSessions     = 16
 	LauncherFlag    = "--managed-capture-program"

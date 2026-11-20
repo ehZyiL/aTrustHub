@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -53,6 +55,9 @@ func startHelper(ctx context.Context) (*helperTransport, error) {
 	helper := filepath.Join(filepath.Dir(exe), "easyconnect-hub-capture.exe")
 	if info, err := os.Stat(helper); err != nil || !info.Mode().IsRegular() {
 		return nil, errors.New("缺少 Windows 网络助手，请解压完整测试包")
+	}
+	if err := checkHelperProtocol(ctx, helper); err != nil {
+		return nil, err
 	}
 	id, err := randomID()
 	if err != nil {
@@ -167,6 +172,22 @@ func startHelper(ctx context.Context) (*helperTransport, error) {
 	}
 	owned = false
 	return &helperTransport{File: f, id: id, identity: helperIdentity}, nil
+}
+
+func checkHelperProtocol(ctx context.Context, helper string) error {
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(probeCtx, helper, "--protocol-version")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.WaitDelay = time.Second
+	output, err := cmd.Output()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err != nil || strings.TrimSpace(string(output)) != strconv.Itoa(ProtocolVersion) {
+		return fmt.Errorf("Windows 网络助手版本不匹配或无法校验（需要协议 v%d），请重新解压完整测试包", ProtocolVersion)
+	}
+	return nil
 }
 
 func connectDesktop(ctx context.Context, id string, expected Identity) (*os.File, windows.Handle, error) {

@@ -24,8 +24,8 @@ cd "$app_root"
 env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-hub.exe" .
 env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-hub-capture.exe" ./cmd/app-helper
 helper_protocol=$("$bundle/easyconnect-hub-capture.exe" --protocol-version)
-if [[ "$helper_protocol" != 6 ]]; then
-  printf 'Windows capture helper protocol mismatch: expected 6, got %s\n' "$helper_protocol" >&2
+if [[ "$helper_protocol" != 7 ]]; then
+  printf 'Windows capture helper protocol mismatch: expected 7, got %s\n' "$helper_protocol" >&2
   exit 1
 fi
 env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" test -mod=readonly -trimpath -c -o "$bundle/windows-capture-tests.exe" ./internal/wincapture

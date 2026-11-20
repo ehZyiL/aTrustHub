@@ -229,11 +229,13 @@ func (a *app) localAppRow(c *ui.Context, p model.LocalApp) {
 	v := a.localView(p.ID)
 	online, _ := a.localPointOnline(p)
 	status, tone := localStatusText(t, p, v, online)
-	row := ui.Row(c).Padding(10, 12).Gap(10).AlignItems(ui.Center).
-		Background(t.Surface)
+	row := ui.Row(c).Padding(10, 12).Gap(10).AlignItems(ui.Center).Radius(8)
 	row.OnClick(func() {
 		a.openLocalAppEditor(p.ID)
 	})
+	if row.Hovered() {
+		row = row.Background(t.SurfaceHover)
+	}
 	row.Children(func() {
 		localModeMark(c, t, p.Mode, p.Name)
 		ui.Column(c).Gap(3).Grow(1).MinWidth(0).Children(func() {
@@ -333,17 +335,16 @@ func localTargetLine(p model.LocalApp) string {
 }
 
 func localModeMark(c *ui.Context, t *ui.Theme, mode, name string) {
-	bg := t.Accent
+	tint := t.Accent
 	switch mode {
 	case model.LocalAppTCPForward:
-		bg = t.Success
+		tint = t.Success
 	case model.LocalAppCapture:
-		bg = t.Warning
+		tint = t.Warning
 	}
-	ui.Row(c).Size(26, 26).Radius(8).Background(bg).
+	ui.Row(c).Size(28, 28).Radius(9).Background(t.Surface).Border(1, t.Border).
 		AlignItems(ui.Center).Justify(ui.Center).Children(func() {
-		ui.Text(c, firstRune(name)).FontSize(13).Bold().
-			TextColor(textOnFill)
+		ui.Text(c, firstRune(name)).FontSize(13).Bold().TextColor(tint)
 	})
 }
 

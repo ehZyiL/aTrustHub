@@ -85,6 +85,8 @@ func (a *app) view(c *ui.Context) {
 	root.Children(func() {
 		a.header(c)
 		a.tabBar(c)
+		// 顶栏与内容之间一条发丝线：界面分层从这条线开始，而不是靠边框盒。
+		ui.Divider(c)
 		switch a.tab {
 		case 1:
 			a.appsSection(c)
@@ -378,19 +380,28 @@ func (a *app) appGroupHeader(c *ui.Context, pid, name string, count int, collaps
 	})
 }
 
-// appRow 是资源页的一行：首字母色块、名称与地址、类型、隧道代理开关和详情入口。
+// appMark 画资源行首的字母色块：浅底 + 细描边 + 同色字母，比实心色块安静。
+func appMark(c *ui.Context, t *ui.Theme, name string) {
+	ui.Row(c).Size(28, 28).Radius(9).Background(t.Surface).Border(1, t.Border).
+		AlignItems(ui.Center).Justify(ui.Center).Children(func() {
+		ui.Text(c, firstRune(name)).FontSize(13).Bold().
+			TextColor(glyphColor(t, name))
+	})
+}
+
+// appRow 是资源页的一行：字母槽、名称与地址、类型、隧道代理开关和详情入口。
 // 行式密度让上百个资源能一屏扫过；分类、描述与停用状态都挤在副标题里。
 func (a *app) appRow(c *ui.Context, entry appEntry) {
 	t := c.Theme()
 	app := entry.App
 	enabled := a.appEnabled(entry.PointID, app.ID)
-	row := ui.Row(c).Padding(10, 12).Gap(10).AlignItems(ui.Center)
+	row := ui.Row(c).Padding(10, 12).Gap(10).AlignItems(ui.Center).Radius(8)
+	// 悬停时整行轻轻抬起：列表因此有“可以点”的手感。
+	if row.Hovered() {
+		row = row.Background(t.SurfaceHover)
+	}
 	row.Children(func() {
-		ui.Row(c).Size(26, 26).Radius(8).Background(appColor(t, app.Name)).
-			AlignItems(ui.Center).Justify(ui.Center).Children(func() {
-			ui.Text(c, firstRune(app.Name)).FontSize(13).Bold().
-				TextColor(textOnFill)
-		})
+		appMark(c, t, app.Name)
 		ui.Column(c).Gap(2).Grow(1).MinWidth(0).Children(func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, app.Name).FontSize(13).Bold().Ellipsis("…")
@@ -717,26 +728,6 @@ func firstRune(s string) string {
 	return "应"
 }
 
-// appColor 给资源色块挑一个底色：按名称散列，但只从主题色里取，深浅两套主题
-// 下都不会出现与当前配色冲突的固定亮色。
-func appColor(t *ui.Theme, name string) ui.Color {
-	palette := []ui.Color{
-		t.Accent.Mix(t.Surface, 0.15),
-		t.Success.Mix(t.Surface, 0.15),
-		t.Warning.Mix(t.Surface, 0.15),
-		t.Accent.Mix(t.Success, 0.45),
-		t.Accent.Mix(t.Warning, 0.45),
-	}
-	if name == "" {
-		return palette[0]
-	}
-	h := 0
-	for _, r := range name {
-		h = (h*31 + int(r)) & 0x7fffffff
-	}
-	return palette[h%len(palette)]
-}
-
 func (a *app) header(c *ui.Context) {
 	t := c.Theme()
 	ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Gap(16).Children(func() {
@@ -881,7 +872,7 @@ func (a *app) statusBanner(c *ui.Context, views []vpn.View) {
 	}
 
 	card := ui.Column(c).Padding(12, 14).Gap(8).Radius(12).
-		Border(1, t.Border).Background(t.Surface)
+		Border(1, t.Border).Background(t.Surface).Shadow(0, 1, 3, 0, cardShadow(t))
 	card.Children(func() {
 		// 一条裤要带上说完了：状态、在线情况、统一入口和批量动作。
 		// 窗口窄时末尾的控件自动换行，不用另起一行版式。
@@ -1035,7 +1026,7 @@ func (a *app) emptyState(c *ui.Context) {
 func (a *app) pointCard(c *ui.Context, v vpn.View) {
 	t := c.Theme()
 	card := ui.Column(c).Key("point:"+v.ID).Padding(14).Gap(8).Radius(12).
-		Border(1, t.Border).Background(t.Surface)
+		Border(1, t.Border).Background(t.Surface).Shadow(0, 1, 3, 0, cardShadow(t))
 	card.Children(func() {
 		// 三列卡片里可用宽度有限：名称单行省略，地址与说明合成一行。
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
@@ -1330,6 +1321,13 @@ func (a *app) accessSection(c *ui.Context) {
 	})
 }
 
+// kbdChip 画一个键盘提示小方块（⌘K 这类），跟说明文字一起读。
+func kbdChip(c *ui.Context, label string) {
+	t := c.Theme()
+	ui.Row(c).Padding(1, 5).Radius(5).Border(1, t.Border).Background(t.Surface).
+		Children(func() { ui.Text(c, label).FontSize(10).TextColor(t.TextMuted) })
+}
+
 func (a *app) footer(c *ui.Context) {
 	t := c.Theme()
 	ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
@@ -1337,7 +1335,8 @@ func (a *app) footer(c *ui.Context) {
 			TextColor(textOnFill).Clicked() {
 			a.askQuit()
 		}
-		ui.Text(c, "⌘1–⌘4 切换页面").FontSize(10).TextColor(t.TextMuted)
+		kbdChip(c, "⌘1–⌘4")
+		ui.Text(c, "切换页面").FontSize(10).TextColor(t.TextMuted)
 		ui.Row(c).Grow(1)
 		ui.Text(c, "当前版本 "+appBuild).FontSize(10).TextColor(t.TextMuted)
 		if a.update != nil {

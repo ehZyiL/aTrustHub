@@ -144,17 +144,23 @@ func TestAppearanceSettingShownInSettingsPage(t *testing.T) {
 	}
 }
 
-// 草稿改动会即时预览，关掉设置页就回到已保存的值。
-func TestAppearanceDraftPreviewOnlyWhileEditing(t *testing.T) {
+// 改一档就立即生效并落盘：设置页不再有保存按钮，也不该关页。
+func TestAppearanceChangeAppliesImmediately(t *testing.T) {
 	a := testApp(t)
 	a.cfg.Settings.Appearance = "light"
 	a.openSettings()
 	a.settings.appearance = "深色"
-	if !a.appearanceDark(false) {
-		t.Fatal("草稿选深色时应当立即预览深色")
+	a.applySettingsIfChanged()
+	if a.settings.err != "" {
+		t.Fatalf("应用失败：%s", a.settings.err)
 	}
-	a.settings.open = false
-	if a.appearanceDark(false) {
-		t.Fatal("关掉设置页后应当回到已保存的浅色")
+	if !a.appearanceDark(false) {
+		t.Fatal("选深色后应当立即用深色主题")
+	}
+	if got := a.store.Config().Settings.Appearance; got != "dark" {
+		t.Fatalf("落盘的颜色模式 = %q，想要 dark", got)
+	}
+	if !a.settings.open {
+		t.Fatal("即时生效不该关掉设置页")
 	}
 }

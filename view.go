@@ -72,8 +72,7 @@ func (a *app) view(c *ui.Context) {
 	// ⌘1–⌘4 直接跳到四个页面，与分段导航和底部提示一致。
 	for page, key := range pageShortcuts {
 		root.OnShortcut(ui.Cmd, key, func() {
-			a.tab = page
-			a.invalidate()
+			a.goTab(page)
 		})
 	}
 	root.Children(func() {
@@ -701,8 +700,7 @@ func (a *app) toolbar(c *ui.Context) {
 		}
 		ui.Text(c, appName).FontSize(15).Bold()
 		ui.Row(c).Grow(1)
-		ui.Segmented(c, &a.tab, "接入点", appTabLabel(a.appCount()), accessTabLabel(), "本机软件").
-			Label("主要页面")
+		a.pageNav(c)
 		chip := ui.Row(c).Padding(4, 10).Radius(8).Background(t.Surface).
 			Border(1, t.Border).AlignItems(ui.Center).Gap(6).
 			OnClick(func() { a.openSettingsAt(settingNetwork) }).
@@ -1732,13 +1730,10 @@ func (a *app) settingsPage(c *ui.Context) {
 		}
 		ui.Divider(c)
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "改动保存后立即生效").FontSize(11).TextColor(t.TextMuted)
+			ui.Text(c, "改动即时生效，不需要保存").FontSize(11).TextColor(t.TextMuted)
 			ui.Row(c).Grow(1)
-			if ui.Button(c, "取消").Label("取消设置").FontSize(11).Clicked() {
+			if ui.Button(c, "完成").Label("关闭设置").FontSize(11).Clicked() {
 				d.open = false
-			}
-			if ui.PrimaryButton(c, "保存").Label("保存设置").FontSize(11).Clicked() {
-				a.saveSettings()
 			}
 		})
 	})
@@ -1749,29 +1744,49 @@ func (a *app) generalSection(c *ui.Context) {
 	t := c.Theme()
 	d := &a.settings
 	ui.Field(c, "监听地址", func() {
-		ui.TextInput(c, &d.host).Placeholder("127.0.0.1").Width(180)
+		e := ui.TextInput(c, &d.host).Placeholder("127.0.0.1").Width(180)
+		// 文本项在回车或失焦时落盘，免得每敲一个字就写一次配置。
+		if e.Submitted() || e.PressedOutside() {
+			a.applySettingsIfChanged()
+		}
 	})
 	ui.Row(c).Gap(12).AlignItems(ui.End).Children(func() {
 		ui.Field(c, "统一入口端口", func() {
-			ui.TextInput(c, &d.port).Width(110)
+			e := ui.TextInput(c, &d.port).Width(110)
+			if e.Submitted() || e.PressedOutside() {
+				a.applySettingsIfChanged()
+			}
 		})
 		ui.Field(c, "健康检查间隔（秒）", func() {
-			ui.TextInput(c, &d.interval).Width(110)
+			e := ui.TextInput(c, &d.interval).Width(110)
+			if e.Submitted() || e.PressedOutside() {
+				a.applySettingsIfChanged()
+			}
 		})
 	})
 	ui.Field(c, "分流模式", func() {
-		ui.Select(c, &d.routing, routingLabelStrings()).Width(160)
+		if ui.Select(c, &d.routing, routingLabelStrings()).Width(160).Changed() {
+			a.applySettingsIfChanged()
+		}
 	})
 	ui.Field(c, "颜色模式", func() {
-		ui.Select(c, &d.appearance, appearanceLabels()).Width(160)
+		if ui.Select(c, &d.appearance, appearanceLabels()).Width(160).Changed() {
+			a.applySettingsIfChanged()
+		}
 	})
 	ui.Text(c, "跟随系统时，窗口外观跟着操作系统的深浅设置变；浅色与深色会把外观固定下来。").
 		FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
 	ui.Column(c).Gap(4).Children(func() {
-		ui.Checkbox(c, &d.aggregate, "开启统一入口 SOCKS5")
-		ui.Checkbox(c, &d.autoReconnect, "连接断开时自动重连")
+		if ui.Checkbox(c, &d.aggregate, "开启统一入口 SOCKS5").Changed() {
+			a.applySettingsIfChanged()
+		}
+		if ui.Checkbox(c, &d.autoReconnect, "连接断开时自动重连").Changed() {
+			a.applySettingsIfChanged()
+		}
 		if supportsDockToggle() {
-			ui.Checkbox(c, &d.hideDock, "关闭后隐藏 Dock 图标")
+			if ui.Checkbox(c, &d.hideDock, "关闭后隐藏 Dock 图标").Changed() {
+				a.applySettingsIfChanged()
+			}
 		}
 	})
 	ui.Text(c, "监听 127.0.0.1 只有本机能用；要让局域网里的设备用，"+
@@ -2488,9 +2503,32 @@ func (a *app) saveSettings() {
 		d.err = "保存配置失败：" + err.Error()
 		return
 	}
-	d.open = false
-	a.toast = "设置已保存"
+	// 实时生效：不关页、不弹提示，输入框里能马上看到结果。
+	d.err = ""
+}
 
+// applySettingsIfChanged 是「改动即时落盘」的入口：只有草稿真的与
+// 已保存的值不同才写一次，避免每帧都碰磁盘。
+func (a *app) applySettingsIfChanged() {
+	if !a.settingsDirty() {
+		return
+	}
+	a.saveSettings()
+}
+
+// settingsDirty 拿草稿和已保存的设置逐项比。
+func (a *app) settingsDirty() bool {
+	d := &a.settings
+	s := a.cfg.Settings
+	return strings.TrimSpace(d.host) != s.ListenHost ||
+		strings.TrimSpace(d.port) != strconv.Itoa(s.AggregatePort) ||
+		strings.TrimSpace(d.interval) != strconv.Itoa(s.HealthIntervalSec) ||
+		appearanceFromLabel(d.appearance) != a.savedAppearance() ||
+		routingFromLabel(d.routing) != s.Routing ||
+		d.aggregate != s.AggregateEnabled ||
+		d.autoReconnect != s.AutoReconnect ||
+		d.hideDock != s.HideDock ||
+		secretStoreFromLabel(d.secretStore) != s.SecretStore
 }
 
 func (a *app) removePoint(id string) {

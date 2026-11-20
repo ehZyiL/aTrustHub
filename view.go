@@ -55,12 +55,8 @@ var logIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" strok
 var pageShortcuts = []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4}
 
 func (a *app) view(c *ui.Context) {
-	// 先跟随系统外观换上柔和主题，再开始画：颜色、字号、圆角都跟原型一致。
-	if c.Theme().Dark {
-		c.SetTheme(softDark)
-	} else {
-		c.SetTheme(softLight)
-	}
+	// 原型 C 是深色场景启动台：固定暗色，不跟随系统外观。
+	c.SetTheme(softDark)
 	t := c.Theme()
 	if a.toast != "" {
 		c.Toast(a.toast)
@@ -83,19 +79,9 @@ func (a *app) view(c *ui.Context) {
 		a.toolbar(c)
 		// 操作栏与内容之间一条发丝线。
 		ui.Divider(c)
-		if a.settings.open {
-			a.settingsPage(c)
-		} else {
-			switch a.tab {
-			case 1:
-				a.appsSection(c)
-			case 2:
-				a.accessSection(c)
-			case 3:
-				a.localAppsSection(c)
-			default:
-				a.pointsSection(c)
-			}
+		a.launcherBody(c)
+		if !a.settings.open {
+			a.envStrip(c)
 		}
 	})
 	// Esc 从设置页返回，和关闭弹窗的习惯一致。

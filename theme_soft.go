@@ -21,55 +21,55 @@ func newSoftTheme(dark bool) *ui.Theme {
 	if dark {
 		t = ui.DarkTheme()
 	}
-	t.Radius = 10
+	t.Radius = 14
 	t.Spacing = 4
 	t.FontSize = 13
 	if dark {
-		t.Background = ui.Hex("#23232b")
-		t.Surface = ui.Hex("#292931")
-		t.SurfaceHover = ui.Hex("#2e2d38")
-		t.SurfacePressed = ui.Hex("#353440")
-		t.Border = ui.Hex("#3a3844")
-		t.Text = ui.Hex("#e5e2ee")
-		t.TextMuted = ui.Hex("#9c99a8")
-		t.Accent = ui.Hex("#b0a0ef")
-		t.AccentHover = ui.Hex("#c4b7f5")
-		t.AccentPressed = ui.Hex("#9c8ae6")
-		t.AccentText = ui.Hex("#1b1a22")
-		t.Danger = ui.Hex("#d28b90")
-		t.Warning = ui.Hex("#d3a860")
-		t.Success = ui.Hex("#7db69c")
-		t.Selection = ui.Hex("#3d3654")
-		t.Focus = ui.RGBA(176, 160, 239, 0.45)
-		t.Scrollbar = ui.RGBA(255, 255, 255, 0.26)
+		t.Background = ui.Hex("#141b1a")
+		t.Surface = ui.Hex("#1c2523")
+		t.SurfaceHover = ui.Hex("#202b28")
+		t.SurfacePressed = ui.Hex("#29352f")
+		t.Border = ui.Hex("#32403a")
+		t.Text = ui.Hex("#e7eee9")
+		t.TextMuted = ui.Hex("#94a49b")
+		t.Accent = ui.Hex("#c4e7a0")
+		t.AccentHover = ui.Hex("#d5f0b8")
+		t.AccentPressed = ui.Hex("#aed586")
+		t.AccentText = ui.Hex("#16241c")
+		t.Danger = ui.Hex("#e8a695")
+		t.Warning = ui.Hex("#dfba73")
+		t.Success = ui.Hex("#a4d6aa")
+		t.Selection = ui.Hex("#2d3f33")
+		t.Focus = ui.RGBA(196, 231, 160, 0.40)
+		t.Scrollbar = ui.RGBA(255, 255, 255, 0.22)
 		return t
 	}
-	t.Background = ui.Hex("#fcfcfe")
+	t.Background = ui.Hex("#f4f7f5")
 	t.Surface = ui.Hex("#ffffff")
-	t.SurfaceHover = ui.Hex("#f5f5fa")
-	t.SurfacePressed = ui.Hex("#ececf3")
-	t.Border = ui.Hex("#e8e8f0")
-	t.Text = ui.Hex("#333440")
-	t.TextMuted = ui.Hex("#686a75")
-	t.Accent = ui.Hex("#7864da")
-	t.AccentHover = ui.Hex("#684fd1")
-	t.AccentPressed = ui.Hex("#5b45c0")
+	t.SurfaceHover = ui.Hex("#f6f9f7")
+	t.SurfacePressed = ui.Hex("#e9f0eb")
+	t.Border = ui.Hex("#e2eae4")
+	t.Text = ui.Hex("#1d2b25")
+	t.TextMuted = ui.Hex("#6f7d76")
+	t.Accent = ui.Hex("#2f6b4f")
+	t.AccentHover = ui.Hex("#275a43")
+	t.AccentPressed = ui.Hex("#1f4a37")
 	t.AccentText = ui.Hex("#ffffff")
-	t.Danger = ui.Hex("#a5525b")
-	t.Warning = ui.Hex("#a9762a")
-	t.Success = ui.Hex("#3f8a6d")
-	t.Selection = ui.Hex("#e8e2fa")
-	t.Focus = ui.RGBA(120, 100, 218, 0.28)
-	t.Scrollbar = ui.RGBA(0, 0, 0, 0.16)
+	t.Danger = ui.Hex("#b1594a")
+	t.Warning = ui.Hex("#9b7126")
+	t.Success = ui.Hex("#2f7c58")
+	t.Selection = ui.Hex("#e6f0e9")
+	t.Focus = ui.RGBA(47, 107, 79, 0.28)
+	t.Scrollbar = ui.RGBA(0, 0, 0, 0.14)
 	return t
 }
 
 // cardShadow 是卡片与面板的“呼吸阴影”：比边框更轻，抬起半像素而不抢内容。
 func cardShadow(t *ui.Theme) ui.Color {
 	if t.Dark {
-		return ui.RGBA(0, 0, 0, 0.45)
+		return ui.RGBA(0, 0, 0, 0.50)
 	}
-	return ui.RGBA(35, 26, 68, 0.07)
+	return ui.RGBA(31, 74, 55, 0.07)
 }
 
 // glyphPalette 是资源色块里字母的颜色：只从主题色里挑，深色主题下同样柔和。

@@ -27,7 +27,7 @@ type localAppDraft struct {
 
 func localModeLabel(mode string) string {
 	if mode == model.LocalAppCapture {
-		return "软件 TCP 接管（实验）"
+		return "软件 TCP 接管"
 	}
 	if mode == model.LocalAppTCPForward {
 		return "数据库 TCP 转发"
@@ -62,9 +62,9 @@ func (a *app) localAppsSection(c *ui.Context) {
 		})
 		intro := "先连接 VPN，再启动浏览器或数据库转发。普通软件及子进程的透明接管仍在开发。"
 		if captureExperimentEnabled() {
-			intro = "先连接 VPN，再添加并启动软件。软件 TCP 接管（实验）需安装辅助服务；内网 UDP/IPv6 暂不支持。"
+			intro = "先连接 VPN，再添加并启动软件。软件 TCP 接管需安装辅助服务；内网 UDP/IPv6 暂不支持。"
 			if runtime.GOOS == "windows" {
-				intro = "先连接 VPN，再添加并启动软件。Windows 软件接管（实验）需要管理员授权网络助手；内网 UDP/IPv6 暂不支持。"
+				intro = "先连接 VPN，再添加并启动软件。Windows 软件 TCP 接管需要管理员授权网络助手；内网 UDP/IPv6 暂不支持。"
 			}
 		}
 		ui.Text(c, intro).FontSize(12).TextColor(t.TextMuted).Wrap()
@@ -507,8 +507,6 @@ func (a *app) reconcileLocalApps() {
 	if a.local == nil || a.mgr == nil {
 		return
 	}
-	a.localLife.Lock()
-	defer a.localLife.Unlock()
 	a.local.StopExpiredCaptures()
 	for _, v := range a.local.Views() {
 		if !localProjectBusy(v) || v.Mode == model.LocalAppBrowser {

@@ -89,6 +89,13 @@ type StrictSession interface {
 	DialVPN(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
+// StrictUDPSession belongs to one live worker generation, never an OS route.
+type StrictUDPSession interface {
+	StrictSession
+	SupportsStrictUDP() bool
+	Done() <-chan struct{}
+}
+
 type SessionInfo struct {
 	ClientIP     string
 	DNSServer    string

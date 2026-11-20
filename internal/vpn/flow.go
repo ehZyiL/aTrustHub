@@ -19,6 +19,8 @@ type flowDials struct {
 	address, user, password string
 	vpnAddress              string
 	prepare                 bool
+	strictUDP               bool
+	udpSlots                chan struct{}
 	mu                      sync.Mutex
 	sequence                uint64
 	pending                 map[string]chan workeripc.FlowResult
@@ -62,6 +64,10 @@ func (s *processSession) dialFlow(ctx context.Context, addr string) (net.Conn, e
 }
 
 func (s *processSession) dialFlowAddress(ctx context.Context, addr, address string) (net.Conn, error) {
+	return s.dialFlowTransport(ctx, addr, address, false)
+}
+
+func (s *processSession) dialFlowTransport(ctx context.Context, addr, address string, udp bool) (net.Conn, error) {
 	f := s.flows.Load()
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
@@ -118,11 +124,18 @@ func (s *processSession) dialFlowAddress(ctx context.Context, addr, address stri
 			return nil, s.Err()
 		}
 	}
-	d, err := hubproxy.NewSOCKSDialer(address, &proxy.Auth{User: f.user + "/" + id, Password: f.password})
-	if err != nil {
-		return nil, err
+	auth := &proxy.Auth{User: f.user + "/" + id, Password: f.password}
+	var conn net.Conn
+	var err error
+	if udp {
+		conn, err = dialWorkerUDP(ctx, address, addr, auth, f.udpSlots)
+	} else {
+		d, dialErr := hubproxy.NewSOCKSDialer(address, auth)
+		if dialErr != nil {
+			return nil, dialErr
+		}
+		conn, err = d.DialContext(ctx, "tcp", addr)
 	}
-	conn, err := d.DialContext(ctx, "tcp", addr)
 	result := workeripc.ConnectionResult(conn, err)
 	result.Target = addr
 	// The worker emits before the SOCKS reply. A short grace period only covers
@@ -130,12 +143,21 @@ func (s *processSession) dialFlowAddress(ctx context.Context, addr, address stri
 	// must not turn a healthy connection into a failure if a report is missing.
 	timer := time.NewTimer(250 * time.Millisecond)
 	defer timer.Stop()
+	reported := false
 	select {
 	case result = <-ch:
+		reported = true
 	case <-ctx.Done():
 	case <-s.stopping:
 	case <-s.done:
 	case <-timer.C:
+	}
+	if udp && ctx.Err() != nil {
+		err = ctx.Err()
+		if conn != nil {
+			_ = conn.Close()
+			conn = nil
+		}
 	}
 	if err == nil {
 		select {
@@ -145,6 +167,9 @@ func (s *processSession) dialFlowAddress(ctx context.Context, addr, address stri
 			err = s.Err()
 		default:
 			err = ctx.Err()
+		}
+		if err == nil && udp && (!reported || result.Route != "vpn" || result.Failure != "") {
+			err = errors.New("核心未确认 UDP 目标的 VPN 授权")
 		}
 		if err != nil {
 			_ = conn.Close()
@@ -168,6 +193,13 @@ func (s *processSession) dialFlowAddress(ctx context.Context, addr, address stri
 type flowConn struct {
 	net.Conn
 	result workeripc.FlowResult
+}
+
+func (c *flowConn) transportDone() <-chan struct{} {
+	if u, ok := c.Conn.(*workerUDPConn); ok {
+		return u.done
+	}
+	return nil
 }
 
 func (c *flowConn) FlowResult() workeripc.FlowResult { return c.result }

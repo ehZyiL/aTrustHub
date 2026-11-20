@@ -41,7 +41,11 @@ type routeSession struct {
 	*fakeSession
 	strictCalls, ordinaryCalls atomic.Int32
 	dial                       func(context.Context) (net.Conn, error)
+	udp                        bool
 }
+
+func (s *routeSession) SupportsStrictUDP() bool { return s.udp }
+func (s *routeSession) Done() <-chan struct{}   { return s.done }
 
 func (s *routeSession) Dial(context.Context, string, string) (net.Conn, error) {
 	s.ordinaryCalls.Add(1)

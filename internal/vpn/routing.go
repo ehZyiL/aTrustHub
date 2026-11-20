@@ -32,6 +32,7 @@ func (m *Manager) routeSnapshot(boundID string) ([]routing.Gateway, map[string]r
 			continue
 		}
 		_, strict := ep.sess.(StrictSession)
+		udp := supportsStrictUDP(ep.sess) && !ep.tunServed
 		if s, ok := ep.sess.(*processSession); ok {
 			f := s.flows.Load()
 			strict = f != nil && f.vpnAddress != "" && f.prepare
@@ -40,7 +41,7 @@ func (m *Manager) routeSnapshot(boundID string) ([]routing.Gateway, map[string]r
 		if version == "" {
 			version = resourceVersion(ep.info.Resources)
 		}
-		gateways = append(gateways, routing.Gateway{ID: id, Name: ep.cfg.Name, Generation: ep.gen, Version: version, Online: !m.closed && ep.state == StateOnline && (ep.sess != nil || ep.tunServed), Excluded: !ep.cfg.InPool, Strict: strict || ep.tunServed, Current: ep.info.Resources, Known: ep.knownResources})
+		gateways = append(gateways, routing.Gateway{ID: id, Name: ep.cfg.Name, Generation: ep.gen, Version: version, Online: !m.closed && ep.state == StateOnline && (ep.sess != nil || ep.tunServed), Excluded: !ep.cfg.InPool, Strict: strict || ep.tunServed, UDP: udp, Current: ep.info.Resources, Known: ep.knownResources})
 		sessions[id] = routedSession{candidate: candidate{id: id, name: ep.cfg.Name, sess: ep.sess, apps: ep.info.Apps, served: ep.tunServed}, endpoint: ep, gen: ep.gen, version: version}
 	}
 	return gateways, sessions, m.settings
@@ -78,6 +79,10 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 		return nil, err
 	}
 	network := request.Network
+	udp := network == "udp" || network == "udp4"
+	if udp && ctx.Value(originalDialContextKey{}) == nil {
+		return nil, ErrStrictUDPUnavailable
+	}
 	gateways, sessions, settings := m.routeSnapshot(request.GatewayID)
 	if required != nil {
 		current, ok := sessions[required.id]
@@ -86,6 +91,9 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 		}
 	}
 	decision := routing.Decide(request, gateways, settings.SharedExits, settings.RoutePolicies...)
+	if udp && decision.Action == "direct" {
+		decision.Action, decision.Reason = "blocked", "UDP 捕获没有可用的原网络出口"
+	}
 	if decision.Action == "blocked" {
 		err := errors.New(decision.Reason)
 		m.logRoute(request, decision, routedSession{}, 0, 0, err)
@@ -146,6 +154,10 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 		var conn net.Conn
 		var err error
 		if c.served {
+			if udp {
+				stop()
+				return nil, ErrStrictUDPUnavailable
+			}
 			if ctx.Value(originalDialContextKey{}) != nil {
 				stop()
 				return nil, errors.New("新系统捕获不能使用旧 TUN 移交会话")
@@ -154,7 +166,7 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 			// session. New worker-backed system TUN must never use SetTunServed.
 			conn, err = directDial(attempt, "tcp", decision.Target)
 		} else {
-			conn, err = safeStrictDial(attempt, c.sess, "tcp", decision.Target)
+			conn, err = safeStrictDial(attempt, c.sess, network, decision.Target)
 		}
 		if err == nil {
 			err = attempt.Err()
@@ -172,8 +184,13 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 			m.logRoute(request, decision, c, len(tried), time.Since(started), err)
 			continue
 		}
-		m.recordRouteResult(c, true, time.Since(started))
+		if !udp {
+			m.recordRouteResult(c, true, time.Since(started))
+		}
 		m.logRoute(request, decision, c, len(tried), time.Since(started), nil)
+		if udp {
+			conn = newScopedUDPConn(conn, c.sess.(StrictUDPSession).Done(), func() bool { return m.currentRoute(c, decision.GatewayID) })
+		}
 		return conn, nil
 	}
 	if lastErr == nil {
@@ -191,6 +208,9 @@ func safeStrictDial(ctx context.Context, sess Session, network, addr string) (co
 	strict, ok := sess.(StrictSession)
 	if !ok {
 		return nil, ErrStrictVPNUnavailable
+	}
+	if (network == "udp" || network == "udp4") && !supportsStrictUDP(sess) {
+		return nil, ErrStrictUDPUnavailable
 	}
 	conn, err = strict.DialVPN(ctx, network, addr)
 	if err == nil && conn == nil {

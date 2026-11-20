@@ -113,3 +113,74 @@ func TestDeletedGatewayCaptureCannotFallBackToOriginal(t *testing.T) {
 		t.Fatal("unrelated original traffic blocked")
 	}
 }
+
+func TestCapturedUDPKeepsOwnerAndGeneration(t *testing.T) {
+	a, b := routeTestSession("A"), routeTestSession("B")
+	a.udp, b.udp = true, true
+	b.info.Resources = &workeripc.ResourceSnapshot{IPRules: []workeripc.IPRule{{Min: "10.2.0.1", Max: "10.2.0.1", PortMin: 9000, PortMax: 9000, Protocol: "udp"}}, DomainRules: []workeripc.DomainRule{{Domain: "short.test", PortMin: 9000, PortMax: 9000, Protocol: "udp"}}}
+	m := routeTestManager(t, model.DefaultSettings(), a, b)
+	var direct atomic.Int32
+	ctx := WithOriginalDial(context.Background(), func(context.Context, string, string) (net.Conn, error) { direct.Add(1); return nil, net.ErrClosed })
+	if _, err := m.Dial(context.Background(), "udp", "10.2.0.1:9000"); err == nil {
+		t.Fatal("public route opened private UDP")
+	}
+	for _, target := range []string{"10.2.0.1:9001", "192.0.2.1:9000", "198.19.0.1:9000", "[2001:db8::1]:9000"} {
+		if _, err := m.DialCapturedUDP(ctx, target); err == nil {
+			t.Fatalf("allowed %s", target)
+		}
+	}
+	b.udp = false
+	if _, err := m.DialCapturedUDP(ctx, "10.2.0.1:9000"); err == nil || b.strictCalls.Load() != 0 {
+		t.Fatal("tried old worker without UDP support")
+	}
+	b.udp = true
+	conn, err := m.DialCapturedUDP(ctx, "10.2.0.1:9000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	var payload [1]byte
+	if _, err := io.ReadFull(conn, payload[:]); err != nil || payload[0] != 'B' {
+		t.Fatalf("wrong UDP exit %q %v", payload, err)
+	}
+	events := m.bus.Tail(1)
+	if len(events) != 1 || events[0].Route.Actual != "B" || events[0].Route.Stage != "udp_ready" {
+		t.Fatalf("unexpected route log: %+v", events)
+	}
+	owner, err := m.LocalAppConnection("B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	finish, err := owner.BeginPublication("198.19.16.0/20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer finish()
+	aliases := []workeripc.DNSAlias{{Address: "198.19.16.1", Original: "10.2.0.1", TTL: 60}}
+	if err := m.mappings.Stage(owner.Key, "short.test", aliases); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.ConfirmAliases(aliases); err != nil {
+		t.Fatal(err)
+	}
+	mapped, err := m.DialCapturedUDP(ctx, "198.19.16.1:9000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mapped.Close() })
+	if _, err := io.ReadFull(mapped, payload[:]); err != nil || payload[0] != 'B' {
+		t.Fatalf("mapped UDP crossed gateway %q %v", payload, err)
+	}
+	m.Disconnect("B")
+	if _, err := conn.Write([]byte("old")); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("old association usable: %v", err)
+	}
+	for _, target := range []string{"10.2.0.1:9000", "198.19.16.1:9000"} {
+		if _, err := m.DialCapturedUDP(ctx, target); err == nil {
+			t.Fatalf("offline UDP allowed for %s", target)
+		}
+	}
+	if a.strictCalls.Load() != 0 || b.strictCalls.Load() != 2 || direct.Load() != 0 {
+		t.Fatal("UDP escaped the selected worker")
+	}
+}

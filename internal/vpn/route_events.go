@@ -57,6 +57,10 @@ func (m *Manager) logRoute(r routing.Request, d routing.Decision, c routedSessio
 		e.Actual = c.id
 	}
 	status := "TCP 已建立"
+	if err == nil && (r.Network == "udp" || r.Network == "udp4") {
+		e.Stage = "udp_ready"
+		status = "UDP 通道已就绪 · 尚未验证应答"
+	}
 	if err != nil {
 		status = "连接未建立 · " + e.Stage
 	}

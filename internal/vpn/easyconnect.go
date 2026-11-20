@@ -130,18 +130,8 @@ func NewEasyConnectConnector(path string) Connector {
 						return nil, err
 					}
 				case "ready":
-					host, port, err := net.SplitHostPort(m.Address)
-					number, portErr := strconv.Atoi(port)
-					if err != nil || portErr != nil || number < 1 || number > 65535 || host != "127.0.0.1" {
-						return nil, errors.New("核心返回了无效的本地代理地址")
-					}
-					d, err := hubproxy.NewSOCKSDialer(m.Address, &proxy.Auth{User: "hub", Password: password})
-					if err != nil {
+					if err := s.configureReady(m, password); err != nil {
 						return nil, err
-					}
-					s.dialer = d
-					if m.FlowReporting {
-						s.flows.Store(newFlowDials(m.Address, "hub", password))
 					}
 					var apps []App
 					if m.Resources != nil {
@@ -188,6 +178,42 @@ type processSession struct {
 	dnsPending  map[string]chan workeripc.Message
 	dnsSlots    chan struct{}
 	flows       atomic.Pointer[flowDials]
+}
+
+var ErrStrictVPNUnavailable = errors.New("当前核心不支持严格 VPN 拨号，请更新配套核心")
+
+func (s *processSession) configureReady(m workeripc.Message, password string) error {
+	validAddress := func(address string) bool {
+		host, port, err := net.SplitHostPort(address)
+		n, portErr := strconv.Atoi(port)
+		return err == nil && portErr == nil && n > 0 && n <= 65535 && host == "127.0.0.1"
+	}
+	if !validAddress(m.Address) {
+		return errors.New("核心返回了无效的本地代理地址")
+	}
+	capabilities := make(map[string]bool)
+	for _, capability := range m.Capabilities {
+		capabilities[capability] = true
+	}
+	strict := capabilities["strict_vpn"]
+	prepared := capabilities["flow_prepare"] && capabilities["flow_cancel"] && m.FlowReporting
+	if strict && (!prepared || !validAddress(m.VPNAddress) || m.VPNAddress == m.Address) {
+		return ErrStrictVPNUnavailable
+	}
+	d, err := hubproxy.NewSOCKSDialer(m.Address, &proxy.Auth{User: "hub", Password: password})
+	if err != nil {
+		return err
+	}
+	s.dialer = d
+	if m.FlowReporting {
+		f := newFlowDials(m.Address, "hub", password)
+		f.prepare = prepared
+		if strict {
+			f.vpnAddress = m.VPNAddress
+		}
+		s.flows.Store(f)
+	}
+	return nil
 }
 
 type workerWrite struct {
@@ -282,6 +308,12 @@ func (s *processSession) read(r io.Reader) {
 			}
 			continue
 		}
+		if m.Type == "flow_ready" && ready {
+			if flows := s.flows.Load(); flows != nil {
+				flows.deliverReady(m)
+			}
+			continue
+		}
 		if ready || (m.Type != "challenge" && m.Type != "ready") {
 			s.setError(errors.New("EasyConnect 核心返回了无效的控制事件"))
 			_ = s.cmd.Process.Kill()
@@ -347,6 +379,17 @@ func (s *processSession) Dial(ctx context.Context, network, addr string) (net.Co
 		return s.dialFlow(ctx, addr)
 	}
 	return s.dialer.DialContext(ctx, "tcp", addr)
+}
+
+func (s *processSession) DialVPN(ctx context.Context, network, addr string) (net.Conn, error) {
+	if network != "tcp" && network != "tcp4" {
+		return nil, errors.New("严格 VPN 入口目前只支持 IPv4 TCP")
+	}
+	f := s.flows.Load()
+	if f == nil || f.vpnAddress == "" || !f.prepare {
+		return nil, ErrStrictVPNUnavailable
+	}
+	return s.dialFlowAddress(ctx, addr, f.vpnAddress)
 }
 func (s *processSession) Close() error {
 	s.closeOnce.Do(func() {

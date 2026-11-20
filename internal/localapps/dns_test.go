@@ -57,7 +57,7 @@ func TestDNSFailureStopsCaptureAndReportsReason(t *testing.T) {
 	process := &fakeCapture{done: make(chan struct{})}
 	m.captureStart = func(context.Context, model.LocalApp, DialFunc) (managedCapture, error) { return process, nil }
 	cfg := CaptureConfig{Key: "current-session", Domains: []string{"corp.test"}, Exchange: func(context.Context, []byte) ([]byte, error) { return nil, net.ErrClosed }}
-	if err := m.StartCapture(captureProfile(), unusedDial, func() bool { return true }, cfg); err != nil {
+	if err := m.StartCapture(captureProfile(t), unusedDial, func() bool { return true }, cfg); err != nil {
 		t.Fatal(err)
 	}
 	awaitView(t, m, func(v View) bool { return v.Running && v.DNSDomains == 1 })

@@ -275,3 +275,65 @@ func TestFlowSlotsRespectCancellation(t *testing.T) {
 		t.Fatal("canceled request registered")
 	}
 }
+
+func TestFlowHubEmitsCancelOnTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	server := socks5.NewServer(
+		socks5.WithAuthMethods([]socks5.Authenticator{socks5.UserPassAuthenticator{Credentials: testFlowCredentials{}}}),
+		socks5.WithDialAndRequest(func(ctx context.Context, _, _ string, _ *socks5.Request) (net.Conn, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}),
+	)
+	go server.Serve(ln)
+
+	s := &processSession{
+		done:     make(chan struct{}),
+		stopping: make(chan struct{}),
+		outgoing: make(chan workerWrite, 16),
+		session:  "test-session",
+	}
+	f := newFlowDials(ln.Addr().String(), "hub", "fixture-only")
+	s.flows.Store(f)
+
+	dialCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, dialErr := s.dialFlow(dialCtx, "127.0.0.1:9999")
+	if dialErr == nil {
+		t.Fatal("dial should have timed out")
+	}
+
+	select {
+	case req := <-s.outgoing:
+		if req.message.Type != "flow_cancel" || req.message.RequestID != "1" {
+			t.Fatalf("unexpected message on outgoing: %+v", req.message)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected flow_cancel message on outgoing pipe, got none")
+	}
+
+	if len(f.slots) != 0 {
+		t.Fatalf("hub slot leaked: len=%d", len(f.slots))
+	}
+}
+
+func TestFlowProcessSessionReadyParsesVPNAddress(t *testing.T) {
+	s := &processSession{}
+	err := s.configureReady(workeripc.Message{
+		Address: "127.0.0.1:12001", VPNAddress: "127.0.0.1:12002",
+		Capabilities: []string{"strict_vpn", "flow_cancel", "flow_prepare"}, FlowReporting: true,
+	}, "fixture-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := s.flows.Load()
+	if f.address != "127.0.0.1:12001" || f.vpnAddress != "127.0.0.1:12002" || !f.prepare {
+		t.Fatalf("ordinary/strict entry configuration: ordinary=%s strict=%s prepared=%v", f.address, f.vpnAddress, f.prepare)
+	}
+}

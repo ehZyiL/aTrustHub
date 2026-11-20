@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strconv"
 	"sync"
@@ -16,15 +17,29 @@ import (
 // generation, even when a dial times out before the result arrives.
 type flowDials struct {
 	address, user, password string
+	vpnAddress              string
+	prepare                 bool
 	mu                      sync.Mutex
 	sequence                uint64
 	pending                 map[string]chan workeripc.FlowResult
+	ready                   map[string]chan workeripc.Message
 	slots                   chan struct{}
 }
 
 func newFlowDials(address, user, password string) *flowDials {
 	return &flowDials{address: address, user: user, password: password,
-		pending: make(map[string]chan workeripc.FlowResult), slots: make(chan struct{}, workeripc.MaxFlowRequests)}
+		pending: make(map[string]chan workeripc.FlowResult), ready: make(map[string]chan workeripc.Message), slots: make(chan struct{}, workeripc.MaxFlowRequests)}
+}
+
+func (f *flowDials) deliverReady(m workeripc.Message) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if ch := f.ready[m.RequestID]; ch != nil {
+		select {
+		case ch <- m:
+		default:
+		}
+	}
 }
 
 func (f *flowDials) deliver(m workeripc.Message) bool {
@@ -43,6 +58,10 @@ func (f *flowDials) deliver(m workeripc.Message) bool {
 }
 
 func (s *processSession) dialFlow(ctx context.Context, addr string) (net.Conn, error) {
+	return s.dialFlowAddress(ctx, addr, s.flows.Load().address)
+}
+
+func (s *processSession) dialFlowAddress(ctx context.Context, addr, address string) (net.Conn, error) {
 	f := s.flows.Load()
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
@@ -64,9 +83,42 @@ func (s *processSession) dialFlow(ctx context.Context, addr string) (net.Conn, e
 	id := strconv.FormatUint(f.sequence, 10)
 	ch := make(chan workeripc.FlowResult, 1)
 	f.pending[id] = ch
+	ready := make(chan workeripc.Message, 1)
+	f.ready[id] = ready
 	f.mu.Unlock()
-	defer func() { f.mu.Lock(); delete(f.pending, id); f.mu.Unlock() }()
-	d, err := hubproxy.NewSOCKSDialer(f.address, &proxy.Auth{User: f.user + "/" + id, Password: f.password})
+	defer func() { f.mu.Lock(); delete(f.pending, id); delete(f.ready, id); f.mu.Unlock() }()
+	completed := false
+	defer func() {
+		if !completed {
+			select {
+			case s.outgoing <- workerWrite{
+				ctx:     context.Background(),
+				message: workeripc.Message{Type: "flow_cancel", RequestID: id},
+				result:  make(chan error, 1),
+			}:
+			default:
+			}
+		}
+	}()
+	if f.prepare {
+		deadline, _ := ctx.Deadline()
+		if err := s.send(ctx, workeripc.Message{Type: "flow_prepare", RequestID: id, Deadline: deadline.UnixMilli()}); err != nil {
+			return nil, err
+		}
+		select {
+		case message := <-ready:
+			if message.Error != "" {
+				return nil, errors.New("VPN 核心无法准备连接：已过期或繁忙")
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-s.stopping:
+			return nil, net.ErrClosed
+		case <-s.done:
+			return nil, s.Err()
+		}
+	}
+	d, err := hubproxy.NewSOCKSDialer(address, &proxy.Auth{User: f.user + "/" + id, Password: f.password})
 	if err != nil {
 		return nil, err
 	}
@@ -109,6 +161,7 @@ func (s *processSession) dialFlow(ctx context.Context, addr string) (net.Conn, e
 	if result.Failure != "" {
 		result = workeripc.FlowResult{Target: addr, Route: "unknown"}
 	}
+	completed = true
 	return &flowConn{Conn: conn, result: result}, nil
 }
 

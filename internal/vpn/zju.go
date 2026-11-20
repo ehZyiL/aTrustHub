@@ -301,6 +301,16 @@ func (s *zjuSession) Dial(ctx context.Context, network, addr string) (net.Conn, 
 	return s.dialer.Dial(ctx, network, addr)
 }
 
+func (s *zjuSession) DialVPN(ctx context.Context, network, addr string) (net.Conn, error) {
+	if s.closed.Load() {
+		return nil, errors.New("接入点已断开")
+	}
+	if network != "tcp" && network != "tcp4" {
+		return nil, errors.New("严格 VPN 入口目前只支持 IPv4 TCP")
+	}
+	return s.dialer.DialVPN(ctx, "tcp", addr)
+}
+
 // Probe resolves a public name through the VPN's own DNS servers, as
 // ZJU-Connect's keep-alive does. The lookup goes through the tunnel and
 // keeps the aTrust session alive, so a healthy answer means the session can

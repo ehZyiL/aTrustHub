@@ -77,7 +77,7 @@ func TestCaptureOldConnectionsDoNotAffectRestart(t *testing.T) {
 		t.Cleanup(func() { b.Close() })
 		return a, nil
 	}
-	if err := m.StartCapture(captureProfile(), dial, func() bool { return true }); err != nil {
+	if err := m.StartCapture(captureProfile(t), dial, func() bool { return true }); err != nil {
 		t.Fatal(err)
 	}
 	first := <-dials
@@ -90,7 +90,7 @@ func TestCaptureOldConnectionsDoNotAffectRestart(t *testing.T) {
 		t.Fatal("active connection missing")
 	}
 	m.Stop("ide")
-	if err := m.StartCapture(captureProfile(), dial, func() bool { return true }); err != nil {
+	if err := m.StartCapture(captureProfile(t), dial, func() bool { return true }); err != nil {
 		t.Fatal(err)
 	}
 	<-dials
@@ -115,7 +115,7 @@ func TestFailedDialsCountWithoutLeakingErrorText(t *testing.T) {
 		dials <- d
 		return &fakeCapture{done: make(chan struct{})}, nil
 	}
-	if err := m.StartCapture(captureProfile(), func(context.Context, string, string) (net.Conn, error) {
+	if err := m.StartCapture(captureProfile(t), func(context.Context, string, string) (net.Conn, error) {
 		return nil, errors.New("sensitive raw gateway data")
 	}, func() bool { return true }); err != nil {
 		t.Fatal(err)

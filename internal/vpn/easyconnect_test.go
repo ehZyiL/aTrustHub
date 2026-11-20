@@ -55,6 +55,10 @@ func init() {
 		runFlowWorkerFixture(start, decoder, emit)
 		os.Exit(0)
 	}
+	if mode == "prepared-flows" {
+		runPreparedWorkerFixture(start, decoder, emit)
+		os.Exit(0)
+	}
 	server := localproxy.New(localproxy.Options{Addr: "127.0.0.1:0", Auth: &localproxy.Auth{Username: start.Config.SocksUser, Credential: start.Config.SocksPassword}, Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if addr != "private.invalid:80" {
 			return nil, errors.New("hostname lost before reaching worker")

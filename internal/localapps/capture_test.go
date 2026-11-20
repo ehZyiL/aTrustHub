@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -23,8 +25,13 @@ func (f *fakeCapture) Done() <-chan struct{} { return f.done }
 func (f *fakeCapture) Err() error            { return f.err }
 func (f *fakeCapture) Close() error          { f.once.Do(func() { close(f.done) }); return nil }
 
-func captureProfile() model.LocalApp {
-	return model.LocalApp{ID: "ide", Name: "IDE", PointID: "vpn", Mode: model.LocalAppCapture, Executable: "/usr/bin/true"}
+func captureProfile(t *testing.T) model.LocalApp {
+	t.Helper()
+	executable := filepath.Join(t.TempDir(), "capture-fixture.exe")
+	if err := os.WriteFile(executable, []byte("fixture: launcher is mocked"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	return model.LocalApp{ID: "ide", Name: "IDE", PointID: "vpn", Mode: model.LocalAppCapture, Executable: executable}
 }
 func unusedDial(context.Context, string, string) (net.Conn, error) {
 	return nil, errors.New("not used")
@@ -52,14 +59,14 @@ func TestDisconnectCancelsCaptureBeforeProgramRelease(t *testing.T) {
 		close(exited)
 		return nil, ctx.Err()
 	}
-	if err := m.StartCapture(captureProfile(), unusedDial, func() bool { return true }); err != nil {
+	if err := m.StartCapture(captureProfile(t), unusedDial, func() bool { return true }); err != nil {
 		t.Fatal(err)
 	}
 	<-started
 	if !m.View("ide").Starting {
 		t.Fatal("pending capture not shown")
 	}
-	if err := m.StartCapture(captureProfile(), unusedDial, func() bool { return true }); err == nil {
+	if err := m.StartCapture(captureProfile(t), unusedDial, func() bool { return true }); err == nil {
 		t.Fatal("duplicate pending launch accepted")
 	}
 	m.StopPoint("vpn")
@@ -88,7 +95,7 @@ func TestDisconnectCancelsDNSBeforeCaptureStartup(t *testing.T) {
 		launched.Store(true)
 		return &fakeCapture{done: make(chan struct{})}, nil
 	}
-	if err := m.StartCapture(captureProfile(), unusedDial, func() bool { return true }, aliasTestConfig("preparing")); err != nil {
+	if err := m.StartCapture(captureProfile(t), unusedDial, func() bool { return true }, aliasTestConfig("preparing")); err != nil {
 		t.Fatal(err)
 	}
 	<-started
@@ -109,14 +116,14 @@ func TestCaptureHelperFailureUpdatesStateAndAllowsRestart(t *testing.T) {
 	defer m.Close()
 	process := &fakeCapture{done: make(chan struct{}), err: errors.New("capture rules disappeared")}
 	m.captureStart = func(context.Context, model.LocalApp, DialFunc) (managedCapture, error) { return process, nil }
-	if err := m.StartCapture(captureProfile(), unusedDial, func() bool { return true }); err != nil {
+	if err := m.StartCapture(captureProfile(t), unusedDial, func() bool { return true }); err != nil {
 		t.Fatal(err)
 	}
 	awaitView(t, m, func(v View) bool { return v.Running && v.PID == 42 })
 	process.Close()
 	awaitView(t, m, func(v View) bool { return !v.Running && v.Error == "capture rules disappeared" })
 	process = &fakeCapture{done: make(chan struct{})}
-	if err := m.StartCapture(captureProfile(), unusedDial, func() bool { return true }); err != nil {
+	if err := m.StartCapture(captureProfile(t), unusedDial, func() bool { return true }); err != nil {
 		t.Fatal(err)
 	}
 	awaitView(t, m, func(v View) bool { return v.Running && v.Error == "" })
@@ -136,7 +143,7 @@ func TestManagerCloseWaitsForCaptureStartupRollback(t *testing.T) {
 		<-rollback
 		return nil, ctx.Err()
 	}
-	if err := m.StartCapture(captureProfile(), unusedDial, func() bool { return true }); err != nil {
+	if err := m.StartCapture(captureProfile(t), unusedDial, func() bool { return true }); err != nil {
 		t.Fatal(err)
 	}
 	<-started
@@ -154,7 +161,7 @@ func TestManagerCloseWaitsForCaptureStartupRollback(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Close hung")
 	}
-	if err := m.StartCapture(captureProfile(), unusedDial, func() bool { return true }); err == nil {
+	if err := m.StartCapture(captureProfile(t), unusedDial, func() bool { return true }); err == nil {
 		t.Fatal("closed manager accepted launch")
 	}
 }
@@ -166,7 +173,7 @@ func TestReconnectedVPNReleasesOldCapture(t *testing.T) {
 	active.Store(true)
 	process := &fakeCapture{done: make(chan struct{})}
 	m.captureStart = func(context.Context, model.LocalApp, DialFunc) (managedCapture, error) { return process, nil }
-	if err := m.StartCapture(captureProfile(), unusedDial, active.Load); err != nil {
+	if err := m.StartCapture(captureProfile(t), unusedDial, active.Load); err != nil {
 		t.Fatal(err)
 	}
 	awaitView(t, m, func(v View) bool { return v.Running })
@@ -180,7 +187,7 @@ func TestReconnectedVPNReleasesOldCapture(t *testing.T) {
 	default:
 		t.Fatal("stale capture was not released")
 	}
-	if err := m.StartCapture(captureProfile(), unusedDial, active.Load); err == nil {
+	if err := m.StartCapture(captureProfile(t), unusedDial, active.Load); err == nil {
 		t.Fatal("expired VPN accepted a new launch")
 	}
 }
@@ -217,7 +224,7 @@ func TestAsyncCaptureStartupFailureReportedWithProjectName(t *testing.T) {
 				// Observers may inspect state: the manager lock must be released.
 				reports <- report{name, err, m.View("ide")}
 			})
-			if err := m.StartCapture(captureProfile(), unusedDial, func() bool { return true }, configs...); err != nil {
+			if err := m.StartCapture(captureProfile(t), unusedDial, func() bool { return true }, configs...); err != nil {
 				t.Fatal(err)
 			}
 			select {

@@ -80,6 +80,12 @@ type Session interface {
 }
 
 // SessionInfo is what a Session reports about itself.
+// StrictSession never falls back to the original network. Routing must require
+// this capability for a destination claimed by a gateway.
+type StrictSession interface {
+	DialVPN(ctx context.Context, network, addr string) (net.Conn, error)
+}
+
 type SessionInfo struct {
 	ClientIP     string
 	DNSServer    string

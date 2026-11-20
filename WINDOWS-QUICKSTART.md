@@ -1,12 +1,12 @@
 # Windows 软件接管实验版
 
-当前阶段：代码已接入，需 Windows 10/11 x64 实机验证。Linux 侧的隔离流量测试与交叉编译不能代替 Windows 验收。
+当前阶段：用户已于 2026-11-20 确认 Windows DBX 软件接管成功。其他软件、断线恢复与长期共存仍需实机验收。
 
 构建标识：`0.1.0-dev-certificate-trust.1`。请完整替换解压目录内的程序。网络助手协议为 2，EasyConnect worker 协议为 5。
 
 本次增加网关证书读取、指纹计算、确认信任和重试登录。主程序与独立 worker 都需要更新。
 
-保留 `windows-capture.3` 的 IPv4 网卡修复：写回前清零 `SitePrefixLength`，并将初始化、路由、管道和进程启动错误细化到操作名称及 Win32 错误码。接管失败也会记录在应用日志中。此修正针对 `.2` 中 UAC 批准后、DBX 窗口未出现时的通用“参数错误”；旧日志不足以确认具体失败接口，仍需用新版复测。
+保留 `windows-capture.3` 的 IPv4 网卡修复：写回前清零 `SitePrefixLength`，并将初始化、路由、管道和进程启动错误细化到操作名称及 Win32 错误码。接管失败也会记录在应用日志中。用户已反馈此前失败的 DBX 接管成功；旧日志仍不足以确定原先具体失败的接口。
 
 ## Windows 本机构建
 
@@ -22,7 +22,7 @@ go test -mod=readonly -trimpath -c -o .\build\windows-capture\windows-capture-te
 .\build\windows-capture\windows-capture-tests.exe '-test.v' '-test.timeout=60s'
 ```
 
-退出旧版本后，普通双击 `build\windows-capture\easyconnect-hub.exe`，确认启动日志显示 `0.1.0-dev-certificate-trust.1`。需要同时更新 GUI、`easyconnect-worker.exe` 和 `easyconnect-hub-capture.exe`；证书读取在独立仓库的 worker 中，网卡修复在网络助手中。自测失败时保留完整输出，真实 DBX 测试仍按下面的启动步骤进行。
+退出旧版本后，普通双击 `build\windows-capture\easyconnect-hub.exe`，确认启动日志显示 `0.1.0-dev-certificate-trust.1`。需要同时更新 GUI、`easyconnect-worker.exe` 和 `easyconnect-hub-capture.exe`；证书读取在独立仓库的 worker 中，网卡修复在网络助手中。自测失败时保留完整输出，其他软件的测试按下面的启动步骤进行。
 
 Linux 上交叉编译完整 ZIP 可继续使用 `bash scripts/package-windows.sh`，包含三个程序、自测程序、说明和许可证。
 
@@ -67,6 +67,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\test-capture.ps1
 验证内容：启动前进程组为空、取消后不创建进程、拒绝重复启动、新子进程归属、完整 TCP 元组、创建时间校验、停止后软件仍存活、共享请求取消、规则回滚、TCP 数据和半关闭、UDP 数据返回。新增模拟 IP Helper 参数回写及错误定位测试，不创建真实网卡。自测不验证真实 UAC、Wintun、NRPT 或真实 VPN。
 
 ## 实机验收
+
+已收到用户对 Windows DBX“接管成功”的确认。数据库查询结果、自测脚本输出、具体构建号及下列共存/恢复场景尚未随本次反馈提供，分别保留为待验证项。
 
 - 已选软件访问一个允许测试的内网网页或数据库；项目连接记录应出现对应目标。
 - 未选软件的普通上网、本地开发服务和已有 Tailscale 目标保持原路径。

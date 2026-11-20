@@ -60,8 +60,10 @@ IPv4 interface row back through `SetIpInterfaceEntry`. The pinned sing-tun
 bypassed it. Microsoft's SetIpInterfaceEntry IPv4 contract requires zero:
 <https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-setipinterfaceentry>.
 This is a verified configuration defect and a candidate cause for the observed
-error. The `.2` log cannot identify the exact failing API, so the DBX root cause
-remains unconfirmed until the user retries `.3`.
+error. On 2026-11-20 the user confirmed that Windows DBX capture now succeeds.
+This closes the reported capture failure for that setup; the `.2` log still
+cannot establish which API originally failed. The exact running build and
+database-query results were not supplied with this confirmation.
 
 Initialization, routing, pipe verification and process-launch failures now carry
 operation/API context and numeric Win32 codes before IPC serialization. Capture
@@ -110,6 +112,9 @@ existing sing-tun dependency; its embedded amd64 DLL matches official 0.14.1.
 
 ## Validation evidence
 
+- User-reported Windows DBX capture success on 2026-11-20, following the earlier
+  UAC-approved capture failure. Other applications, SQL operations, coexistence
+  and recovery scenarios were not included in this feedback.
 - Linux `go test ./...` passed after wiring the shared UI/config changes.
 - `go test -race ./internal/wincapture ./internal/localapps ./internal/proxy` passed.
 - In-memory packet integration tests pass real TCP request/response and half-close,
@@ -126,8 +131,10 @@ existing sing-tun dependency; its embedded amd64 DLL matches official 0.14.1.
 - The ZIP and all entries in SHA256SUMS were checked. Packaging checks both worker
   protocol files are identical before building.
 
-The Windows native executable has **not run on Windows** in this workspace.
-Cross-compilation and memory packet tests do not validate Win32 runtime behavior.
+The user has run the application on Windows and confirmed DBX capture success.
+The native self-test executable has not run on Windows in this workspace, and
+no user self-test output has been supplied. Cross-compilation and memory packet
+tests alone do not validate the remaining Win32 runtime scenarios.
 The `.3` bundle uses capture helper protocol 2 (empty-job attachment); replace the
 whole ZIP together. The EasyConnect worker protocol remains unchanged at version 5.
 The new native IPv4 parameter tests have been cross-compiled, not executed here.
@@ -140,8 +147,8 @@ the new Windows backend is not claimed to make repository-wide vet clean.
    barrier, root/child ownership, creation-time mismatch, stop without termination,
    cancelled launch creating no process, duplicate launch rejection, and
    root-exit/last-child-exit behavior using loopback sockets only.
-2. GUI/UAC/named-pipe handshake and refusal/cancellation checks; Wintun creation,
-   IP Helper adapter setup and effective NRPT verification on the actual machine.
+2. Following the reported successful DBX capture, verify UAC refusal/cancellation,
+   helper failure handling and effective NRPT behavior on the actual machine.
 3. Selected versus unselected software to the same permitted target, internal DNS,
    IDEA/database/browser work, local development endpoints and Tailscale coexistence.
 4. Stop/disconnect, unexpected GUI/helper/watchdog exit, reconnect, network changes
@@ -152,5 +159,6 @@ the new Windows backend is not claimed to make repository-wide vet clean.
    This deliverable is a portable experimental ZIP, not a signed installer or an
    installed persistent Windows service.
 
-The overall Windows feature goal remains open until these runtime requirements
-are verified and any resulting defects are fixed.
+The reported Windows DBX capture failure is closed by user confirmation. Broader
+Windows acceptance remains open until the remaining runtime scenarios are
+verified and any resulting defects are fixed.

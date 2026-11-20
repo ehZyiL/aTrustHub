@@ -707,7 +707,6 @@ var gearIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stro
 // 全局 TUN / 系统代理这类开关不再堆在这里，而是放进设置页的「网络」分组，
 // 顶栏只保留一个能看出当前接管方式的状态入口。
 func (a *app) toolbar(c *ui.Context) {
-	t := c.Theme()
 	ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
 		if a.icon != nil {
 			ui.Image(c, a.icon).Size(24, 24)
@@ -716,18 +715,12 @@ func (a *app) toolbar(c *ui.Context) {
 		ui.Row(c).Grow(1)
 		ui.Segmented(c, &a.tab, "接入点", appTabLabel(a.appCount()), accessTabLabel(), "本机软件").
 			Label("主要页面")
-		chip := ui.Row(c).Padding(4, 10).Radius(8).Background(t.Surface).
-			Border(1, t.Border).AlignItems(ui.Center).Gap(6).
-			OnClick(func() { a.openSettingsAt(settingNetwork) }).
-			Tooltip("网络与接管设置")
-		chip.Children(func() {
-			colour := t.TextMuted
-			if online, _, _ := a.mgr.Counts(); online > 0 {
-				colour = t.Success
-			}
-			ui.Row(c).Size(6, 6).Radius(3).Background(colour)
-			ui.Text(c, a.networkSummary()).FontSize(11).TextColor(t.TextMuted)
-		})
+		// 这一版把接管方式直接摆在操作栏里：看一眼就知道现在是哪种接管，改选也少点一步。
+		a.settings.mode = a.captureMode()
+		sel := ui.Select(c, &a.settings.mode, captureModes()).Width(132)
+		if sel.Changed() {
+			a.applyCaptureMode(a.settings.mode)
+		}
 		iconButton(c, gearIcon, "设置", func() { a.openSettingsAt(a.settings.section) })
 		if ui.PrimaryButton(c, "＋ 接入点").Label("＋ 添加接入点").FontSize(11).Clicked() {
 			a.openNewEditor()
@@ -1716,43 +1709,72 @@ const (
 func (a *app) settingsPage(c *ui.Context) {
 	t := c.Theme()
 	d := &a.settings
-	ui.Column(c).Grow(1).MinHeight(0).Gap(10).Children(func() {
-		ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
-			ui.Text(c, "设置").FontSize(15).Bold()
+	ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Gap(12).Children(func() {
+		// 左侧分区栏：设置本身也是一块导航，和主窗口的分段导航不抢注意力。
+		ui.Column(c).Width(168).Gap(2).Children(func() {
+			ui.Text(c, "设置").FontSize(15).Bold().Padding(2, 10)
+			for _, item := range []struct {
+				label   string
+				section int
+			}{
+				{"通用", settingGeneral},
+				{"网络与接管", settingNetwork},
+				{"日志", settingLogs},
+				{"关于", settingAbout},
+			} {
+				section := item.section
+				selected := d.section == section
+				row := ui.Row(c).Padding(7, 10).Radius(8).OnClick(func() {
+					d.section = section
+					a.invalidate()
+				})
+				if selected {
+					row = row.Background(t.Surface).Border(1, t.Border)
+				}
+				row.Children(func() {
+					colour := t.TextMuted
+					if selected {
+						colour = t.Text
+					}
+					ui.Text(c, item.label).FontSize(13).TextColor(colour)
+				})
+			}
 			ui.Row(c).Grow(1)
 			if ui.Button(c, "返回").Label("关闭设置").FontSize(11).Clicked() {
 				d.open = false
 			}
 		})
-		ui.Segmented(c, &d.section, "通用", "网络与接管", "日志", "关于").Label("设置分类")
-		ui.Divider(c)
-		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4).Children(func() {
-			ui.Column(c).Gap(12).Children(func() {
-				switch d.section {
-				case settingNetwork:
-					a.captureSection(c)
-				case settingLogs:
-					a.logsSection(c)
-				case settingAbout:
-					a.aboutSection(c)
-				default:
-					a.generalSection(c)
+		// 分区栏与内容之间一条竖分线。
+		ui.Column(c).Width(1).Background(t.Border)
+		ui.Column(c).Grow(1).MinWidth(0).Gap(10).Children(func() {
+			ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4).Children(func() {
+				ui.Column(c).Gap(12).Children(func() {
+					switch d.section {
+					case settingNetwork:
+						a.captureSection(c)
+					case settingLogs:
+						a.logsSection(c)
+					case settingAbout:
+						a.aboutSection(c)
+					default:
+						a.generalSection(c)
+					}
+				})
+			})
+			if d.err != "" {
+				ui.Text(c, d.err).FontSize(11).TextColor(t.Danger)
+			}
+			ui.Divider(c)
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "改动保存后立即生效").FontSize(11).TextColor(t.TextMuted)
+				ui.Row(c).Grow(1)
+				if ui.Button(c, "取消").Label("取消设置").FontSize(11).Clicked() {
+					d.open = false
+				}
+				if ui.PrimaryButton(c, "保存").Label("保存设置").FontSize(11).Clicked() {
+					a.saveSettings()
 				}
 			})
-		})
-		if d.err != "" {
-			ui.Text(c, d.err).FontSize(11).TextColor(t.Danger)
-		}
-		ui.Divider(c)
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "改动保存后立即生效").FontSize(11).TextColor(t.TextMuted)
-			ui.Row(c).Grow(1)
-			if ui.Button(c, "取消").Label("取消设置").FontSize(11).Clicked() {
-				d.open = false
-			}
-			if ui.PrimaryButton(c, "保存").Label("保存设置").FontSize(11).Clicked() {
-				a.saveSettings()
-			}
 		})
 	})
 }

@@ -24,6 +24,7 @@ type AppConnection struct {
 	MappedDNS        func(context.Context, []byte, string) (workeripc.Message, error)
 	ConfirmAliases   func([]workeripc.DNSAlias) error
 	BeginPublication func(string) (func(), error)
+	CheckPublication func(string) error
 	Resources        *workeripc.ResourceSnapshot
 	ReservedPools    []string
 	AliasNetworks    []netpolicy.Range
@@ -61,6 +62,12 @@ func (m *Manager) LocalAppConnection(id string) (AppConnection, error) {
 	connection.AliasNetworks = m.aliasNetworks()
 	identity := dnsmapping.Identity{Key: connection.Key, GatewayID: id, Generation: gen, Version: resourceVersion(connection.Resources)}
 	connection.Identity = identity
+	connection.CheckPublication = func(prefix string) error {
+		if !active() {
+			return net.ErrClosed
+		}
+		return m.mappings.CheckPrefix(identity, prefix)
+	}
 	connection.SelectDNS = m.SelectMappedDNS
 	connection.BeginPublication = func(prefix string) (func(), error) {
 		if !active() {

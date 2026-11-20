@@ -36,9 +36,14 @@ func saveJournal(dir string, l ruleLease) error {
 	if err != nil {
 		return err
 	}
+	return writeOwnedJournal(filepath.Join(dir, l.ID+".json"), b)
+}
+
+func writeOwnedJournal(path string, b []byte) error {
 	if len(b) > maxFrame {
 		return errors.New("capture: ownership journal is too large")
 	}
+	dir := filepath.Dir(path)
 	f, err := os.CreateTemp(dir, ".pending-")
 	if err != nil {
 		return err
@@ -54,7 +59,7 @@ func saveJournal(dir string, l ruleLease) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	if err := os.Rename(f.Name(), filepath.Join(dir, l.ID+".json")); err != nil {
+	if err := os.Rename(f.Name(), path); err != nil {
 		return err
 	}
 	d, err := os.Open(dir)
@@ -66,26 +71,8 @@ func saveJournal(dir string, l ruleLease) error {
 }
 
 func readJournal(path string, uid int) (l ruleLease, err error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
-	if err != nil {
+	if err := readOwnedJournal(path, &l); err != nil {
 		return l, err
-	}
-	defer f.Close()
-	s, err := f.Stat()
-	if err != nil {
-		return l, err
-	}
-	st, ok := s.Sys().(*syscall.Stat_t)
-	if !ok || st.Uid != uint32(os.Geteuid()) || !s.Mode().IsRegular() || s.Mode().Perm() != 0600 || s.Size() > maxFrame {
-		return l, errors.New("capture: unsafe ownership journal")
-	}
-	d := json.NewDecoder(io.LimitReader(f, maxFrame+1))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&l); err != nil {
-		return l, err
-	}
-	if d.Decode(new(any)) != io.EOF {
-		return l, errors.New("capture: trailing journal data")
 	}
 	if err := l.validate(uid); err != nil {
 		return l, err
@@ -94,4 +81,29 @@ func readJournal(path string, uid int) (l ruleLease, err error) {
 		return l, errors.New("capture: journal filename mismatch")
 	}
 	return l, nil
+}
+
+func readOwnedJournal(path string, out any) error {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	s, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	st, ok := s.Sys().(*syscall.Stat_t)
+	if !ok || st.Uid != uint32(os.Geteuid()) || !s.Mode().IsRegular() || s.Mode().Perm() != 0600 || s.Size() > maxFrame {
+		return errors.New("capture: unsafe ownership journal")
+	}
+	d := json.NewDecoder(io.LimitReader(f, maxFrame+1))
+	d.DisallowUnknownFields()
+	if err := d.Decode(out); err != nil {
+		return err
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return errors.New("capture: trailing journal data")
+	}
+	return nil
 }

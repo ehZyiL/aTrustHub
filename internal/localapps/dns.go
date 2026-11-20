@@ -31,6 +31,7 @@ type CaptureConfig struct {
 	MappedDNS        func(context.Context, []byte, string) (workeripc.Message, error)
 	ConfirmAliases   func([]workeripc.DNSAlias) error
 	BeginPublication func(string) (func(), error)
+	CheckPublication func(string) error
 	ReservedPools    []string
 	AliasNetworks    []netpolicy.Range
 	Active           func() bool

@@ -25,7 +25,7 @@ func (a *app) resourceTUNActive() bool {
 }
 
 func (a *app) setupResourceTUN() {
-	if runtime.GOOS != "windows" || a.resourceTUN != nil || a.local == nil {
+	if !supportsResourceTUN() || a.resourceTUN != nil || a.local == nil {
 		return
 	}
 	var notifyMu sync.Mutex
@@ -114,7 +114,7 @@ func (a *app) resourceCaptureConfigs() ([]localapps.CaptureConfig, error) {
 			continue
 		}
 		result = append(result, localapps.CaptureConfig{Key: connection.Key, Identity: connection.Identity, Guard: !gateway.Online, Gateway: point.Server, Domains: domains, Networks: networks,
-			Exchange: connection.DNS, MappedDNS: connection.MappedDNS, SelectDNS: connection.SelectDNS, BeginPublication: connection.BeginPublication, ConfirmAliases: connection.ConfirmAliases,
+			Exchange: connection.DNS, MappedDNS: connection.MappedDNS, SelectDNS: connection.SelectDNS, BeginPublication: connection.BeginPublication, CheckPublication: connection.CheckPublication, ConfirmAliases: connection.ConfirmAliases,
 			ReservedPools: connection.ReservedPools, AliasNetworks: connection.AliasNetworks, Active: connection.Active})
 	}
 	running := a.resourceTUN != nil && a.resourceTUN.View().Running
@@ -127,8 +127,10 @@ func (a *app) resourceCaptureConfigs() ([]localapps.CaptureConfig, error) {
 	return result, nil
 }
 
+func supportsResourceTUN() bool { return runtime.GOOS == "windows" || runtime.GOOS == "linux" }
+
 func (a *app) resourceTUNControls(c *ui.Context) {
-	if runtime.GOOS != "windows" {
+	if !supportsResourceTUN() {
 		return
 	}
 	status := resourceTUNStatus{}

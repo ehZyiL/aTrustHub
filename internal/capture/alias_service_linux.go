@@ -39,6 +39,11 @@ func (s *Service) prepareAliases(ctx context.Context, owner string, req aliasReq
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	modeUnlock, err := s.lockCaptureMode(false)
+	if err != nil {
+		return nil, err
+	}
+	defer modeUnlock()
 	if len(s.aliases) >= 32 {
 		return nil, errors.New("capture: too many shared DNS leases")
 	}
@@ -93,7 +98,10 @@ func (s *Service) otherAliasReservations() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var result []string
+	result, err := s.systemReservations()
+	if err != nil {
+		return nil, err
+	}
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Name(), "easyconnect-hub-capture-") {
 			continue

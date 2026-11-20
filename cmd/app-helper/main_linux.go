@@ -15,9 +15,14 @@ import (
 func run() error {
 	uid := flag.Int("uid", -1, "authorized desktop user UID")
 	recoverOnly := flag.Bool("recover", false, "recover owned resources and exit")
+	protocolVersion := flag.Bool("protocol-version", false, "print the capture helper protocol version")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		return fmt.Errorf("unexpected helper arguments")
+	}
+	if *protocolVersion {
+		fmt.Println(capture.ProtocolVersion)
+		return nil
 	}
 	s, err := capture.NewService(*uid)
 	if err != nil {

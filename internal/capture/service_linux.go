@@ -29,6 +29,7 @@ type capturedSession struct {
 	ingress *TCP
 	owner   string
 	aliasID string
+	unlock  func()
 }
 
 // Service is a per-UID system service. Its only privileged work is installing
@@ -42,6 +43,7 @@ type Service struct {
 	mu         sync.Mutex
 	sessions   map[string]*capturedSession
 	aliases    map[string]*sharedAliases
+	system     *systemRuntime
 	lock       *os.File
 	failure    chan error
 }
@@ -96,7 +98,7 @@ func newService(uid int, dir string, run commandFunc) (*Service, error) {
 func (s *Service) Recover(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.sessions) > 0 {
+	if len(s.sessions) > 0 || s.system != nil {
 		return errors.New("capture: cannot recover while sessions are active")
 	}
 	for _, a := range s.aliases {
@@ -136,13 +138,14 @@ func (s *Service) Recover(ctx context.Context) error {
 			return err
 		}
 	}
-	return s.recoverAliases(ctx)
+	return errors.Join(recoverSystemJournal(ctx, s.run, s.systemJournalPath()), s.recoverAliases(ctx))
 }
 
 func (s *Service) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var errs []error
+	errs = append(errs, s.stopSystem())
 	for id := range s.sessions {
 		if err := s.stop(id); err != nil {
 			errs = append(errs, err)
@@ -168,6 +171,16 @@ func (s *Service) attach(ctx context.Context, owner string, req attachRequest) e
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	modeUnlock, err := s.lockCaptureMode(false)
+	if err != nil {
+		return err
+	}
+	keepMode := false
+	defer func() {
+		if !keepMode {
+			modeUnlock()
+		}
+	}()
 	if len(s.sessions) >= maxSessions {
 		return errors.New("capture: too many active launch sessions")
 	}
@@ -278,7 +291,8 @@ func (s *Service) attach(ctx context.Context, owner string, req attachRequest) e
 	if err := saveJournal(filepath.Join(s.dir, "journal"), l); err != nil {
 		return err
 	}
-	s.sessions[req.ID] = &capturedSession{lease: l, ingress: ingress, owner: owner}
+	s.sessions[req.ID] = &capturedSession{lease: l, ingress: ingress, owner: owner, unlock: modeUnlock}
+	keepMode = true
 	if alias != nil {
 		s.sessions[req.ID].aliasID = alias.route.ID
 		if err := alias.route.setGroups(ctx, s.run, s.aliasGroups(alias.route.ID, "")); err != nil {
@@ -328,6 +342,9 @@ func (s *Service) stop(id string) error {
 	unlock, err := s.lockNetwork(ctx)
 	if err != nil {
 		_ = s.sessions[id].ingress.Close()
+		if unlock := s.sessions[id].unlock; unlock != nil {
+			unlock()
+		}
 		delete(s.sessions, id)
 		select {
 		case s.failure <- err:
@@ -385,6 +402,9 @@ func (s *Service) stopWithContextLocked(ctx context.Context, id string) error {
 		err = errors.Join(err, removeRules(ctx, s.run, v.lease))
 	}
 	_ = v.ingress.Close()
+	if v.unlock != nil {
+		v.unlock()
+	}
 	delete(s.sessions, id)
 	if err != nil {
 		select {
@@ -406,6 +426,14 @@ func (s *Service) stopWithContextLocked(ctx context.Context, id string) error {
 func (s *Service) releaseOwner(owner string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.system != nil && s.system.owner == owner {
+		if err := s.stopSystem(); err != nil {
+			select {
+			case s.failure <- err:
+			default:
+			}
+		}
+	}
 	for id, v := range s.sessions {
 		a := s.aliases[v.aliasID]
 		if v.owner == owner || (a != nil && a.owner == owner) {
@@ -444,6 +472,8 @@ func (s *Service) handle(ctx context.Context, c *net.UnixConn) {
 		res := frame{Version: ProtocolVersion, Type: req.Type, ID: req.ID}
 		var err error
 		switch req.Type {
+		case "system_start", "system_sync", "system_publish", "system_ping", "system_stop", "system_cleanup":
+			res, err = s.systemControl(ctx, owner, req)
 		case "alias_prepare":
 			if req.Alias == nil {
 				err = errors.New("capture: missing DNS lease request")

@@ -336,14 +336,56 @@ func Install(ctx context.Context, run Command, l Lease) error {
 	if err := call(ctx, run, "SetLinkDNSEx", "ia(iayqs)", index, "1", "2", "4", "127", "0", "0", "1", port, ""); err != nil {
 		return err
 	}
-	args := []string{index, strconv.Itoa(len(l.Config.Domains))}
-	for _, d := range l.Config.Domains {
-		args = append(args, d, "true")
-	}
-	if err := call(ctx, run, "SetLinkDomains", "ia(sb)", args...); err != nil {
+	if err := setDomains(ctx, run, index, l.Config.Domains); err != nil {
 		return err
 	}
 	return Verify(ctx, run, l)
+}
+
+func setDomains(ctx context.Context, run Command, index string, domains []string) error {
+	args := []string{index, strconv.Itoa(len(domains))}
+	for _, d := range domains {
+		args = append(args, d, "true")
+	}
+	return call(ctx, run, "SetLinkDomains", "ia(sb)", args...)
+}
+
+// UpdateDomains changes the route-only domains on an owned link. Existing
+// queries continue to use the same listener and conflicting foreign routes
+// are checked before applying the new set.
+func UpdateDomains(ctx context.Context, run Command, lease Lease, domains []string) (Lease, error) {
+	next := lease
+	next.Config.Domains = domains
+	if err := next.Validate(); err != nil {
+		return lease, err
+	}
+	if lease.Config.Same(next.Config) {
+		return lease, nil
+	}
+	if err := Verify(ctx, run, lease); err != nil {
+		return lease, err
+	}
+	link, err := findLink(ctx, run, lease)
+	if err != nil {
+		return lease, err
+	}
+	if link == nil || link.Alias != lease.owner() {
+		return lease, errors.New("DNS 接口已变化")
+	}
+	if err := checkDomains(ctx, run, domains, link.Index); err != nil {
+		return lease, err
+	}
+	id := strconv.Itoa(link.Index)
+	err = setDomains(ctx, run, id, domains)
+	if err == nil {
+		err = Verify(ctx, run, next)
+	}
+	if err != nil {
+		undoCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
+		defer done()
+		return lease, errors.Join(err, setDomains(undoCtx, run, id, lease.Config.Domains))
+	}
+	return next, nil
 }
 
 func Verify(ctx context.Context, run Command, l Lease) error {

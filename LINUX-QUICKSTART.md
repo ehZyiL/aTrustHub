@@ -13,9 +13,9 @@ Linux 软件 TCP 接管实验入口默认显示，无需环境变量。已在 Fe
 ```
 
 `easyconnect-hub` 和 `easyconnect-worker` 必须放在同一目录，并使用同一次构建的版本。
-本批 worker 和 Linux 辅助服务各自的控制协议均为 v5。worker 增加证书读取命令，需与主程序一起更新。
-辅助服务沿用 v5，包含软件正常退出后的回收修复。
-旧 v4 助手会明确提示更新；在「本机软件」中点击「安装 / 更新辅助服务」，通过系统认证后重新检查状态。
+本批 worker 控制协议为 v6，Linux 辅助服务控制协议为 v7。请使用同一个包内的主程序、worker 和辅助服务。
+旧助手会提示更新；在「本机软件」中点击「安装 / 更新辅助服务」，通过系统认证后重新检查状态。
+检查独立 worker 时运行 `./test-worker.sh`；Linux 辅助服务的协议标记可用 `./easyconnect-hub-capture --protocol-version` 检查。
 从旧版切换时，先关闭当前主窗口，再运行本目录的 `start.sh`；仅覆盖磁盘文件不会更新已运行的进程。
 先前的 `capture-dns` 试用包仍为 v3，保留用于回退；不要混用两个包内的程序。
 关闭 Linux 主窗口会退出程序并断开连接。
@@ -159,7 +159,11 @@ sudo ./uninstall-capture-helper.sh
 
 实验中：普通软件及新子进程的 IPv4 TCP 接管、系统分域 DNS、已知内网 UDP/IPv6 拒绝。
 尚未完成：域名资源的真实网关验收、UDP 转发、IPv6 内网支持、真实 IDEA/数据库工具验证、切网/睡眠和长期共存验收；
-Linux 系统代理开关仍未提供。
+主窗口的 **系统 TUN (TCP)** 使用已登录、加入统一资源池的网关。它接管已知 IPv4 资源的 TCP 与已登记后缀的系统 DNS。未命中资源的目标沿用原有网络；已有精确网络路由、DNS 后缀或策略标记冲突时，Hub 会显示错误。Fedora 宿主上与其他 VPN 共存仍待实机验收。
+
+系统 TUN 和按软件接管不能同时启用。切换前先关闭当前接管；如果已经解析过内网域名，新模式分配的 DNS 映射池可能不同。遇到提示时只需重新登录对应网关，再开启需要的接管模式。仅用 IP 资源不涉及映射池切换。
+
+Linux 不提供系统代理开关。已设置显式代理或使用自带 DoH 的软件，需按其自身配置分流。
 原“应用”页现名为“网关资源”；“本机软件”页管理本机代理入口。
 基础代理不改系统路由或 DNS。启用软件接管后会临时添加自己的 nftables 表、策略路由和 DNS 专用接口；
 停止接管时只清理这些对象；同一 VPN 的多个软件共享 DNS，最后一个软件停止后再回收。
@@ -175,7 +179,7 @@ Tailscale 节点通信和真实业务的长期共存仍待验证。
 目录结构应为相邻的 `aTrustHub/`、`zju-connect/`：
 
 本批配套 `zju-connect` 提交为 `c8cf56658d878add57a281aee7b165a6944179fa`（`feat/desktop-worker` 分支）。
-worker 与 GUI 使用 v5 控制协议，增加不含凭据的证书读取命令；打包脚本会检查双方消息结构一致。
+worker 与 GUI 使用 v6 控制协议，增加不含凭据的证书读取命令；打包脚本会检查双方消息结构一致。
 
 ```bash
 cd aTrustHub
@@ -190,6 +194,8 @@ EASYCONNECT_BUNDLE_NAME=easyconnect-hub-linux-amd64-certificate-trust ./scripts/
 ```
 
 Fedora 透明 TCP 的开发实验：`bash scripts/test-capture-linux.sh`。
+
+系统 TUN 的隔离验证：`bash scripts/test-system-tun-linux.sh`。它在独立网络命名空间内验证包路径、双网关隔离和助手退出恢复。
 脚本仅在新建的 user/network namespace 中测试规则，不需要 sudo；普通 `go test` 会跳过此实验。
 脚本覆盖透明转发及真实辅助服务控制流程、启动屏障、子进程、失败回滚、崩溃日志恢复与规则被清空。
 隔离测试不等于宿主网络或真实 IDEA 场景验收。
@@ -198,7 +204,7 @@ Fedora 透明 TCP 的开发实验：`bash scripts/test-capture-linux.sh`。
 它只接管临时测试进程、使用本机模拟服务，并临时安装随机 `.test` 后缀的分域 DNS；需要现有辅助服务，
 不登录真实网关。测试检查进程/子进程、未选中进程、回环、DNS UDP/TCP、域名映射及原出口还原，
 比较回收前后的 IPv4 路由、策略规则和 DNS 后缀，并检查助手未重启。
-2026-11-20 已在更新后的 v5 助手上通过 TCP、DNS/域名映射、软件自然退出三项宿主测试，助手没有重启。
+2026-11-20 已在 v5 软件接管模式上通过 TCP、DNS/域名映射、软件自然退出三项 Fedora 宿主测试，助手没有重启。Linux 系统 TUN 的宿主验证另见 [本轮验收清单](../docs/tun-fedora-acceptance-2026-11-21.md)。
 
 DNS 系统接口验证运行 `bash scripts/test-resolved-linux.sh`；TCP/DNS 联合验证运行
 `bash scripts/test-capture-dns-linux.sh`。它们在新的用户、网络、挂载命名空间中启动独立 D-Bus 与

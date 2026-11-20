@@ -136,6 +136,22 @@ func (r *Registry) Begin(id Identity, prefix string, resources []netpolicy.Range
 	return func() { once.Do(func() { r.mu.Lock(); lease.inFlight--; r.prune(); r.mu.Unlock() }) }, nil
 }
 
+// CheckPrefix checks a transport acknowledgement without allocating a pool.
+// A worker that has answered DNS cannot change pools until its next login.
+func (r *Registry) CheckPrefix(id Identity, raw string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.prune()
+	prefix, err := netip.ParsePrefix(raw)
+	if err != nil || !ValidPrefix(prefix) {
+		return errors.New("无效 DNS 映射池")
+	}
+	if current := r.pools[id.Key]; current != nil && (current.retired || current.prefix != prefix || current.identity != id) {
+		return errors.New("会话映射池不能重新绑定")
+	}
+	return nil
+}
+
 func (r *Registry) Stage(key, domain string, aliases []workeripc.DNSAlias) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

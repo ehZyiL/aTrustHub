@@ -1,7 +1,7 @@
 # EasyConnect Hub · Linux 测试版
 
-当前为 `0.1.0-dev-certificate-trust.1` 开发版，支持 EasyConnect 登录、代理浏览器和数据库 TCP 转发，
-Linux 软件 TCP 接管实验入口默认显示，无需环境变量。已在 Fedora 45 x86_64 启动原生窗口。
+当前为 `0.1.0-dev-multigateway-tun.4` 开发版，支持 EasyConnect 登录、代理浏览器、数据库 TCP 转发与多网关系统 TCP 接管。
+Linux 软件 TCP 接管实验入口默认显示，无需环境变量。早期版本已在 Fedora 45 x86_64 启动原生窗口；本批系统 TUN 的 Fedora 宿主实测待验。
 无需 Docker 或 v2rayN；基础代理以普通用户运行，软件接管需要先安装系统辅助服务。
 
 ## 启动
@@ -16,8 +16,9 @@ Linux 软件 TCP 接管实验入口默认显示，无需环境变量。已在 Fe
 本批 worker 控制协议为 v6，Linux 辅助服务控制协议为 v7。请使用同一个包内的主程序、worker 和辅助服务。
 旧助手会提示更新；在「本机软件」中点击「安装 / 更新辅助服务」，通过系统认证后重新检查状态。
 检查独立 worker 时运行 `./test-worker.sh`；Linux 辅助服务的协议标记可用 `./easyconnect-hub-capture --protocol-version` 检查。
+`COMPONENTS.txt` 记录配套协议及能力范围；运行 `sha256sum -c SHA256SUMS` 检查完整包。安装器会在停止旧服务前拒绝协议不匹配的候选 helper。
 从旧版切换时，先关闭当前主窗口，再运行本目录的 `start.sh`；仅覆盖磁盘文件不会更新已运行的进程。
-先前的 `capture-dns` 试用包仍为 v3，保留用于回退；不要混用两个包内的程序。
+旧试用包的 helper 协议不同，不要混用程序；存在新版本恢复记录时，不应仅替换成旧助手运行。
 关闭 Linux 主窗口会退出程序并断开连接。
 
 ## 登录与验证码

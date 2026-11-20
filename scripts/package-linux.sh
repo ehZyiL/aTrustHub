@@ -36,8 +36,11 @@ install -m 0644 "$worker_root/LICENSE" "$bundle/LICENSES/ZJU-Connect-AGPL-3.0.tx
 install -m 0644 "$worker_root/third_party/utls/LICENSE" "$bundle/LICENSES/uTLS.txt"
 install -m 0644 "$worker_root/third_party/utls/dicttls/LICENSE" "$bundle/LICENSES/uTLS-dicttls.txt"
 install -m 0644 "$worker_root/third_party/utls/EASYCONNECT_PATCH.md" "$bundle/LICENSES/uTLS-PATCH.md"
-mygo_dir=$(cd "$app_root" && "$go_tool" list -m -f '{{.Dir}}' github.com/egoist/mygo)
-install -m 0644 "$mygo_dir/LICENSE" "$bundle/LICENSES/MyGo-MIT.txt"
+for module in github.com/egoist/mygo github.com/mythologyli/sing-tun github.com/metacubex/gvisor github.com/sagernet/sing golang.org/x/sys; do
+  module_dir=$(cd "$app_root" && "$go_tool" list -m -f '{{.Dir}}' "$module")
+  module_name=${module##*/}
+  install -m 0644 "$module_dir/LICENSE" "$bundle/LICENSES/$module_name.txt"
+done
 install -m 0644 "$app_root/LINUX-QUICKSTART.md" "$bundle/README.md"
 cat > "$bundle/COMPONENTS.txt" <<EOF
 EasyConnect Hub Linux bundle
@@ -58,7 +61,7 @@ chmod +x "$bundle/start.sh"
 chmod +x "$bundle/easyconnect-hub" "$bundle/easyconnect-worker" "$bundle/easyconnect-hub-capture" "$bundle/test-worker.sh" "$bundle/install-capture-helper.sh" "$bundle/uninstall-capture-helper.sh"
 
 cd "$bundle"
-sha256sum easyconnect-hub easyconnect-worker easyconnect-hub-capture easyconnect-hub-capture@.service install-capture-helper.sh uninstall-capture-helper.sh test-worker.sh COMPONENTS.txt > SHA256SUMS
+find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
 cd "$app_root/build"
 final_bundle="$app_root/build/$bundle_name"
 if [[ -e "$final_bundle" || -L "$final_bundle" ]]; then

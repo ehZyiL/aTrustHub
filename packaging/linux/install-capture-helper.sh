@@ -22,6 +22,11 @@ for capture_tool in /usr/bin/ip /usr/bin/nft /usr/bin/busctl /usr/bin/systemd-ru
 done
 test -x "$bundle_dir/easyconnect-hub-capture"
 test -f "$bundle_dir/easyconnect-hub-capture@.service"
+capture_protocol=$("$bundle_dir/easyconnect-hub-capture" --protocol-version)
+if [[ "$capture_protocol" != 7 ]]; then
+  printf 'Capture helper protocol mismatch: expected 7, got %s. Replace the complete bundle.\n' "$capture_protocol" >&2
+  exit 1
+fi
 capture_unit="easyconnect-hub-capture@${capture_uid}.service"
 
 # Serialize GUI and terminal installations/uninstalls, across desktop users.

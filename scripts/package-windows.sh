@@ -59,11 +59,12 @@ install -m 0644 "$app_root/packaging/windows/test-capture.ps1" "$bundle/test-cap
 install -m 0644 "$app_root/packaging/windows/test-worker.ps1" "$bundle/test-worker.ps1"
 
 cd "$bundle"
-sha256sum easyconnect-hub.exe easyconnect-worker.exe easyconnect-hub-capture.exe windows-capture-tests.exe COMPONENTS.txt test-capture.ps1 test-worker.ps1 > SHA256SUMS
+find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
 python_bin=python3
 if ! command -v python3 >/dev/null 2>&1 || ! python3 -c "" 2>/dev/null; then
   python_bin=python
 fi
+cd "$app_root/build"
 final_bundle="$app_root/build/$bundle_name"
 if [[ -e "$final_bundle" || -L "$final_bundle" ]]; then
   rm -rf -- "$final_bundle"
@@ -71,6 +72,9 @@ fi
 mv -- "$bundle" "$final_bundle"
 trap - EXIT
 bundle="$final_bundle"
+# PowerShell/worker execution can hold directory handles on Windows. Run the
+# process check after the directory rename, before replacing the archive.
+pwsh -NoProfile -ExecutionPolicy Bypass -File "$bundle/test-worker.ps1"
 archive_tmp="$app_root/build/.${bundle_name}.zip.tmp.$$"
 trap 'rm -f -- "$archive_tmp"' EXIT
 "$python_bin" - "$bundle" "$archive_tmp" <<'PY'

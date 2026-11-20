@@ -47,6 +47,8 @@ type linuxSystemCapture struct {
 	op        sync.Mutex
 	mu        sync.RWMutex
 	lease     linuxSystemLease
+	pool      *dnsPool
+	bindings  map[string]*dnsBinding
 	config    capture.SystemConfig
 	publish   map[string]linuxSystemDNS
 	selectDNS func([]byte) (string, func() bool, error)
@@ -68,7 +70,7 @@ func (m *Manager) StartSystemCapture(ctx context.Context, configs []CaptureConfi
 		return nil, err
 	}
 	life, cancel := context.WithCancel(context.Background())
-	r := &linuxSystemCapture{cancel: cancel, done: make(chan struct{})}
+	r := &linuxSystemCapture{cancel: cancel, done: make(chan struct{}), pool: &m.dns}
 	if err := r.start(ctx, life, configs, dial); err != nil {
 		if cleanup := r.Close(); cleanup != nil {
 			return r, errors.Join(err, cleanup)
@@ -178,6 +180,53 @@ func (r *linuxSystemCapture) configure(ctx context.Context, configs []CaptureCon
 	if len(request.Resources) == 0 {
 		return nil
 	}
+	// Both modes hold the same per-generation lease. Releasing this binding
+	// keeps the dormant reservation while its VPN worker remains online.
+	bindings := make(map[string]*dnsBinding)
+	committed := false
+	defer func() {
+		if !committed {
+			for key, binding := range bindings {
+				if r.bindings[key] != binding {
+					binding.release()
+				}
+			}
+		}
+	}()
+	if r.pool != nil {
+		for i := range request.Resources {
+			resource := &request.Resources[i]
+			if resource.Guard || len(resource.Domains) == 0 {
+				continue
+			}
+			config := byID[resource.ID]
+			binding := r.bindings[config.Key]
+			if binding == nil {
+				var err error
+				binding, err = r.pool.acquireContext(ctx, config)
+				if err != nil {
+					return err
+				}
+			}
+			bindings[config.Key] = binding
+			alias, ok := binding.alias.(interface {
+				Ref() *capture.AliasRef
+				Prefix() string
+			})
+			if !ok {
+				return errors.New("共享 DNS 租约不支持系统接管，请更新完整安装包")
+			}
+			if resource.RequiredPrefix != "" && resource.RequiredPrefix != alias.Prefix() {
+				return errors.New("共享 DNS 租约与当前 worker 映射池不一致")
+			}
+			if config.CheckPublication != nil {
+				if err := config.CheckPublication(alias.Prefix()); err != nil {
+					return err
+				}
+			}
+			resource.RequiredPrefix, resource.Alias = alias.Prefix(), alias.Ref()
+		}
+	}
 	slices.SortFunc(request.Resources, func(a, b capture.SystemResource) int { return cmp.Compare(a.ID, b.ID) })
 	request.Reserved = slices.Sorted(maps.Keys(reservations))
 	var err error
@@ -186,6 +235,7 @@ func (r *linuxSystemCapture) configure(ctx context.Context, configs []CaptureCon
 		return err
 	}
 	if !start && reflect.DeepEqual(request, r.config) {
+		committed = true
 		return nil
 	}
 	known := slices.Clone(r.known)
@@ -225,6 +275,12 @@ func (r *linuxSystemCapture) configure(ctx context.Context, configs []CaptureCon
 	r.mu.Lock()
 	r.config, r.selectDNS, r.publish = request, selector, publishers
 	r.mu.Unlock()
+	for key, binding := range r.bindings {
+		if bindings[key] != binding {
+			binding.release()
+		}
+	}
+	r.bindings, committed = bindings, true
 	return nil
 }
 
@@ -284,6 +340,20 @@ func (r *linuxSystemCapture) watch(ctx context.Context) {
 				return
 			}
 			err := r.lease.Ping(ctx)
+			if err == nil {
+				for key, binding := range r.bindings {
+					select {
+					case <-binding.done:
+						r.mu.RLock()
+						publisher, ok := r.publish[key]
+						r.mu.RUnlock()
+						if ok && publisher.config.Active() {
+							err = errors.New("系统 DNS 共享租约已结束")
+						}
+					default:
+					}
+				}
+			}
 			r.op.Unlock()
 			if err != nil {
 				r.fail(err)
@@ -329,6 +399,10 @@ func (r *linuxSystemCapture) Close() error {
 			return err
 		}
 		r.lease = nil
+	}
+	for key, binding := range r.bindings {
+		binding.release()
+		delete(r.bindings, key)
 	}
 	return nil
 }

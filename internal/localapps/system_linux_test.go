@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/miekg/dns"
@@ -28,6 +29,9 @@ func (f *fakeSystemLease) configure(config capture.SystemConfig) (capture.System
 	for i, resource := range config.Resources {
 		if !resource.Guard && len(resource.Domains) > 0 {
 			state.Prefixes[resource.ID] = fmt.Sprintf("198.19.%d.0/20", i*16)
+			if resource.RequiredPrefix != "" {
+				state.Prefixes[resource.ID] = resource.RequiredPrefix
+			}
 		}
 	}
 	return state, f.err
@@ -45,6 +49,105 @@ func (f *fakeSystemLease) Publish(_ context.Context, id string, aliases []worker
 }
 func (f *fakeSystemLease) Ping(context.Context) error { return f.err }
 func (f *fakeSystemLease) Close() error               { return nil }
+
+type transferableAlias struct {
+	fakeAliasBinding
+	prefix string
+	ref    capture.AliasRef
+}
+
+func (a *transferableAlias) Prefix() string         { return a.prefix }
+func (a *transferableAlias) Ref() *capture.AliasRef { return &a.ref }
+
+func TestLinuxSystemAndSoftwareReuseOneGenerationLeaseInEitherOrder(t *testing.T) {
+	for _, softwareFirst := range []bool{true, false} {
+		t.Run(fmt.Sprint("softwareFirst=", softwareFirst), func(t *testing.T) {
+			var active atomic.Bool
+			active.Store(true)
+			created := 0
+			pool := &dnsPool{prepare: func(context.Context, string, CaptureConfig) (aliasBinding, error) {
+				created++
+				return &transferableAlias{fakeAliasBinding: fakeAliasBinding{done: make(chan struct{})}, prefix: "198.19.0.0/20",
+					ref: capture.AliasRef{ID: strings.Repeat("a", 32), Token: strings.Repeat("b", 64)}}, nil
+			}}
+			t.Cleanup(pool.close)
+			config := aliasTestConfig("A/1")
+			config.Active, config.Gateway = active.Load, "203.0.113.1"
+			config.SelectDNS = func([]byte) (string, func() bool, error) { return config.Key, active.Load, nil }
+			config.BeginPublication = func(string) (func(), error) { return func() {}, nil }
+			config.ConfirmAliases = func([]workeripc.DNSAlias) error { return nil }
+			var software *dnsBinding
+			if softwareFirst {
+				var err error
+				software, err = pool.acquire(config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				software.release()
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			f := &fakeSystemLease{}
+			r := &linuxSystemCapture{lease: f, pool: pool, cancel: cancel, done: make(chan struct{})}
+			if err := r.configure(ctx, []CaptureConfig{config}, true); err != nil {
+				t.Fatal(err)
+			}
+			if f.request.Resources[0].Alias == nil || f.request.Resources[0].Alias.Token != strings.Repeat("b", 64) || created != 1 {
+				t.Fatal("system did not acquire the existing worker capability")
+			}
+			if softwareFirst && software.alias != r.bindings[config.Key].alias {
+				t.Fatal("system mode created a second mapping identity")
+			}
+			if err := r.Reconcile(ctx, []CaptureConfig{config}); err != nil || f.syncs != 0 {
+				t.Fatal("stable shared lease repeated helper updates", err)
+			}
+			if err := r.Close(); err != nil {
+				t.Fatal(err)
+			}
+			software, err := pool.acquire(config)
+			if err != nil || created != 1 {
+				t.Fatal("returning to software mode replaced the lease", created, err)
+			}
+			active.Store(false)
+			software.release()
+		})
+	}
+}
+
+func TestLinuxSystemFailedTransferReleasesReferenceButPreservesWorkerLease(t *testing.T) {
+	pool := &dnsPool{prepare: func(context.Context, string, CaptureConfig) (aliasBinding, error) {
+		return &transferableAlias{fakeAliasBinding: fakeAliasBinding{done: make(chan struct{})}, prefix: "198.19.0.0/20",
+			ref: capture.AliasRef{ID: strings.Repeat("a", 32), Token: strings.Repeat("b", 64)}}, nil
+	}}
+	t.Cleanup(pool.close)
+	config := aliasTestConfig("A/1")
+	config.Gateway = "203.0.113.1"
+	config.SelectDNS = func([]byte) (string, func() bool, error) { return config.Key, config.Active, nil }
+	config.BeginPublication = func(string) (func(), error) { return func() {}, nil }
+	config.ConfirmAliases = func([]workeripc.DNSAlias) error { return nil }
+	f := &fakeSystemLease{err: errors.New("transfer failed")}
+	r := &linuxSystemCapture{lease: f, pool: pool}
+	if err := r.configure(context.Background(), []CaptureConfig{config}, true); err == nil {
+		t.Fatal("transfer failure ignored")
+	}
+	pool.mu.Lock()
+	entry := pool.entries[config.Key]
+	refs := entry.refs
+	pool.mu.Unlock()
+	if refs != 0 || len(r.bindings) != 0 {
+		t.Fatal("failed transition retained a mode reference", refs)
+	}
+	select {
+	case <-entry.alias.Done():
+		t.Fatal("failed transition destroyed the online worker lease")
+	default:
+	}
+	f.err = nil
+	if err := r.configure(context.Background(), []CaptureConfig{config}, true); err != nil || r.bindings[config.Key].alias != entry.alias {
+		t.Fatal("retry could not reuse the live capability", err)
+	}
+	r.bindings[config.Key].release()
+}
 
 func TestLinuxSystemReconcileKeepsGuardsAndDoesNotRepeatUnchangedTransactions(t *testing.T) {
 	f := &fakeSystemLease{}

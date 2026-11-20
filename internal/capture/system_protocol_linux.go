@@ -19,6 +19,7 @@ type SystemResource struct {
 	Networks       []netpolicy.Range `json:"networks,omitempty"`
 	Domains        []string          `json:"domains,omitempty"`
 	RequiredPrefix string            `json:"requiredPrefix,omitempty"`
+	Alias          *AliasRef         `json:"alias,omitempty"`
 }
 
 type SystemConfig struct {
@@ -52,6 +53,9 @@ func (c SystemConfig) validate() error {
 			return errors.New("capture: invalid system gateway identity")
 		}
 		seen[resource.ID] = true
+		if resource.Alias != nil && (!sessionPattern.MatchString(resource.Alias.ID) || len(resource.Alias.Token) != 64 || resource.Guard || len(resource.Domains) == 0) {
+			return errors.New("capture: invalid shared system DNS reference")
+		}
 		if resource.RequiredPrefix != "" {
 			prefix, err := netip.ParsePrefix(resource.RequiredPrefix)
 			if err != nil || !dnsmapping.ValidPrefix(prefix) || resource.Guard || len(resource.Domains) == 0 {

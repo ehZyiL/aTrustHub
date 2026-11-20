@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	// Version 9 enforces worker DNS pool constraints before system updates.
-	ProtocolVersion = 9
+	// Version 10 transfers live DNS capabilities between capture modes.
+	ProtocolVersion = 10
 	maxFrame        = 64 << 10
 	maxSessions     = 16
 	LauncherFlag    = "--managed-capture-program"
@@ -66,9 +66,10 @@ type AliasRef struct {
 }
 
 type aliasRequest struct {
-	DNS      resolved.Config   `json:"dns"`
-	Networks []netpolicy.Range `json:"networks,omitempty"`
-	Reserved []string          `json:"reserved,omitempty"`
+	DNS            resolved.Config   `json:"dns"`
+	Networks       []netpolicy.Range `json:"networks,omitempty"`
+	Reserved       []string          `json:"reserved,omitempty"`
+	RequiredPrefix string            `json:"requiredPrefix,omitempty"`
 }
 
 type attachRequest struct {

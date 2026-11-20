@@ -27,6 +27,7 @@ import (
 type systemPool struct {
 	Prefix  netip.Prefix
 	Entries map[netip.Addr]aliasRecord
+	Alias   *sharedAliases
 	Retired bool
 	Flows   int
 }
@@ -35,6 +36,7 @@ type systemRuntime struct {
 	owner    string
 	run      commandFunc
 	path     string
+	aliasDir string
 	device   *systemDevice
 	stack    *packetstack.Stack
 	original *proxy.Server
@@ -258,9 +260,12 @@ func (r *systemRuntime) NewError(_ context.Context, err error) {
 
 // apply extends resource guards before acknowledging the new worker snapshot.
 // Previously captured resources stay guarded until the mode is stopped.
-func (r *systemRuntime) apply(ctx context.Context, config SystemConfig, foreign []string) error {
+func (r *systemRuntime) apply(ctx context.Context, config SystemConfig, foreign []string, sharedPools ...map[string]*sharedAliases) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.ctx != nil && r.ctx.Err() != nil {
+		return net.ErrClosed
+	}
 	if config.Upstream.Address != r.upstream.Address || config.Upstream.Username != r.upstream.Username ||
 		config.Upstream.Password != r.upstream.Password || config.DNSAddress != r.dnsAddr {
 		return errors.New("capture: system upstream changed")
@@ -269,6 +274,14 @@ func (r *systemRuntime) apply(ctx context.Context, config SystemConfig, foreign 
 		return err
 	}
 	state, err := snapshot(ctx, r.run)
+	if err != nil {
+		return err
+	}
+	shared := map[string]*sharedAliases{}
+	if len(sharedPools) > 0 {
+		shared = sharedPools[0]
+	}
+	state, err = r.sharedAliasState(ctx, state, shared)
 	if err != nil {
 		return err
 	}
@@ -312,7 +325,7 @@ func (r *systemRuntime) apply(ctx context.Context, config SystemConfig, foreign 
 	}
 	reserved := append(slices.Clone(config.Reserved), foreign...)
 	for prefix, expiry := range r.journal.Pools {
-		if expiry > now {
+		if expiry > now && !sharedPrefix(shared, prefix) {
 			reserved = append(reserved, prefix)
 		}
 	}
@@ -346,8 +359,16 @@ func (r *systemRuntime) apply(ctx context.Context, config SystemConfig, foreign 
 		if pool != nil && resource.RequiredPrefix != "" && pool.Prefix.String() != resource.RequiredPrefix {
 			return errors.New("capture: worker DNS pool cannot change; reconnect this gateway before changing capture modes")
 		}
+		alias := shared[resource.ID]
+		if pool != nil && pool.Alias != alias {
+			return errors.New("capture: system DNS lease identity cannot change")
+		}
 		if pool == nil {
-			raw, err := chooseAliasPrefix(state, config.AliasRanges, reserved, resource.RequiredPrefix)
+			required := resource.RequiredPrefix
+			if alias != nil {
+				required = alias.route.Prefix
+			}
+			raw, err := chooseAliasPrefix(state, config.AliasRanges, reserved, required)
 			if err != nil {
 				return err
 			}
@@ -355,7 +376,12 @@ func (r *systemRuntime) apply(ctx context.Context, config SystemConfig, foreign 
 				return errors.New("capture: worker DNS pool cannot change; reconnect this gateway before changing capture modes")
 			}
 			prefix := netip.MustParsePrefix(raw)
-			pool = &systemPool{Prefix: prefix, Entries: make(map[netip.Addr]aliasRecord)}
+			pool = &systemPool{Prefix: prefix, Entries: make(map[netip.Addr]aliasRecord), Alias: alias}
+			if alias != nil {
+				for addr, entry := range alias.journal.Entries {
+					pool.Entries[netip.MustParseAddr(addr)] = entry
+				}
+			}
 			pools[resource.ID] = pool
 			desired[prefix] = true
 			reserved = append(reserved, raw)
@@ -368,8 +394,17 @@ func (r *systemRuntime) apply(ctx context.Context, config SystemConfig, foreign 
 	if err := r.journal.Routes.checkOverlap(state, slices.Collect(maps.Keys(desired))); err != nil {
 		return err
 	}
-	if err := r.install(ctx, desired, slices.Sorted(maps.Keys(domains))); err != nil {
+	// Journal imported lifetimes before removing original-destination recovery
+	// tables. A crash can reserve/reject cached addresses, never reassign them.
+	if err := r.reserveSharedAliases(shared); err != nil {
 		return err
+	}
+	undo, err := r.suspendSharedAliases(ctx, shared)
+	if err != nil {
+		return err
+	}
+	if err := r.install(ctx, desired, slices.Sorted(maps.Keys(domains))); err != nil {
+		return errors.Join(err, undo())
 	}
 	for id, pool := range pools {
 		pool.Retired = active[id] == ""
@@ -492,7 +527,7 @@ func (r *systemRuntime) publish(id string, aliases []workeripc.DNSAlias) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	pool := r.pools[id]
-	if pool == nil || pool.Retired || len(aliases) > 32 {
+	if pool == nil || pool.Retired || pool.Alias != nil && pool.Alias.owner == "" || len(aliases) > 32 {
 		return errors.New("capture: no active system DNS scope")
 	}
 	now, err := bootNow()
@@ -521,7 +556,7 @@ func (r *systemRuntime) publish(id string, aliases []workeripc.DNSAlias) error {
 		if old.Original != "" && old.Original != alias.Original {
 			return errors.New("capture: published DNS identity cannot be changed")
 		}
-		expiry := max(old.Expires, now+int64(time.Duration(alias.TTL)*time.Second))
+		expiry := max(old.Expires, now+int64((time.Duration(alias.TTL)+2)*time.Second))
 		entries[addr] = aliasRecord{Original: alias.Original, Expires: expiry}
 		next.Pools[pool.Prefix.String()] = max(next.Pools[pool.Prefix.String()], expiry+int64(aliasRetireGrace))
 	}
@@ -533,6 +568,17 @@ func (r *systemRuntime) publish(id string, aliases []workeripc.DNSAlias) error {
 			return err
 		}
 		r.journal.Pools = next.Pools
+		if pool.Alias != nil {
+			journal := pool.Alias.journal
+			journal.Entries = make(map[string]aliasRecord, len(entries))
+			for addr, entry := range entries {
+				journal.Entries[addr.String()] = entry
+			}
+			if err := saveAliasJournal(r.aliasDir, journal); err != nil {
+				return err
+			}
+			pool.Alias.journal = journal
+		}
 	}
 	pool.Entries = entries
 	return nil
@@ -541,6 +587,9 @@ func (r *systemRuntime) publish(id string, aliases []workeripc.DNSAlias) error {
 func (r *systemRuntime) verify(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.ctx != nil && r.ctx.Err() != nil {
+		return net.ErrClosed
+	}
 	if r.failure != nil {
 		return r.failure
 	}

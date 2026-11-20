@@ -426,6 +426,9 @@ func (s *Service) stopWithContextLocked(ctx context.Context, id string) error {
 func (s *Service) releaseOwner(owner string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.system != nil {
+		s.system.revokeAliasOwner(owner)
+	}
 	if s.system != nil && s.system.owner == owner {
 		if err := s.stopSystem(); err != nil {
 			select {

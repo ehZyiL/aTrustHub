@@ -2,9 +2,11 @@ package capture
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -88,6 +90,9 @@ func (s *Service) systemControl(ctx context.Context, owner string, req frame) (f
 
 // Caller holds the service mutex and the network transaction lock.
 func (s *Service) startSystem(ctx context.Context, owner string, config SystemConfig) error {
+	if _, err := s.systemAliases(config); err != nil {
+		return err
+	}
 	unlock, err := s.lockCaptureMode(true)
 	if err != nil {
 		return err
@@ -126,14 +131,49 @@ func (s *Service) startSystem(ctx context.Context, owner string, config SystemCo
 }
 
 func (s *Service) syncSystem(ctx context.Context, config SystemConfig) error {
-	reserved, err := s.otherAliasReservations()
+	s.system.aliasDir = s.aliasDir()
+	shared, err := s.systemAliases(config)
+	if err != nil {
+		return err
+	}
+	reserved, err := s.otherAliasReservations(true)
 	if err != nil {
 		return err
 	}
 	for _, alias := range s.aliases {
-		reserved = append(reserved, alias.route.Prefix)
+		borrowed := false
+		for _, a := range shared {
+			borrowed = borrowed || a == alias
+		}
+		if !borrowed {
+			reserved = append(reserved, alias.route.Prefix)
+		}
 	}
-	return s.system.apply(ctx, config, reserved)
+	return s.system.apply(ctx, config, reserved, shared)
+}
+
+// A raw prefix or a recovered journal cannot confer VPN permission. Only a
+// live per-UID capability may transfer, after every software scope detached.
+// The system DNS listener differs from the software listener by design.
+func (s *Service) systemAliases(config SystemConfig) (map[string]*sharedAliases, error) {
+	result := map[string]*sharedAliases{}
+	seen := map[string]bool{}
+	for _, resource := range config.Resources {
+		if resource.Alias == nil {
+			continue
+		}
+		ref := resource.Alias
+		a := s.aliases[ref.ID]
+		if a == nil || a.owner == "" || a.route.UID != s.uid ||
+			subtle.ConstantTimeCompare([]byte(a.owner), []byte(ref.Token)) != 1 ||
+			!slices.Equal(a.dns.Domains, resource.Domains) || resource.Guard ||
+			len(resource.Domains) == 0 || seen[ref.ID] || len(s.aliasGroups(ref.ID, "")) != 0 ||
+			resource.RequiredPrefix != "" && resource.RequiredPrefix != a.route.Prefix {
+			return nil, errors.New("capture: shared system DNS lease is unavailable, busy or belongs to another controller")
+		}
+		seen[ref.ID], result[resource.ID] = true, a
+	}
+	return result, nil
 }
 
 func (s *Service) stopSystem() error {
@@ -151,6 +191,15 @@ func (s *Service) stopSystem() error {
 }
 
 func (s *Service) stopSystemLocked() error {
+	// Cancel VPN forwarding while the synthetic routes still guard the pool.
+	// Restore DNAT before removing the TUN so cached addresses never have a
+	// window in which they can fall through to another VPN's Fake-IP handler.
+	s.system.cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.system.restoreSharedAliases(ctx, s.aliases); err != nil {
+		return err
+	}
 	if err := s.system.close(); err != nil {
 		return err
 	}
@@ -159,7 +208,7 @@ func (s *Service) stopSystemLocked() error {
 	return nil
 }
 
-func (s *Service) systemReservations() ([]string, error) {
+func (s *Service) systemReservations(excludeOwn ...bool) ([]string, error) {
 	now, err := bootNow()
 	if err != nil {
 		return nil, err
@@ -168,7 +217,10 @@ func (s *Service) systemReservations() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	paths := []string{s.systemJournalPath()}
+	var paths []string
+	if len(excludeOwn) == 0 || !excludeOwn[0] {
+		paths = append(paths, s.systemJournalPath())
+	}
 	for _, entry := range dirs {
 		dir := filepath.Join(filepath.Dir(s.dir), entry.Name())
 		if dir == s.dir || !strings.HasPrefix(entry.Name(), "easyconnect-hub-capture-") {

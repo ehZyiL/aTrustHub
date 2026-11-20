@@ -41,7 +41,7 @@ chmod +x "$test_root/usr/bin/systemctl"
 cat > "$test_root/bundle/easyconnect-hub-capture" <<'MOCK'
 #!/bin/bash
 if [[ ${1:-} == --protocol-version ]]; then
-  printf '%s\n' "${CANDIDATE_PROTOCOL:-9}"
+  printf '%s\n' "${CANDIDATE_PROTOCOL:-10}"
   exit 0
 fi
 printf 'new-helper %s\n' "$*" >> /calls

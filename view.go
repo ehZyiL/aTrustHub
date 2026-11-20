@@ -714,11 +714,11 @@ func (a *app) header(c *ui.Context) {
 					}
 					a.invalidate()
 				}
+				ui.Row(c).Padding(6).Radius(8).AlignItems(ui.Center).
+					OnClick(a.openTUNLog).Tooltip("TUN 日志").Children(func() {
+					ui.Icon(c, logIcon).Size(16, 16)
+				})
 			}
-			ui.Row(c).Padding(6).Radius(8).AlignItems(ui.Center).
-				OnClick(a.openTUNLog).Tooltip("TUN 日志").Children(func() {
-				ui.Icon(c, logIcon).Size(16, 16)
-			})
 			// Always shown, like the TUN switch: hidden controls make the app
 			// look broken. It is only disabled while the aggregate is down.
 			if supportsSystemProxy() {
@@ -781,8 +781,8 @@ func (a *app) aggregateCard(c *ui.Context) {
 			ui.Text(c, "端口 "+strconv.Itoa(a.cfg.Settings.AggregatePort)).
 				FontSize(12).TextColor(t.TextMuted)
 		})
-		ui.Text(c, "客户端连接这个 SOCKS5 地址，按上面的模式在在线接入点之间分配；"+
-			"某个接入点拨号失败时会自动换下一个。").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "客户端连接这个 SOCKS5 地址后，先按资源归属选择网关；"+
+			"上面的策略仅用于明确配置的同业务出口。未命中受管资源时使用原网络。").FontSize(12).TextColor(t.TextMuted)
 	})
 }
 
@@ -1993,7 +1993,7 @@ func (a *app) detectEditor() {
 func (a *app) openTUNLog() {
 	path := filepath.Join(a.dir, "tun.log")
 	if _, err := os.Stat(path); err != nil {
-		a.toast = "还没有 TUN 日志（先开启一次全局 TUN）"
+		a.toast = "尚无 TUN 日志；代理请求请查看访问日志"
 		return
 	}
 	if err := mygo.Shell.OpenPath(path); err != nil {

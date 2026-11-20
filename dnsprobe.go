@@ -65,7 +65,7 @@ func dnsProbeResult(packet []byte, err error, capture bool) string {
 	}
 	lines := []string{"结果：" + dns.RcodeToString[m.Rcode]}
 	if capture {
-		lines[0] = "软件接管解析：" + dns.RcodeToString[m.Rcode]
+		lines[0] = "旧版 IP 授权兼容检查（不代表当前接管链路）：" + dns.RcodeToString[m.Rcode]
 	}
 	switch m.Rcode {
 	case dns.RcodeRefused:
@@ -80,7 +80,7 @@ func dnsProbeResult(packet []byte, err error, capture bool) string {
 	case dns.RcodeSuccess:
 		if len(m.Answer) == 0 {
 			lines = append(lines, "名称可查询，但没有该类型记录。")
-			if capture && m.Question[0].Qtype == dns.TypeAAAA {
+			if capture && len(m.Question) > 0 && m.Question[0].Qtype == dns.TypeAAAA {
 				lines = append(lines, "软件接管目前不支持内网 IPv6，因此不返回 AAAA 地址。")
 			}
 		}
@@ -146,7 +146,7 @@ func (a *app) dnsProbeView(c *ui.Context) {
 			ui.Text(c, d.summary).FontSize(12).Wrap()
 			ui.Field(c, "内网域名", func() { ui.TextInput(c, &d.domain).Placeholder("db.corp.example") })
 			ui.Field(c, "查询类型", func() { ui.Select(c, &d.kind, []string{"A", "AAAA", "CNAME", "TXT", "MX", "SRV"}) })
-			ui.Checkbox(c, &d.capture, "检查软件接管解析（包含当前兼容性限制）")
+			ui.Checkbox(c, &d.capture, "旧版 IP 授权兼容检查（不验证当前接管映射）")
 			ui.Text(c, "查询使用当前 VPN 的 DNS；公网名称不会被转发。此工具不修改系统 DNS，解析成功也不代表业务端口已经可用。").FontSize(11).TextColor(c.Theme().TextMuted).Wrap()
 			if d.result != "" {
 				ui.Scroll(c).MaxHeight(210).Children(func() { ui.Text(c, d.result).FontSize(12).Wrap() })

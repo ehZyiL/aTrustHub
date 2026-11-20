@@ -26,22 +26,23 @@ func newSoftTheme(dark bool) *ui.Theme {
 	t.FontSize = 13
 	if dark {
 		t.Background = ui.Hex("#141b1a")
-		t.Surface = ui.Hex("#1c2523")
-		t.SurfaceHover = ui.Hex("#202b28")
-		t.SurfacePressed = ui.Hex("#29352f")
-		t.Border = ui.Hex("#32403a")
+		t.Surface = ui.Hex("#1b2422")
+		t.SurfaceHover = ui.Hex("#1f2724")
+		t.SurfacePressed = ui.Hex("#283230")
+		t.Border = ui.Hex("#2f3b35")
 		t.Text = ui.Hex("#e7eee9")
-		t.TextMuted = ui.Hex("#94a49b")
+		t.TextMuted = ui.Hex("#8f9d95")
+		// 荧光绿只给「在线、选中、主按钮」：强调色不稀释，反复用在底色上会刺眼。
 		t.Accent = ui.Hex("#c4e7a0")
-		t.AccentHover = ui.Hex("#d5f0b8")
-		t.AccentPressed = ui.Hex("#aed586")
+		t.AccentHover = ui.Hex("#d3efb4")
+		t.AccentPressed = ui.Hex("#b2dc86")
 		t.AccentText = ui.Hex("#16241c")
 		t.Danger = ui.Hex("#e8a695")
 		t.Warning = ui.Hex("#dfba73")
 		t.Success = ui.Hex("#a4d6aa")
-		t.Selection = ui.Hex("#2d3f33")
+		t.Selection = ui.Hex("#243029")
 		t.Focus = ui.RGBA(196, 231, 160, 0.40)
-		t.Scrollbar = ui.RGBA(255, 255, 255, 0.22)
+		t.Scrollbar = ui.RGBA(255, 255, 255, 0.20)
 		return t
 	}
 	t.Background = ui.Hex("#f4f7f5")

@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	// Version 7 adds owned system TUN scopes. Worker IPC remains independent.
-	ProtocolVersion = 8
+	// Version 9 enforces worker DNS pool constraints before system updates.
+	ProtocolVersion = 9
 	maxFrame        = 64 << 10
 	maxSessions     = 16
 	LauncherFlag    = "--managed-capture-program"

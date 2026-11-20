@@ -21,8 +21,8 @@ cd "$app_root"
 env GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/easyconnect-hub" .
 env GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/easyconnect-hub-capture" ./cmd/app-helper
 helper_protocol=$("$bundle/easyconnect-hub-capture" --protocol-version)
-if [[ "$helper_protocol" != 8 ]]; then
-  printf 'Linux capture helper protocol mismatch: expected 8, got %s\n' "$helper_protocol" >&2
+if [[ "$helper_protocol" != 9 ]]; then
+  printf 'Linux capture helper protocol mismatch: expected 9, got %s\n' "$helper_protocol" >&2
   exit 1
 fi
 "$go_tool" list -m all > "$bundle/desktop-modules.txt"

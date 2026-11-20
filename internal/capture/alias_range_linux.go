@@ -15,7 +15,7 @@ import (
 // original egress paths, not evidence that their whole space is a Fake-IP pool.
 // A specific route inside the benchmark block, an address literal in nftables,
 // or another still-live lease reserves that space conservatively.
-func chooseAliasPrefix(state kernelState, resources []netpolicy.Range, reserved []string) (string, error) {
+func chooseAliasPrefix(state kernelState, resources []netpolicy.Range, reserved []string, required ...string) (string, error) {
 	if err := netpolicy.Validate(resources); err != nil {
 		return "", err
 	}
@@ -105,7 +105,13 @@ func chooseAliasPrefix(state kernelState, resources []netpolicy.Range, reserved 
 	for _, entry := range state.nft {
 		inspect(entry)
 	}
-	prefix, err := dnsmapping.Choose(occupied, resources)
+	var prefix netip.Prefix
+	var err error
+	if len(required) > 0 && required[0] != "" {
+		prefix, err = dnsmapping.ChooseRequired(occupied, resources, required[0])
+	} else {
+		prefix, err = dnsmapping.Choose(occupied, resources)
+	}
 	if err != nil {
 		return "", err
 	}

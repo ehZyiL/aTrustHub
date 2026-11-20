@@ -164,3 +164,25 @@ func TestLinuxSystemDNSSwitchRejectsRebindingBeforeReportingReady(t *testing.T) 
 		t.Fatal("DNS mode switch silently rebound a worker pool", err)
 	}
 }
+
+func TestLinuxSystemSendsWorkerPoolConstraintBeforeHelperConfiguration(t *testing.T) {
+	f := &fakeSystemLease{}
+	r := &linuxSystemCapture{lease: f}
+	config := CaptureConfig{Key: "A/1", Gateway: "vpn.test", Domains: []string{"corp.test"}, Active: func() bool { return true },
+		SelectDNS:        func([]byte) (string, func() bool, error) { return "A/1", func() bool { return true }, nil },
+		MappedDNS:        func(context.Context, []byte, string) (workeripc.Message, error) { return workeripc.Message{}, nil },
+		ConfirmAliases:   func([]workeripc.DNSAlias) error { return nil },
+		BeginPublication: func(string) (func(), error) { return func() {}, nil },
+		MappingPrefix:    func() (string, error) { return "198.19.0.0/20", nil },
+	}
+	if err := r.configure(context.Background(), []CaptureConfig{config}, true); err != nil {
+		t.Fatal(err)
+	}
+	if f.starts != 1 || len(f.request.Resources) != 1 || f.request.Resources[0].RequiredPrefix != "198.19.0.0/20" {
+		t.Fatal("worker mapping constraint was not sent before configuration", f.request)
+	}
+	config.MappingPrefix = func() (string, error) { return "", errors.New("映射身份已变化") }
+	if err := r.configure(context.Background(), []CaptureConfig{config}, false); err == nil || f.syncs != 0 {
+		t.Fatal("changed mapping identity reached helper configuration", err)
+	}
+}

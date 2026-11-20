@@ -25,6 +25,7 @@ type AppConnection struct {
 	ConfirmAliases   func([]workeripc.DNSAlias) error
 	BeginPublication func(string) (func(), error)
 	CheckPublication func(string) error
+	MappingPrefix    func() (string, error)
 	Resources        *workeripc.ResourceSnapshot
 	ReservedPools    []string
 	AliasNetworks    []netpolicy.Range
@@ -62,6 +63,7 @@ func (m *Manager) LocalAppConnection(id string) (AppConnection, error) {
 	connection.AliasNetworks = m.aliasNetworks()
 	identity := dnsmapping.Identity{Key: connection.Key, GatewayID: id, Generation: gen, Version: resourceVersion(connection.Resources)}
 	connection.Identity = identity
+	connection.MappingPrefix = func() (string, error) { return m.mappings.Prefix(identity) }
 	connection.CheckPublication = func(prefix string) error {
 		if !active() {
 			return net.ErrClosed

@@ -162,7 +162,7 @@ func TestHelperHandshakeRequiresNaturalExitFix(t *testing.T) {
 		version int
 		wantErr error
 	}{
-		{name: "previous helper requires update", version: 7, wantErr: ErrHelperIncompatible},
+		{name: "previous helper requires update", version: 8, wantErr: ErrHelperIncompatible},
 		{name: "current helper is ready", version: ProtocolVersion},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

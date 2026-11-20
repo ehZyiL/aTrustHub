@@ -2,7 +2,7 @@
 
 当前阶段：多网关系统 TCP 接管已完成生产路径自动化验证，真实 UAC、Wintun、NRPT、重连和共存正在验收。用户于 2026-11-20 确认过旧版本 Windows DBX 软件接管成功；该反馈不代表此次新系统模式已通过实测。
 
-构建标识：`0.1.0-dev-multigateway-tun.8`。请将三个程序一起解压。Windows 网络助手协议为 7，EasyConnect worker 协议仍为 6。版本不匹配时在 UAC 前提示重新解压完整包。`COMPONENTS.txt` 记录配套协议及能力范围，`SHA256SUMS` 覆盖包内所有文件（清单自身除外）。
+构建标识：`0.1.0-dev-multigateway-tun.9`。请将三个程序一起解压。Windows 网络助手协议为 7，EasyConnect worker 协议仍为 6。版本不匹配时在 UAC 前提示重新解压完整包。`COMPONENTS.txt` 记录配套协议及能力范围，`SHA256SUMS` 覆盖包内所有文件（清单自身除外）。
 
 “网络授权与路由 → 用户策略”的同业务出口组可明确勾选“名称服务也等价”。新 DNS 查询按组内顺序选择在线的名称归属网关；固定 DNS 归属仍优先。它只在网关离线时切换，不在解析超时后跨网关查询，也不改绑已发布的地址；默认关闭。包内 `measure-tun-performance.py` 用于后续受控 HTTP 服务的性能对照，需要 Python 3 和 curl，使用 `--help` 查看参数。
 

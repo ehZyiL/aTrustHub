@@ -2,6 +2,7 @@ package capture
 
 import (
 	"errors"
+	"net/netip"
 	"strings"
 
 	"github.com/qy/easyconnect/internal/dnsmapping"
@@ -12,11 +13,12 @@ import (
 // SystemResource identifies one VPN generation. A guard reserves existing
 // resource routes and DNS ownership while its worker is offline.
 type SystemResource struct {
-	ID       string            `json:"id"`
-	Gateway  string            `json:"gateway"`
-	Guard    bool              `json:"guard,omitempty"`
-	Networks []netpolicy.Range `json:"networks,omitempty"`
-	Domains  []string          `json:"domains,omitempty"`
+	ID             string            `json:"id"`
+	Gateway        string            `json:"gateway"`
+	Guard          bool              `json:"guard,omitempty"`
+	Networks       []netpolicy.Range `json:"networks,omitempty"`
+	Domains        []string          `json:"domains,omitempty"`
+	RequiredPrefix string            `json:"requiredPrefix,omitempty"`
 }
 
 type SystemConfig struct {
@@ -50,6 +52,12 @@ func (c SystemConfig) validate() error {
 			return errors.New("capture: invalid system gateway identity")
 		}
 		seen[resource.ID] = true
+		if resource.RequiredPrefix != "" {
+			prefix, err := netip.ParsePrefix(resource.RequiredPrefix)
+			if err != nil || !dnsmapping.ValidPrefix(prefix) || resource.Guard || len(resource.Domains) == 0 {
+				return errors.New("capture: invalid required worker DNS pool")
+			}
+		}
 		if len(resource.Domains) == 0 && len(resource.Networks) == 0 {
 			return errors.New("capture: empty system resource")
 		}

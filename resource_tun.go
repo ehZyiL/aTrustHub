@@ -119,7 +119,7 @@ func (a *app) resourceCaptureConfigs() ([]localapps.CaptureConfig, error) {
 			continue
 		}
 		result = append(result, localapps.CaptureConfig{Key: connection.Key, Identity: connection.Identity, Guard: !gateway.Online, Gateway: point.Server, Domains: domains, Networks: networks,
-			Exchange: connection.DNS, MappedDNS: connection.MappedDNS, SelectDNS: connection.SelectDNS, BeginPublication: connection.BeginPublication, CheckPublication: connection.CheckPublication, ConfirmAliases: connection.ConfirmAliases,
+			Exchange: connection.DNS, MappedDNS: connection.MappedDNS, SelectDNS: connection.SelectDNS, BeginPublication: connection.BeginPublication, CheckPublication: connection.CheckPublication, MappingPrefix: connection.MappingPrefix, ConfirmAliases: connection.ConfirmAliases,
 			ReservedPools: connection.ReservedPools, AliasNetworks: connection.AliasNetworks, Active: connection.Active})
 	}
 	running := a.resourceTUN != nil && a.resourceTUN.View().Running

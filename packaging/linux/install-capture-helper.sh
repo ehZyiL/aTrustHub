@@ -23,8 +23,8 @@ done
 test -x "$bundle_dir/easyconnect-hub-capture"
 test -f "$bundle_dir/easyconnect-hub-capture@.service"
 capture_protocol=$("$bundle_dir/easyconnect-hub-capture" --protocol-version)
-if [[ "$capture_protocol" != 8 ]]; then
-  printf 'Capture helper protocol mismatch: expected 8, got %s. Replace the complete bundle.\n' "$capture_protocol" >&2
+if [[ "$capture_protocol" != 9 ]]; then
+  printf 'Capture helper protocol mismatch: expected 9, got %s. Replace the complete bundle.\n' "$capture_protocol" >&2
   exit 1
 fi
 capture_unit="easyconnect-hub-capture@${capture_uid}.service"

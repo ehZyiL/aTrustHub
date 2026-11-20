@@ -32,6 +32,7 @@ type CaptureConfig struct {
 	ConfirmAliases   func([]workeripc.DNSAlias) error
 	BeginPublication func(string) (func(), error)
 	CheckPublication func(string) error
+	MappingPrefix    func() (string, error)
 	ReservedPools    []string
 	AliasNetworks    []netpolicy.Range
 	Active           func() bool

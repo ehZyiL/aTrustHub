@@ -343,10 +343,16 @@ func (r *systemRuntime) apply(ctx context.Context, config SystemConfig, foreign 
 		if pool != nil && pool.Retired {
 			return errors.New("capture: retired DNS scope cannot be reactivated")
 		}
+		if pool != nil && resource.RequiredPrefix != "" && pool.Prefix.String() != resource.RequiredPrefix {
+			return errors.New("capture: worker DNS pool cannot change; reconnect this gateway before changing capture modes")
+		}
 		if pool == nil {
-			raw, err := chooseAliasPrefix(state, config.AliasRanges, reserved)
+			raw, err := chooseAliasPrefix(state, config.AliasRanges, reserved, resource.RequiredPrefix)
 			if err != nil {
 				return err
+			}
+			if resource.RequiredPrefix != "" && raw != resource.RequiredPrefix {
+				return errors.New("capture: worker DNS pool cannot change; reconnect this gateway before changing capture modes")
 			}
 			prefix := netip.MustParsePrefix(raw)
 			pool = &systemPool{Prefix: prefix, Entries: make(map[netip.Addr]aliasRecord)}

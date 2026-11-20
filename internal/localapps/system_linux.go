@@ -156,7 +156,15 @@ func (r *linuxSystemCapture) configure(ctx context.Context, configs []CaptureCon
 			return errors.New("系统接管的网关会话重复")
 		}
 		byID[id] = config
-		request.Resources = append(request.Resources, capture.SystemResource{ID: id, Gateway: config.Gateway, Guard: config.Guard, Networks: config.Networks, Domains: config.Domains})
+		resource := capture.SystemResource{ID: id, Gateway: config.Gateway, Guard: config.Guard, Networks: config.Networks, Domains: config.Domains}
+		if !config.Guard && len(config.Domains) > 0 && config.MappingPrefix != nil {
+			var err error
+			resource.RequiredPrefix, err = config.MappingPrefix()
+			if err != nil {
+				return err
+			}
+		}
+		request.Resources = append(request.Resources, resource)
 		request.AliasRanges = append(request.AliasRanges, config.AliasNetworks...)
 		for _, pool := range config.ReservedPools {
 			if !ownPools[pool] {

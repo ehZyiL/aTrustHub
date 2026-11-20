@@ -10,8 +10,44 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qy/easyconnect/internal/netpolicy"
 	"github.com/qy/easyconnect/internal/workeripc"
 )
+
+func TestSystemRequiredDNSPoolRejectsBeforeChangingExistingRoutes(t *testing.T) {
+	prefix := netip.MustParsePrefix("198.19.0.0/20")
+	mutations := 0
+	r := &systemRuntime{path: filepath.Join(t.TempDir(), "system.json"), pools: map[string]*systemPool{"A": {Prefix: prefix, Entries: map[netip.Addr]aliasRecord{}}},
+		routes: map[netip.Prefix]bool{prefix: true}, journal: systemJournal{Routes: systemRoutes{routingAllocation: routingAllocation{Mark: 1 << 30, Pref: 1, Table: 10000}, ID: strings.Repeat("a", 32), Source: netip.MustParseAddr("198.18.42.1")}},
+		run: func(_ context.Context, tool string, _ string, args ...string) ([]byte, error) {
+			if tool == "nft" && strings.Join(args, " ") == "-j list ruleset" {
+				return []byte(`{"nftables":[]}`), nil
+			}
+			if tool == "ip" && len(args) > 0 && args[0] == "-j" {
+				return []byte(`[]`), nil
+			}
+			mutations++
+			return nil, errors.New("unexpected network mutation")
+		}}
+	config := SystemConfig{Resources: []SystemResource{{ID: "A", Gateway: "203.0.113.1", Domains: []string{"corp.test"}, RequiredPrefix: "198.19.16.0/20", Networks: []netpolicy.Range{{Min: "192.0.2.40", Max: "192.0.2.40"}}}}}
+	if err := r.apply(context.Background(), config, nil); err == nil || !strings.Contains(err.Error(), "worker DNS pool") || mutations != 0 || len(r.routes) != 1 {
+		t.Fatalf("incompatible worker prefix changed active capture: mutations=%d routes=%v err=%v", mutations, r.routes, err)
+	}
+}
+
+func TestSystemRequiredDNSPoolValidation(t *testing.T) {
+	c := SystemConfig{Upstream: Upstream{Address: "127.0.0.1:12345", Username: "system", Password: strings.Repeat("a", 64)}, DNSAddress: "127.0.0.1:12346",
+		Resources: []SystemResource{{ID: strings.Repeat("a", 32), Gateway: "203.0.113.1", Domains: []string{"corp.test"}, RequiredPrefix: "198.19.32.0/20"}}}
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{"198.19.32.1/20", "198.19.0.0/16", "192.0.2.0/24", "2001:db8::/64"} {
+		c.Resources[0].RequiredPrefix = raw
+		if err := c.validate(); err == nil {
+			t.Fatal("accepted invalid worker pool", raw)
+		}
+	}
+}
 
 func TestSystemPublishedPoolsWaitForTTLAndFlows(t *testing.T) {
 	now, err := bootNow()

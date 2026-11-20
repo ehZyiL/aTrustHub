@@ -31,6 +31,8 @@ type Resolver struct {
 	dnsResource       map[string][]net.IP
 	dnsResourceCursor sync.Map
 	useRemoteDNS      bool
+	wireExchange      dnsExchangeFunc
+	internalSuffixes  []string
 
 	dnsCache *cache.Cache
 
@@ -406,6 +408,7 @@ func NewResolver(stack stack.Stack, remoteDNSServer, secondaryDNSServer string, 
 		normalizedDNS[normalizeHostname(name)] = append([]net.IP(nil), ips...)
 	}
 	resolver := &Resolver{
+		wireExchange: tunnelDNSExchange(stack, remoteDNSServer),
 		remoteUDPResolver: &net.Resolver{
 			PreferGo: true,
 			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {

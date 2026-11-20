@@ -25,6 +25,7 @@ import (
 	"github.com/qy/easyconnect/internal/model"
 	"github.com/qy/easyconnect/internal/proxy"
 	"github.com/qy/easyconnect/internal/routing"
+	"github.com/qy/easyconnect/internal/splitdns"
 	"github.com/qy/easyconnect/internal/workeripc"
 )
 
@@ -167,6 +168,7 @@ type Manager struct {
 	order      []string
 	points     map[string]*endpoint
 	settings   model.Settings
+	dnsCache   splitdns.Cache
 
 	connector Connector
 	creds     CredentialFunc

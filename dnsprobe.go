@@ -16,6 +16,7 @@ import (
 type dnsProbeDraft struct {
 	open, running                           bool
 	capture                                 bool
+	automatic                               bool
 	id, name, domain, kind, result, summary string
 	cancel                                  context.CancelFunc
 	replies                                 <-chan string
@@ -114,16 +115,19 @@ func (a *app) startDNSProbe() {
 	d.cancel, d.replies, d.running, d.result = cancel, replies, true, ""
 	id := d.id
 	capture := d.capture
+	automatic := d.automatic
 	go func() {
 		defer cancel()
 		var answer []byte
 		var err error
-		if capture {
+		if automatic {
+			answer, err = a.mgr.ExchangeResourceDNS(ctx, packet)
+		} else if capture {
 			answer, err = a.mgr.ExchangeCaptureDNS(ctx, id, packet)
 		} else {
 			answer, err = a.mgr.ExchangeDNS(ctx, id, packet)
 		}
-		replies <- dnsProbeResult(answer, err, capture)
+		replies <- dnsProbeResult(answer, err, capture && !automatic)
 		a.invalidate()
 	}()
 }
@@ -147,6 +151,14 @@ func (a *app) dnsProbeView(c *ui.Context) {
 			ui.Field(c, "内网域名", func() { ui.TextInput(c, &d.domain).Placeholder("db.corp.example") })
 			ui.Field(c, "查询类型", func() { ui.Select(c, &d.kind, []string{"A", "AAAA", "CNAME", "TXT", "MX", "SRV"}) })
 			ui.Checkbox(c, &d.capture, "旧版 IP 授权兼容检查（不验证当前接管映射）")
+			ui.Checkbox(c, &d.automatic, "按资源归属查询（应用域名默认 DNS 归属）")
+			if ui.Button(c, "预览 DNS 归属").Clicked() {
+				id := d.id
+				if d.automatic {
+					id = ""
+				}
+				d.result = formatRouteDecision(a.mgr.PreviewDNS(d.domain, id))
+			}
 			ui.Text(c, "查询使用当前 VPN 的 DNS；公网名称不会被转发。此工具不修改系统 DNS，解析成功也不代表业务端口已经可用。").FontSize(11).TextColor(c.Theme().TextMuted).Wrap()
 			if d.result != "" {
 				ui.Scroll(c).MaxHeight(210).Children(func() { ui.Text(c, d.result).FontSize(12).Wrap() })

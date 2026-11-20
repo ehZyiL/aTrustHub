@@ -103,6 +103,11 @@ func (a *app) updateRoutes(change func(*model.Settings) error) {
 				return fmt.Errorf("指定网关不存在")
 			}
 		}
+		for _, b := range cfg.Settings.DNSBindings {
+			if cfg.Find(b.GatewayID) == nil {
+				return fmt.Errorf("DNS 默认网关不存在")
+			}
+		}
 		for _, g := range cfg.Settings.SharedExits {
 			for _, id := range g.Gateways {
 				if cfg.Find(id) == nil {
@@ -298,6 +303,25 @@ func (a *app) routePolicies(c *ui.Context) {
 		})
 	}
 	ui.Field(c, "单次拨号预算（毫秒）", func() { ui.TextInput(c, &d.each) })
+	ui.Text(c, "域名默认 DNS 归属（沿用上方域名；与业务端口策略分开）").FontSize(13).Bold()
+	ui.Select(c, &d.gateway, a.routeChoices("请选择网关"))
+	if ui.Button(c, "添加 DNS 默认归属").Clicked() {
+		a.updateRoutes(func(s *model.Settings) error {
+			s.DNSBindings = append(s.DNSBindings, routing.DNSBinding{ID: model.NewID(), Pattern: strings.TrimSpace(d.pattern), GatewayID: a.routePoint(d.gateway)})
+			return nil
+		})
+	}
+	for i, b := range a.cfg.Settings.DNSBindings {
+		ui.Row(c).Gap(6).Children(func() {
+			ui.Text(c, b.Pattern+" → "+b.GatewayID).FontSize(11).Grow(1)
+			if ui.Button(c, "删除").Label("删除 DNS 归属 " + b.ID).Clicked() {
+				a.updateRoutes(func(s *model.Settings) error {
+					s.DNSBindings = append(s.DNSBindings[:i], s.DNSBindings[i+1:]...)
+					return nil
+				})
+			}
+		})
+	}
 	ui.Field(c, "总拨号预算（毫秒）", func() { ui.TextInput(c, &d.total) })
 	if ui.Button(c, "保存拨号预算").Clicked() {
 		a.updateRoutes(func(s *model.Settings) error {

@@ -199,6 +199,7 @@ func connectZJU(ctx context.Context, opts ZJUOptions, point model.AccessPoint, c
 		domainResources, dnsResource, useRemoteDNS,
 	)
 	localDNS := service.NewDnsServer(resolver, []string{remoteDNS, secondary})
+	resolver.EnableSplitDNS(point.InternalDomains)
 	vpnStack.SetupResolve(localDNS)
 	vpnStack.SetupIPPool(resolver.IPPool)
 

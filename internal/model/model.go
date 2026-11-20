@@ -222,14 +222,15 @@ func (p *AccessPoint) SetAppDisabled(id string, disabled bool) bool {
 type Settings struct {
 	// ListenHost is the address both the per-access-point and the
 	// aggregate proxies bind to. Loopback by default.
-	ListenHost       string           `json:"listenHost"`
-	AggregatePort    int              `json:"aggregatePort"`
-	AggregateEnabled bool             `json:"aggregateEnabled"`
-	Routing          Routing          `json:"routing"`
-	SharedExits      []routing.Group  `json:"sharedExits,omitempty"`
-	RoutePolicies    []routing.Policy `json:"routePolicies,omitempty"`
-	DialTimeoutMS    int              `json:"dialTimeoutMs,omitempty"`
-	TotalTimeoutMS   int              `json:"totalTimeoutMs,omitempty"`
+	ListenHost       string               `json:"listenHost"`
+	AggregatePort    int                  `json:"aggregatePort"`
+	AggregateEnabled bool                 `json:"aggregateEnabled"`
+	Routing          Routing              `json:"routing"`
+	SharedExits      []routing.Group      `json:"sharedExits,omitempty"`
+	RoutePolicies    []routing.Policy     `json:"routePolicies,omitempty"`
+	DNSBindings      []routing.DNSBinding `json:"dnsBindings,omitempty"`
+	DialTimeoutMS    int                  `json:"dialTimeoutMs,omitempty"`
+	TotalTimeoutMS   int                  `json:"totalTimeoutMs,omitempty"`
 	// HealthIntervalSec is how often an online access point is probed
 	// through its tunnel; 0 disables probing.
 	HealthIntervalSec int  `json:"healthIntervalSec"`
@@ -324,7 +325,7 @@ func (c *Config) Normalize() {
 // Normalize fills the default settings.
 func (s *Settings) Normalize() {
 	if s.ListenHost == "" && s.AggregatePort == 0 && s.Routing == "" &&
-		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 {
+		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && len(s.DNSBindings) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 {
 		*s = DefaultSettings()
 		return
 	}
@@ -483,6 +484,16 @@ func (c *Config) Validate() error {
 
 // Validate checks the settings.
 func (s *Settings) Validate() error {
+	seenDNS := map[string]bool{}
+	for _, b := range s.DNSBindings {
+		if err := b.Validate(); err != nil {
+			return err
+		}
+		if seenDNS[b.ID] {
+			return errors.New("DNS 归属 ID 重复")
+		}
+		seenDNS[b.ID] = true
+	}
 	seenPolicies := map[string]bool{}
 	for _, p := range s.RoutePolicies {
 		if err := p.Validate(); err != nil {
@@ -529,6 +540,7 @@ func (s *Settings) Validate() error {
 }
 
 func (s Settings) Clone() Settings {
+	s.DNSBindings = append([]routing.DNSBinding(nil), s.DNSBindings...)
 	s.RoutePolicies = append([]routing.Policy(nil), s.RoutePolicies...)
 	s.SharedExits = append([]routing.Group(nil), s.SharedExits...)
 	for i := range s.SharedExits {

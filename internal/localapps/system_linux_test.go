@@ -70,6 +70,34 @@ func TestLinuxSystemReconcileKeepsGuardsAndDoesNotRepeatUnchangedTransactions(t 
 	}
 }
 
+func TestLinuxSystemRejectsKnownIPv6BeforeUpdatingHelper(t *testing.T) {
+	ctx := context.Background()
+	lease := &fakeSystemLease{}
+	r := &linuxSystemCapture{lease: lease}
+	config := CaptureConfig{Key: "A/1", Identity: dnsmapping.Identity{GatewayID: "A", Version: "v1"}, Gateway: "vpn.test",
+		Networks: []netpolicy.Range{{Min: "192.0.2.1", Max: "192.0.2.9"}}, Active: func() bool { return true }}
+	if err := r.configure(ctx, []CaptureConfig{config}, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, snapshot := range []*workeripc.ResourceSnapshot{
+		{IPRules: []workeripc.IPRule{{Min: "2001:db8::10", Max: "2001:db8::1f"}}},
+		{StaticDNS: []workeripc.DNSRecord{{Name: "only-v6.test", Addresses: []string{"2001:db8::20"}}}},
+	} {
+		ipv6, err := CaptureNetworks(snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		online := config
+		online.Networks = append(append([]netpolicy.Range(nil), config.Networks...), ipv6...)
+		if err := r.Reconcile(ctx, []CaptureConfig{online}); err == nil || !strings.Contains(err.Error(), "IPv6") {
+			t.Fatalf("unsupported IPv6 reconcile: %v", err)
+		}
+		if lease.syncs != 0 || len(lease.request.Resources[0].Networks) != 1 {
+			t.Fatalf("unsupported IPv6 changed the active scope: %+v", lease.request.Resources)
+		}
+	}
+}
+
 func TestLinuxSystemDNSPublishesOnlySelectedGenerationAndRequiresAcknowledgement(t *testing.T) {
 	f := &fakeSystemLease{}
 	r := &linuxSystemCapture{lease: f}

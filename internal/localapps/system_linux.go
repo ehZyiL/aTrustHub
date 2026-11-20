@@ -64,6 +64,9 @@ func (m *Manager) StartSystemCapture(ctx context.Context, configs []CaptureConfi
 	if dial == nil {
 		return nil, errors.New("缺少系统 TUN 拨号入口")
 	}
+	if err := checkLinuxSystemNetworks(configs); err != nil {
+		return nil, err
+	}
 	life, cancel := context.WithCancel(context.Background())
 	r := &linuxSystemCapture{cancel: cancel, done: make(chan struct{})}
 	if err := r.start(ctx, life, configs, dial); err != nil {
@@ -119,6 +122,9 @@ func (r *linuxSystemCapture) Reconcile(ctx context.Context, configs []CaptureCon
 	defer r.op.Unlock()
 	if r.closed {
 		return net.ErrClosed
+	}
+	if err := checkLinuxSystemNetworks(configs); err != nil {
+		return err
 	}
 	return r.configure(ctx, configs, false)
 }
@@ -212,6 +218,15 @@ func (r *linuxSystemCapture) configure(ctx context.Context, configs []CaptureCon
 	r.config, r.selectDNS, r.publish = request, selector, publishers
 	r.mu.Unlock()
 	return nil
+}
+
+func checkLinuxSystemNetworks(configs []CaptureConfig) error {
+	var ranges []netpolicy.Range
+	for _, config := range configs {
+		ranges = append(ranges, config.Networks...)
+	}
+	_, err := netpolicy.ResourcePrefixes(ranges)
+	return err
 }
 
 func (r *linuxSystemCapture) exchange(ctx context.Context, packet []byte) ([]byte, error) {

@@ -1,6 +1,6 @@
 # EasyConnect Hub · Linux 测试版
 
-当前为 `0.1.0-dev-multigateway-tun.5` 开发版，支持 EasyConnect 登录、代理浏览器、数据库 TCP 转发与多网关系统 TUN。系统 TUN 的业务 IPv4 UDP 限已授权 EasyConnect L3 会话，真实网关应答待验。
+当前为 `0.1.0-dev-multigateway-tun.6` 开发版，支持 EasyConnect 登录、代理浏览器、数据库 TCP 转发与多网关系统 TUN。系统 TUN 的业务 IPv4 UDP 限已授权 EasyConnect L3 会话，真实网关应答待验。已知内网 IPv6 资源会在申请系统 TUN 前拒绝。
 Linux 软件 TCP 接管实验入口默认显示，无需环境变量。早期版本已在 Fedora 45 x86_64 启动原生窗口；本批系统 TUN 的 Fedora 宿主实测待验。
 无需 Docker 或 v2rayN；基础代理以普通用户运行，软件接管需要先安装系统辅助服务。
 

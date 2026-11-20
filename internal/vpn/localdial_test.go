@@ -2,15 +2,22 @@ package vpn
 
 import (
 	"context"
+	"github.com/qy/easyconnect/internal/workeripc"
 	"io"
 	"net"
 	"testing"
 )
 
+func localRouteFixture(s Session) *Manager {
+	info := s.Info()
+	info.Resources = &workeripc.ResourceSnapshot{IPRules: []workeripc.IPRule{{Min: "10.0.0.1", Max: "10.0.0.1", PortMin: 443, PortMax: 443, Protocol: "tcp"}}}
+	return &Manager{points: map[string]*endpoint{"vpn": {state: StateOnline, sess: s, gen: 1, info: info}}, order: []string{"vpn"}, bus: NewLogBus(100)}
+}
+
 func TestLocalAppDialerStaysWithSessionGeneration(t *testing.T) {
 	sess := newFakeSession("first")
-	ep := &endpoint{state: StateOnline, sess: sess, gen: 1}
-	m := &Manager{points: map[string]*endpoint{"vpn": ep}}
+	m := localRouteFixture(sess)
+	ep := m.points["vpn"]
 	dial, active, err := m.LocalAppDialer("vpn")
 	if err != nil {
 		t.Fatal(err)
@@ -60,10 +67,13 @@ func (s *delayedLocalSession) Dial(context.Context, string, string) (net.Conn, e
 	<-s.release
 	return a, nil
 }
+func (s *delayedLocalSession) DialVPN(ctx context.Context, network, address string) (net.Conn, error) {
+	return s.Dial(ctx, network, address)
+}
 func TestLocalAppConnectionDiscardsDialAfterSessionReplacement(t *testing.T) {
 	s := &delayedLocalSession{Session: newFakeSession("old"), started: make(chan struct{}), release: make(chan struct{})}
-	ep := &endpoint{state: StateOnline, sess: s, gen: 1}
-	m := &Manager{points: map[string]*endpoint{"vpn": ep}}
+	m := localRouteFixture(s)
+	ep := m.points["vpn"]
 	connection, err := m.LocalAppConnection("vpn")
 	if err != nil {
 		t.Fatal(err)

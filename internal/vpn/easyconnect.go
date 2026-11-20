@@ -355,13 +355,7 @@ func (s *processSession) Err() error {
 }
 func (s *processSession) Done() <-chan struct{} { return s.done }
 func (s *processSession) Info() SessionInfo {
-	info := s.info
-	if info.Resources != nil {
-		b, _ := json.Marshal(info.Resources)
-		info.Resources = new(workeripc.ResourceSnapshot)
-		_ = json.Unmarshal(b, info.Resources)
-	}
-	return info
+	return cloneSessionInfo(s.info)
 }
 func (s *processSession) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	if network != "tcp" && network != "tcp4" {

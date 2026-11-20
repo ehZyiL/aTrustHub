@@ -24,6 +24,7 @@ import (
 
 	"github.com/qy/easyconnect/internal/model"
 	"github.com/qy/easyconnect/internal/proxy"
+	"github.com/qy/easyconnect/internal/routing"
 	"github.com/qy/easyconnect/internal/workeripc"
 )
 
@@ -192,13 +193,15 @@ type Manager struct {
 type endpoint struct {
 	cfg model.AccessPoint
 
-	state  State
-	errMsg string
-	info   SessionInfo
-	sess   Session
-	proxy  *proxy.Server
-	gen    int
-	cancel context.CancelFunc
+	state           State
+	errMsg          string
+	info            SessionInfo
+	knownResources  *workeripc.ResourceSnapshot
+	resourceVersion string
+	sess            Session
+	proxy           *proxy.Server
+	gen             int
+	cancel          context.CancelFunc
 
 	active atomic.Int64
 	total  atomic.Int64
@@ -366,6 +369,9 @@ func (m *Manager) stopEndpointLocked(id string, closes *[]closeLater) {
 		return
 	}
 	ep.gen++
+	if ep.info.Resources != nil {
+		ep.knownResources = rememberResources(ep.knownResources, ep.info.Resources)
+	}
 	ep.state = StateOffline
 	ep.errMsg = ""
 	ep.info = SessionInfo{}
@@ -586,11 +592,7 @@ func (m *Manager) connect(id string, gen int) {
 	var p *proxy.Server
 	if cfg.SocksPort > 0 {
 		p, err = m.newProxy(cfg, ep, func(ctx context.Context, network, addr string) (net.Conn, error) {
-			conn, derr := sess.Dial(ctx, network, addr)
-			if derr == nil {
-				m.noteTraffic(id)
-			}
-			return conn, derr
+			return m.dialBound(ctx, network, addr, id, gen, sess, false)
 		})
 		if err != nil {
 			_ = sess.Close()
@@ -614,7 +616,9 @@ func (m *Manager) connect(id string, gen int) {
 	cur.cancel = nil
 	cur.state = StateOnline
 	cur.errMsg = ""
-	cur.info = sess.Info()
+	cur.info = cloneSessionInfo(sess.Info())
+	cur.knownResources = rememberResources(cur.knownResources, cur.info.Resources)
+	cur.resourceVersion = resourceVersion(cur.info.Resources)
 	cur.tunnelState = ""
 	cur.tunnelErr = ""
 	cur.tunnelFails = 0
@@ -659,6 +663,10 @@ func (m *Manager) watch(id string, gen int, sess Session) {
 	p := cur.proxy
 	cur.proxy = nil
 	cur.sess = nil
+	cur.gen++
+	if cur.info.Resources != nil {
+		cur.knownResources = rememberResources(cur.knownResources, cur.info.Resources)
+	}
 	cur.info = SessionInfo{}
 	m.mu.Unlock()
 
@@ -962,87 +970,10 @@ func (m *Manager) online() []candidate {
 	return out
 }
 
-// Dial picks an access point and opens the connection through it, moving
-// to the next one when a dial fails. It is the Dial of the aggregate proxy.
+// Dial routes by current authorization and retained ownership before selecting
+// an exit. Only explicitly equivalent business exits may fail over.
 func (m *Manager) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
-	m.mu.RLock()
-	mode := m.settings.Routing
-	m.mu.RUnlock()
-
-	pool := m.online()
-	if len(pool) == 0 {
-		err := errors.New("没有在线的接入点")
-		m.logAccessFail(addr, "", err)
-		return nil, err
-	}
-	// Prefer the access point that actually owns this target address (its
-	// published apps cover it). Without this, failover/latency picks a point
-	// whose tunnel has no route for the target, and the dial goes DIRECT and
-	// times out even though the right point would reach it.
-	host, _, _ := net.SplitHostPort(addr)
-	if host == "" {
-		host = addr
-	}
-	if host != "" {
-		owned := make([]candidate, 0, len(pool))
-		others := make([]candidate, 0, len(pool))
-		for _, c := range pool {
-			if candidateCovers(c, host) {
-				owned = append(owned, c)
-			} else {
-				others = append(others, c)
-			}
-		}
-		if len(owned) > 0 {
-			pool = append(owned, others...)
-			m.logf("按资源路由 %s -> %s", host, owned[0].name)
-		}
-	}
-	if mode == model.RoutingHash {
-		start := int(hashHost(host)) % len(pool)
-		pool = append(append([]candidate(nil), pool[start:]...), pool[:start]...)
-	}
-
-	tried := map[string]bool{}
-	var lastErr error
-	attempts := len(pool)
-	if attempts > 3 {
-		attempts = 3
-	}
-	for i := 0; i < attempts; i++ {
-		c, ok := m.pick(pool, mode, tried)
-		if !ok {
-			break
-		}
-		tried[c.id] = true
-
-		start := time.Now()
-		dial := func(dctx context.Context, dnetwork, daddr string) (net.Conn, error) {
-			return safeDial(dctx, c.sess, dnetwork, daddr)
-		}
-		if c.served {
-			dial = directDial
-		}
-		conn, err := dial(ctx, network, addr)
-		if err == nil {
-			m.noteTraffic(c.id)
-			m.recordSuccess(c.id, time.Since(start))
-			m.logAccess(host, addr, c)
-			return conn, nil
-		}
-		lastErr = err
-		m.recordFailure(c.id)
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		m.logf("[%s] 连接 %s 失败，尝试下一个接入点：%v", c.name, addr, err)
-		m.logAccessFail(addr, c.name, err)
-	}
-	if lastErr == nil {
-		lastErr = errors.New("没有可用的接入点")
-	}
-	m.logAccessFail(addr, "", lastErr)
-	return nil, lastErr
+	return m.dialResource(ctx, network, addr)
 }
 
 // candidateCovers reports whether c's published apps include host.
@@ -2016,15 +1947,7 @@ func (m *Manager) TestDialTimeout(id, network, addr string, timeout time.Duratio
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	start := time.Now()
-	// A point carried by the global TUN has no session: dial through the
-	// system route, exactly like a browser does.
-	dial := func(dctx context.Context, dnetwork, daddr string) (net.Conn, error) {
-		return sess.Dial(dctx, dnetwork, daddr)
-	}
-	if served {
-		dial = directDial
-	}
-	conn, err := dial(ctx, network, addr)
+	conn, err := m.dialRoute(ctx, routing.Request{Network: network, Address: addr, GatewayID: id}, nil)
 	if err != nil {
 		return time.Since(start), err
 	}

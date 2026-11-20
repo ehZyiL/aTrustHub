@@ -218,6 +218,7 @@ func connectZJU(ctx context.Context, opts ZJUOptions, point model.AccessPoint, c
 	sess.info.BestNodes = bestNodes(client)
 	sess.info.NodeGroups = nodeGroups(client)
 	sess.info.Apps = appsFromZJU(client.Apps())
+	sess.info.Resources = networkResources(ipResources, domainResources, dnsResource, sess.info.DNSServer, point.InternalDomains)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -250,7 +251,7 @@ type zjuSession struct {
 	err       error
 }
 
-func (s *zjuSession) Info() SessionInfo { return s.info }
+func (s *zjuSession) Info() SessionInfo { return cloneSessionInfo(s.info) }
 
 // ClientData returns the session cookies for the TUN helper, which resumes
 // this login instead of making a second one.

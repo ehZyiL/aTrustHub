@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/qy/easyconnect/internal/routing"
 )
 
 // Routing is how the aggregate proxy picks the access point a new
@@ -220,10 +222,13 @@ func (p *AccessPoint) SetAppDisabled(id string, disabled bool) bool {
 type Settings struct {
 	// ListenHost is the address both the per-access-point and the
 	// aggregate proxies bind to. Loopback by default.
-	ListenHost       string  `json:"listenHost"`
-	AggregatePort    int     `json:"aggregatePort"`
-	AggregateEnabled bool    `json:"aggregateEnabled"`
-	Routing          Routing `json:"routing"`
+	ListenHost       string          `json:"listenHost"`
+	AggregatePort    int             `json:"aggregatePort"`
+	AggregateEnabled bool            `json:"aggregateEnabled"`
+	Routing          Routing         `json:"routing"`
+	SharedExits      []routing.Group `json:"sharedExits,omitempty"`
+	DialTimeoutMS    int             `json:"dialTimeoutMs,omitempty"`
+	TotalTimeoutMS   int             `json:"totalTimeoutMs,omitempty"`
 	// HealthIntervalSec is how often an online access point is probed
 	// through its tunnel; 0 disables probing.
 	HealthIntervalSec int  `json:"healthIntervalSec"`
@@ -268,6 +273,8 @@ func DefaultSettings() Settings {
 		AggregatePort:     1080,
 		AggregateEnabled:  true,
 		Routing:           RoutingLatency,
+		DialTimeoutMS:     5000,
+		TotalTimeoutMS:    15000,
 		HealthIntervalSec: 60,
 		AutoReconnect:     true,
 		SecretStore:       SecretStoreKeychain,
@@ -316,11 +323,17 @@ func (c *Config) Normalize() {
 // Normalize fills the default settings.
 func (s *Settings) Normalize() {
 	if s.ListenHost == "" && s.AggregatePort == 0 && s.Routing == "" &&
-		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect {
+		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 {
 		*s = DefaultSettings()
 		return
 	}
 	d := DefaultSettings()
+	if s.DialTimeoutMS <= 0 {
+		s.DialTimeoutMS = d.DialTimeoutMS
+	}
+	if s.TotalTimeoutMS <= 0 {
+		s.TotalTimeoutMS = d.TotalTimeoutMS
+	}
 	if strings.TrimSpace(s.ListenHost) == "" {
 		s.ListenHost = d.ListenHost
 	}
@@ -469,6 +482,23 @@ func (c *Config) Validate() error {
 
 // Validate checks the settings.
 func (s *Settings) Validate() error {
+	if s.DialTimeoutMS < 0 || s.DialTimeoutMS > 45000 || s.TotalTimeoutMS < 0 || s.TotalTimeoutMS > 120000 {
+		return errors.New("拨号预算无效：单次不超过 45 秒，总计不超过 120 秒")
+	}
+	seenGroups := make(map[string]bool)
+	for _, group := range s.SharedExits {
+		if group.ID == "" || seenGroups[group.ID] || len(group.Gateways) < 2 || !routing.ValidPattern(group.Pattern) || group.PortMin < 1 || group.PortMax > 65535 || group.PortMax < group.PortMin || (group.Protocol != "tcp" && group.Protocol != "udp" && group.Protocol != "all") {
+			return errors.New("同业务出口配置无效")
+		}
+		seenGroups[group.ID] = true
+		seen := make(map[string]bool)
+		for _, id := range group.Gateways {
+			if id == "" || seen[id] {
+				return errors.New("同业务出口包含空或重复网关")
+			}
+			seen[id] = true
+		}
+	}
 	if s.SecretStore != SecretStoreKeychain {
 		s.SecretStore = SecretStoreFile
 	}

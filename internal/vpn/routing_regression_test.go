@@ -1,5 +1,3 @@
-//go:build routing_regression
-
 package vpn
 
 import (
@@ -18,8 +16,7 @@ import (
 	"github.com/qy/easyconnect/internal/workeripc"
 )
 
-// This opt-in red baseline is promoted to the default suite with T04. It uses
-// the production Manager and proxy servers; only gateway sessions are fakes.
+// Uses the production Manager and proxy servers; only gateway sessions are fakes.
 func TestResourceRouteExclusiveThroughProxy(t *testing.T) {
 	for _, protocol := range []string{"socks5", "connect"} {
 		for _, mode := range []model.Routing{model.RoutingHash, model.RoutingLatency, model.RoutingFailover} {
@@ -91,10 +88,18 @@ func resourceProxyDial(ctx context.Context, protocol, address, target string) (n
 		c.Close()
 		return nil, err
 	}
-	r, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: http.MethodConnect})
+	reader := bufio.NewReader(c)
+	r, err := http.ReadResponse(reader, &http.Request{Method: http.MethodConnect})
 	if err != nil || r.StatusCode != http.StatusOK {
 		c.Close()
 		return nil, errors.New("CONNECT rejected")
 	}
-	return c, nil
+	return &resourceBufferedConn{Conn: c, reader: reader}, nil
 }
+
+type resourceBufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *resourceBufferedConn) Read(p []byte) (int, error) { return c.reader.Read(p) }

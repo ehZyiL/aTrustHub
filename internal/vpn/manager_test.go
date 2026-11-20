@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/qy/easyconnect/internal/model"
+	"github.com/qy/easyconnect/internal/routing"
+	"github.com/qy/easyconnect/internal/workeripc"
 )
 
 type fakeSession struct {
@@ -50,6 +52,10 @@ func (f *fakeSession) Dial(ctx context.Context, network, addr string) (net.Conn,
 }
 
 func (f *fakeSession) Info() SessionInfo { return f.info }
+
+func (f *fakeSession) DialVPN(ctx context.Context, network, addr string) (net.Conn, error) {
+	return f.Dial(ctx, network, addr)
+}
 
 func (f *fakeSession) Close() error {
 	f.close.Do(func() {
@@ -193,6 +199,7 @@ func TestAggregateFailover(t *testing.T) {
 		model.AccessPoint{ID: "b", Name: "B", Server: "b.example", Port: 443, Username: "u", InPool: true},
 	)
 	cfg.Settings.Routing = model.RoutingFailover
+	cfg.Settings.SharedExits = []routing.Group{{ID: "intranet", Pattern: "intranet.example", Protocol: "tcp", PortMin: 443, PortMax: 443, Gateways: []string{"a", "b"}}}
 	m := newTestManager(t, conn.Connect, cfg)
 	m.Connect("a")
 	m.Connect("b")
@@ -201,6 +208,11 @@ func TestAggregateFailover(t *testing.T) {
 	conn.session("a").mu.Lock()
 	conn.session("a").dialErr = errors.New("tunnel down")
 	conn.session("a").mu.Unlock()
+	m.mu.Lock()
+	for _, id := range []string{"a", "b"} {
+		m.points[id].info.Resources = &workeripc.ResourceSnapshot{DomainRules: []workeripc.DomainRule{{Domain: "intranet.example", PortMin: 443, PortMax: 443, Protocol: "tcp"}}}
+	}
+	m.mu.Unlock()
 
 	c, err := m.Dial(context.Background(), "tcp", "intranet.example:443")
 	if err != nil {
@@ -224,8 +236,10 @@ func TestAggregateFailover(t *testing.T) {
 
 func TestAggregateNoOnline(t *testing.T) {
 	m := newTestManager(t, (&fakeConnector{}).Connect, testConfig())
-	if _, err := m.Dial(context.Background(), "tcp", "x:1"); err == nil {
-		t.Fatal("Dial succeeded with no online point")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := m.Dial(ctx, "tcp", "x:1"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled unmanaged request: %v", err)
 	}
 }
 

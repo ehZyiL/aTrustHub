@@ -21,6 +21,11 @@ mkdir -p "$bundle/resources" "$bundle/LICENSES"
 cd "$app_root"
 env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-hub.exe" .
 env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-hub-capture.exe" ./cmd/app-helper
+helper_protocol=$("$bundle/easyconnect-hub-capture.exe" --protocol-version)
+if [[ "$helper_protocol" != 6 ]]; then
+  printf 'Windows capture helper protocol mismatch: expected 6, got %s\n' "$helper_protocol" >&2
+  exit 1
+fi
 env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" test -mod=readonly -trimpath -c -o "$bundle/windows-capture-tests.exe" ./internal/wincapture
 "$go_tool" list -m all > "$bundle/desktop-modules.txt"
 cd "$worker_root"
@@ -40,11 +45,19 @@ for module in github.com/egoist/mygo github.com/mythologyli/sing-tun github.com/
 done
 install -m 0644 "$app_root/packaging/windows/Wintun-LICENSE.txt" "$bundle/LICENSES/Wintun-LICENSE.txt"
 install -m 0644 "$app_root/WINDOWS-QUICKSTART.md" "$bundle/README.md"
+cat > "$bundle/COMPONENTS.txt" <<EOF
+EasyConnect Hub Windows bundle
+Architecture: $target_arch
+Worker IPC protocol: 6
+Windows capture helper protocol: $helper_protocol
+Scope: IPv4 TCP and DNS. Business UDP and IPv6 capture are not supported.
+GUI, worker and helper are a matched build from this bundle; do not mix files from other bundles.
+EOF
 install -m 0644 "$app_root/packaging/windows/test-capture.ps1" "$bundle/test-capture.ps1"
 install -m 0644 "$app_root/packaging/windows/test-worker.ps1" "$bundle/test-worker.ps1"
 
 cd "$bundle"
-sha256sum easyconnect-hub.exe easyconnect-worker.exe easyconnect-hub-capture.exe windows-capture-tests.exe test-capture.ps1 test-worker.ps1 > SHA256SUMS
+sha256sum easyconnect-hub.exe easyconnect-worker.exe easyconnect-hub-capture.exe windows-capture-tests.exe COMPONENTS.txt test-capture.ps1 test-worker.ps1 > SHA256SUMS
 python_bin=python3
 if ! command -v python3 >/dev/null 2>&1 || ! python3 -c "" 2>/dev/null; then
   python_bin=python

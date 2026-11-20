@@ -37,17 +37,26 @@ install -m 0644 "$worker_root/third_party/utls/EASYCONNECT_PATCH.md" "$bundle/LI
 mygo_dir=$(cd "$app_root" && "$go_tool" list -m -f '{{.Dir}}' github.com/egoist/mygo)
 install -m 0644 "$mygo_dir/LICENSE" "$bundle/LICENSES/MyGo-MIT.txt"
 install -m 0644 "$app_root/LINUX-QUICKSTART.md" "$bundle/README.md"
+cat > "$bundle/COMPONENTS.txt" <<EOF
+EasyConnect Hub Linux bundle
+Architecture: $target_arch
+Worker IPC protocol: 6
+Linux capture helper protocol: $helper_protocol
+Scope: IPv4 TCP and DNS. Business UDP and IPv6 capture are not supported.
+GUI, worker and helper are a matched build from this bundle; do not mix files from other bundles.
+EOF
 install -m 0644 "$app_root/packaging/linux/easyconnect-hub-capture@.service" "$bundle/easyconnect-hub-capture@.service"
 install -m 0755 "$app_root/packaging/linux/install-capture-helper.sh" "$bundle/install-capture-helper.sh"
 install -m 0755 "$app_root/packaging/linux/uninstall-capture-helper.sh" "$bundle/uninstall-capture-helper.sh"
 install -m 0755 "$app_root/packaging/linux/test-worker.sh" "$bundle/test-worker.sh"
+"$bundle/test-worker.sh"
 
 printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'bundle_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)' 'cd "$bundle_dir"' 'exec "$bundle_dir/easyconnect-hub" "$@"' > "$bundle/start.sh"
 chmod +x "$bundle/start.sh"
 chmod +x "$bundle/easyconnect-hub" "$bundle/easyconnect-worker" "$bundle/easyconnect-hub-capture" "$bundle/test-worker.sh" "$bundle/install-capture-helper.sh" "$bundle/uninstall-capture-helper.sh"
 
 cd "$bundle"
-sha256sum easyconnect-hub easyconnect-worker easyconnect-hub-capture easyconnect-hub-capture@.service install-capture-helper.sh uninstall-capture-helper.sh test-worker.sh > SHA256SUMS
+sha256sum easyconnect-hub easyconnect-worker easyconnect-hub-capture easyconnect-hub-capture@.service install-capture-helper.sh uninstall-capture-helper.sh test-worker.sh COMPONENTS.txt > SHA256SUMS
 cd "$app_root/build"
 tar -czf "$bundle_name.tar.gz" "$bundle_name"
 printf 'Linux bundle: %s\n' "$bundle"

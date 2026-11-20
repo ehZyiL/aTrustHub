@@ -68,7 +68,7 @@ func (c *controlClient) call(ctx context.Context, req frame) (frame, error) {
 	// Include rollback in the response budget: attach may spend 20 seconds
 	// installing and another 15 seconds recovering its journal.
 	budget := 30 * time.Second
-	if req.Type == "attach" {
+	if req.Type == "attach" || req.Type == "system_start" || req.Type == "system_sync" {
 		budget = 40 * time.Second
 	}
 	deadline := time.Now().Add(budget)
@@ -88,6 +88,7 @@ func (c *controlClient) call(ctx context.Context, req frame) (frame, error) {
 		return res, err
 	}
 	if res.Version != ProtocolVersion || res.Type != req.Type {
+		_ = c.conn.Close()
 		return res, errors.New("capture: invalid helper response")
 	}
 	if res.Error != "" {

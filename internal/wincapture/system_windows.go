@@ -38,11 +38,29 @@ func (s *Session) EnableSystem(ctx context.Context, upstream Upstream) (func() e
 			return nil
 		}
 		_, err := s.request(context.Background(), frame{Type: "system_off"})
+		if err != nil {
+			runtime := s
+			if s.runtime != nil {
+				runtime = s.runtime
+			}
+			select {
+			case <-runtime.Done():
+				if verifier, ok := runtime.file.(interface{ ConfirmCleanup() error }); ok {
+					if cleanupErr := verifier.ConfirmCleanup(); cleanupErr != nil {
+						err = errors.Join(err, cleanupErr)
+					} else {
+						err = nil
+					}
+				}
+			default:
+			}
+		}
 		stopped = err == nil
 		return err
 	}
 	// A failed enable may still own rules whose rollback failed. Keep its
-	// cleanup capability until the helper acknowledges a successful removal.
+	// cleanup capability until the helper acknowledges removal, or its exit
+	// and the watchdog's completed cleanup have been independently verified.
 	_, err := s.request(ctx, frame{Type: "system_on", Upstream: &upstream})
 	return stop, err
 }

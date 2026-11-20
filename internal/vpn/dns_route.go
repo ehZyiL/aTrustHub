@@ -12,7 +12,7 @@ import (
 
 func (m *Manager) PreviewDNS(name, gatewayID string) routing.Decision {
 	g, _, s := m.routeSnapshot(gatewayID)
-	return routing.DecideDNS(name, gatewayID, g, s.DNSBindings)
+	return routing.DecideDNS(name, gatewayID, g, s.DNSBindings, s.SharedExits...)
 }
 
 // SelectMappedDNS is a pure selection step for the shared capture DNS listener.
@@ -23,7 +23,7 @@ func (m *Manager) SelectMappedDNS(packet []byte) (string, func() bool, error) {
 		return "", nil, errors.New("无效 DNS 请求")
 	}
 	g, sessions, settings := m.routeSnapshot("")
-	d := routing.DecideDNS(q.Question[0].Name, "", g, settings.DNSBindings)
+	d := routing.DecideDNS(q.Question[0].Name, "", g, settings.DNSBindings, settings.SharedExits...)
 	if d.Action != "vpn" || len(d.Candidates) != 1 {
 		return "", nil, errors.New("DNS 归属冲突、离线或未授权")
 	}
@@ -50,7 +50,7 @@ func (m *Manager) ExchangeResourceDNS(ctx context.Context, packet []byte) ([]byt
 		return new(dns.Msg).SetRcode(q, dns.RcodeRefused).Pack()
 	}
 	g, sessions, settings := m.routeSnapshot("")
-	d := routing.DecideDNS(q.Question[0].Name, "", g, settings.DNSBindings)
+	d := routing.DecideDNS(q.Question[0].Name, "", g, settings.DNSBindings, settings.SharedExits...)
 	if d.Action != "vpn" {
 		code := dns.RcodeServerFailure
 		if len(d.Owners) == 0 {

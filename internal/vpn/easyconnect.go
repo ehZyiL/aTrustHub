@@ -196,6 +196,9 @@ func (s *processSession) configureReady(m workeripc.Message, password string) er
 		capabilities[capability] = true
 	}
 	strict := capabilities["strict_vpn"]
+	if capabilities[workeripc.StrictUDP] && !strict {
+		return ErrStrictUDPUnavailable
+	}
 	prepared := capabilities["flow_prepare"] && capabilities["flow_cancel"] && m.FlowReporting
 	if strict && (!prepared || !validAddress(m.VPNAddress) || m.VPNAddress == m.Address) {
 		return ErrStrictVPNUnavailable
@@ -210,6 +213,9 @@ func (s *processSession) configureReady(m workeripc.Message, password string) er
 		f.prepare = prepared
 		if strict {
 			f.vpnAddress = m.VPNAddress
+			if capabilities[workeripc.StrictUDP] {
+				f.strictUDP, f.udpSlots = true, make(chan struct{}, workeripc.MaxFlowRequests)
+			}
 		}
 		s.flows.Store(f)
 	}
@@ -381,6 +387,12 @@ func (s *processSession) Dial(ctx context.Context, network, addr string) (net.Co
 }
 
 func (s *processSession) DialVPN(ctx context.Context, network, addr string) (net.Conn, error) {
+	if network == "udp" || network == "udp4" {
+		if !s.SupportsStrictUDP() {
+			return nil, ErrStrictUDPUnavailable
+		}
+		return s.dialFlowTransport(ctx, addr, s.flows.Load().vpnAddress, true)
+	}
 	if network != "tcp" && network != "tcp4" {
 		return nil, errors.New("严格 VPN 入口目前只支持 IPv4 TCP")
 	}
@@ -389,6 +401,13 @@ func (s *processSession) DialVPN(ctx context.Context, network, addr string) (net
 		return nil, ErrStrictVPNUnavailable
 	}
 	return s.dialFlowAddress(ctx, addr, f.vpnAddress)
+}
+
+var ErrStrictUDPUnavailable = errors.New("所属网关没有可用的 IPv4 UDP 隧道，或核心版本不匹配")
+
+func (s *processSession) SupportsStrictUDP() bool {
+	f := s.flows.Load()
+	return f != nil && f.strictUDP
 }
 func (s *processSession) Close() error {
 	s.closeOnce.Do(func() {
@@ -407,6 +426,16 @@ func (s *processSession) Close() error {
 var _ Prober = (*processSession)(nil)
 
 func (s *processSession) Probe(ctx context.Context) error {
+	if err := s.ProbeDNS(ctx); !errors.Is(err, errProbeUnavailable) {
+		return err
+	}
+	if target := healthTarget(s.info); target != "" {
+		return probeSession(ctx, s, target)
+	}
+	return errProbeUnavailable
+}
+
+func (s *processSession) ProbeDNS(ctx context.Context) error {
 	select {
 	case <-s.done:
 		return s.Err()
@@ -436,27 +465,10 @@ func (s *processSession) Probe(ctx context.Context) error {
 		if err := res.Unpack(reply); err != nil {
 			return fmt.Errorf("隧道 DNS 应答解析失败：%w", err)
 		}
+		if res.Rcode != dns.RcodeSuccess && res.Rcode != dns.RcodeNameError {
+			return fmt.Errorf("隧道 DNS 返回 %s", dns.RcodeToString[res.Rcode])
+		}
 		return nil
 	}
-
-	// 2. If business addresses or health targets exist, dial via tunnel.
-	target := s.info.HealthTarget
-	if target == "" && s.info.Resources != nil {
-		for _, r := range s.info.Resources.IPRules {
-			if r.Min == r.Max && r.PortMin == r.PortMax && r.PortMin > 0 {
-				target = net.JoinHostPort(r.Min, strconv.Itoa(r.PortMin))
-				break
-			}
-		}
-	}
-	if target != "" {
-		conn, err := s.Dial(ctx, "tcp", target)
-		if err != nil {
-			return fmt.Errorf("隧道业务探测失败：%w", err)
-		}
-		_ = conn.Close()
-		return nil
-	}
-
 	return errProbeUnavailable
 }

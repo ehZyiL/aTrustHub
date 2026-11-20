@@ -39,6 +39,15 @@ func (s *Service) prepareAliases(ctx context.Context, owner string, req aliasReq
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// During system capture new generations may reserve a dormant pool.
+	// The existing exclusive mode lock still prevents any software attach.
+	if s.system == nil {
+		modeUnlock, err := s.lockCaptureMode(false)
+		if err != nil {
+			return nil, err
+		}
+		defer modeUnlock()
+	}
 	if len(s.aliases) >= 32 {
 		return nil, errors.New("capture: too many shared DNS leases")
 	}
@@ -67,7 +76,7 @@ func (s *Service) prepareAliases(ctx context.Context, owner string, req aliasReq
 		return nil, err
 	}
 	reserved = append(reserved, otherReservations...)
-	prefix, err := chooseAliasPrefix(state, req.Networks, reserved)
+	prefix, err := chooseAliasPrefix(state, req.Networks, reserved, req.RequiredPrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +87,9 @@ func (s *Service) prepareAliases(ctx context.Context, owner string, req aliasReq
 	}
 	// Remember even an incomplete transaction; releaseOwner and recovery own it.
 	s.aliases[a.route.ID] = a
-	if err = a.route.install(ctx, s.run); err != nil {
+	if s.system != nil {
+		a.dormant = true
+	} else if err = a.route.install(ctx, s.run); err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -87,13 +98,16 @@ func (s *Service) prepareAliases(ctx context.Context, owner string, req aliasReq
 // Dormant pools have no kernel rules, but are still bound to a live worker.
 // Read other per-UID journals under the shared network lock so different
 // desktop users cannot allocate the same range while their software is idle.
-func (s *Service) otherAliasReservations() ([]string, error) {
+func (s *Service) otherAliasReservations(excludeOwnSystem ...bool) ([]string, error) {
 	parent := filepath.Dir(s.dir)
 	entries, err := os.ReadDir(parent)
 	if err != nil {
 		return nil, err
 	}
-	var result []string
+	result, err := s.systemReservations(excludeOwnSystem...)
+	if err != nil {
+		return nil, err
+	}
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Name(), "easyconnect-hub-capture-") {
 			continue
@@ -255,7 +269,7 @@ func (s *Service) retireAliasesLocked(ctx context.Context) error {
 		return err
 	}
 	for id, a := range s.aliases {
-		if len(s.aliasGroups(id, "")) != 0 || a.journal.retirement() > now {
+		if len(s.aliasGroups(id, "")) != 0 || a.journal.retirement() > now || s.system != nil && s.system.usesAlias(a) {
 			continue
 		}
 		if !a.dormant {
@@ -326,16 +340,26 @@ func PrepareAliases(ctx context.Context, config resolved.Config, networks []netp
 	return prepareAliasLease(ctx, config, networks, SocketPath(os.Getuid()), 0, reservations...)
 }
 
+// PrepareAliasesForPool also constrains preparation to an already committed
+// worker pool. An unavailable identity fails before installing any rules.
+func PrepareAliasesForPool(ctx context.Context, config resolved.Config, networks []netpolicy.Range, required string, reserved []string) (*AliasLease, error) {
+	return prepareAliasLeaseForPool(ctx, config, networks, SocketPath(os.Getuid()), 0, required, reserved)
+}
+
 func prepareAliasLease(ctx context.Context, config resolved.Config, networks []netpolicy.Range, socket string, helperUID uint32, reservations ...[]string) (*AliasLease, error) {
-	c, err := dialControl(ctx, socket, helperUID)
-	if err != nil {
-		return nil, err
-	}
 	var reserved []string
 	if len(reservations) > 0 {
 		reserved = reservations[0]
 	}
-	res, err := c.call(ctx, frame{Type: "alias_prepare", Alias: &aliasRequest{DNS: config, Networks: networks, Reserved: reserved}})
+	return prepareAliasLeaseForPool(ctx, config, networks, socket, helperUID, "", reserved)
+}
+
+func prepareAliasLeaseForPool(ctx context.Context, config resolved.Config, networks []netpolicy.Range, socket string, helperUID uint32, required string, reserved []string) (*AliasLease, error) {
+	c, err := dialControl(ctx, socket, helperUID)
+	if err != nil {
+		return nil, err
+	}
+	res, err := c.call(ctx, frame{Type: "alias_prepare", Alias: &aliasRequest{DNS: config, Networks: networks, Reserved: reserved, RequiredPrefix: required}})
 	if err != nil || !res.Active || !sessionPattern.MatchString(res.ID) {
 		c.conn.Close()
 		if err == nil {

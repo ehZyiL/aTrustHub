@@ -17,9 +17,8 @@ import (
 )
 
 const (
-	// Version 6 carries retired mapping reservations before pool allocation.
-	// Version 5 also required stable cgroup identity during exit cleanup.
-	ProtocolVersion = 6
+	// Version 10 transfers live DNS capabilities between capture modes.
+	ProtocolVersion = 10
 	maxFrame        = 64 << 10
 	maxSessions     = 16
 	LauncherFlag    = "--managed-capture-program"
@@ -67,9 +66,10 @@ type AliasRef struct {
 }
 
 type aliasRequest struct {
-	DNS      resolved.Config   `json:"dns"`
-	Networks []netpolicy.Range `json:"networks,omitempty"`
-	Reserved []string          `json:"reserved,omitempty"`
+	DNS            resolved.Config   `json:"dns"`
+	Networks       []netpolicy.Range `json:"networks,omitempty"`
+	Reserved       []string          `json:"reserved,omitempty"`
+	RequiredPrefix string            `json:"requiredPrefix,omitempty"`
 }
 
 type attachRequest struct {
@@ -90,6 +90,8 @@ type frame struct {
 	Alias    *aliasRequest        `json:"alias,omitempty"`
 	Prefix   string               `json:"prefix,omitempty"`
 	Mappings []workeripc.DNSAlias `json:"mappings,omitempty"`
+	System   *SystemConfig        `json:"system,omitempty"`
+	State    *SystemState         `json:"systemState,omitempty"`
 }
 
 func readFrame(r *bufio.Reader, v any) error {

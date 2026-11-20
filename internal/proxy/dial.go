@@ -19,6 +19,7 @@ type socksHandshake interface {
 type SOCKSDialer struct {
 	address   string
 	handshake socksHandshake
+	auth      *xproxy.Auth
 }
 
 func NewSOCKSDialer(address string, auth *xproxy.Auth) (*SOCKSDialer, error) {
@@ -30,7 +31,7 @@ func NewSOCKSDialer(address string, auth *xproxy.Auth) (*SOCKSDialer, error) {
 	if !ok {
 		return nil, errors.New("SOCKS5 dialer does not support handshaking an existing connection")
 	}
-	return &SOCKSDialer{address: address, handshake: h}, nil
+	return &SOCKSDialer{address: address, handshake: h, auth: auth}, nil
 }
 
 func (d *SOCKSDialer) DialContext(ctx context.Context, network, target string) (net.Conn, error) {

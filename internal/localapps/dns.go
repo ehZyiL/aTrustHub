@@ -21,6 +21,7 @@ import (
 type CaptureConfig struct {
 	Key              string
 	Identity         dnsmapping.Identity
+	Guard            bool
 	SelectDNS        func([]byte) (string, func() bool, error)
 	sharedDNSAddress string
 	Gateway          string
@@ -30,6 +31,8 @@ type CaptureConfig struct {
 	MappedDNS        func(context.Context, []byte, string) (workeripc.Message, error)
 	ConfirmAliases   func([]workeripc.DNSAlias) error
 	BeginPublication func(string) (func(), error)
+	CheckPublication func(string) error
+	MappingPrefix    func() (string, error)
 	ReservedPools    []string
 	AliasNetworks    []netpolicy.Range
 	Active           func() bool

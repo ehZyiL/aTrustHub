@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"github.com/qy/easyconnect/internal/netpolicy"
 	"github.com/qy/easyconnect/internal/resolved"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -37,7 +38,11 @@ func systemCommand(ctx context.Context, tool, input string, args ...string) ([]b
 	}
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/usr/bin/"+tool, args...)
+	path := "/usr/bin/" + tool
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		path = "/usr/sbin/" + tool
+	}
+	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Env = []string{"PATH=/usr/bin:/usr/sbin", "LC_ALL=C"}
 	cmd.Stdin = strings.NewReader(input)
 	var stdout, stderr boundedOutput
@@ -217,6 +222,36 @@ func markConstants(v any) (mask uint32, dynamic bool) {
 
 func allocate(s kernelState, uid int, id, group string, port int, known ...ruleLease) (ruleLease, error) {
 	l := ruleLease{Version: ProtocolVersion, UID: uid, ID: id, Group: group, Port: port, Pref: 1, OutputPriority: 300}
+	routing, err := allocateRouting(s, known...)
+	if err != nil {
+		return l, err
+	}
+	l.Mark, l.Table, l.Pref = routing.Mark, routing.Table, routing.Pref
+	for _, item := range s.nft {
+		if chain, ok := item["chain"].(map[string]any); ok && chain["hook"] == "output" {
+			if p, ok := chain["prio"].(json.Number); ok {
+				n, _ := strconv.Atoi(string(p))
+				if n >= l.OutputPriority {
+					l.OutputPriority = n + 1
+				}
+			}
+		}
+	}
+	return l, l.validate(uid)
+}
+
+type routingAllocation struct {
+	Mark  uint32
+	Table uint32
+	Pref  int
+}
+
+func (r routingAllocation) valid() bool {
+	return r.Mark >= 1<<24 && r.Mark&(r.Mark-1) == 0 && r.Table >= 10000 && r.Table <= 0x7fffffff && r.Pref > 0 && r.Pref <= 4096
+}
+
+func allocateRouting(s kernelState, known ...ruleLease) (routingAllocation, error) {
+	l := routingAllocation{Pref: 1}
 	var used uint32
 	tables := map[uint32]bool{253: true, 254: true, 255: true}
 	priorities := map[uint32]bool{}
@@ -262,14 +297,6 @@ func allocate(s kernelState, uid int, id, group string, port int, known ...ruleL
 		}
 	}
 	for _, item := range s.nft {
-		if chain, ok := item["chain"].(map[string]any); ok && chain["hook"] == "output" {
-			if p, ok := chain["prio"].(json.Number); ok {
-				n, _ := strconv.Atoi(string(p))
-				if n >= l.OutputPriority {
-					l.OutputPriority = n + 1
-				}
-			}
-		}
 		if rule, ok := item["rule"].(map[string]any); ok {
 			if exprs, ok := rule["expr"].([]any); ok {
 				for _, e := range exprs {
@@ -305,7 +332,10 @@ func allocate(s kernelState, uid int, id, group string, port int, known ...ruleL
 			break
 		}
 	}
-	return l, l.validate(uid)
+	if !l.valid() {
+		return l, errors.New("capture: no conflict-free policy routing allocation")
+	}
+	return l, nil
 }
 
 func (l ruleLease) nftScript() string {

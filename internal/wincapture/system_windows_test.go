@@ -3,6 +3,7 @@ package wincapture
 import (
 	"bufio"
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"strings"
@@ -12,6 +13,75 @@ import (
 	"github.com/qy/easyconnect/internal/workeripc"
 )
 
+type cleanupTestTransport struct {
+	controlTransport
+	check func() error
+}
+
+func (c *cleanupTestTransport) ConfirmCleanup() error { return c.check() }
+
+func TestSystemStopAfterHelperCrashReleasesPoolOnlyAfterCleanupConfirmed(t *testing.T) {
+	p, starts, requests := fakeRuntimePool(t, func(frame) frame { return frame{Type: "ok"} })
+	s, release, err := p.acquire(context.Background(), "A/1", poolTestConfig("A"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	ready, checks := false, 0
+	s.runtime.file = &cleanupTestTransport{controlTransport: s.runtime.file, check: func() error {
+		checks++
+		if !ready {
+			return errors.New("watchdog cleanup pending")
+		}
+		return nil
+	}}
+	stop, err := s.EnableSystem(context.Background(), Upstream{Address: "127.0.0.1:23456", Username: "system", Password: strings.Repeat("s", 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextPoolRequest(t, requests, "system_on", s.id)
+	s.runtime.fail(errors.New("helper process exited"))
+	if err := stop(); err == nil {
+		t.Fatal("unconfirmed crash cleanup reported success")
+	}
+	ready = true
+	if err := stop(); err != nil {
+		t.Fatal("confirmed crash cleanup still requires a dead helper response", err)
+	}
+	if checks != 2 {
+		t.Fatalf("cleanup was not verified on each pending retry: %d", checks)
+	}
+	if err := stop(); err != nil || checks != 2 {
+		t.Fatal("completed cleanup was not idempotent", err)
+	}
+	release()
+	if p.runtime != nil || len(p.sessions) != 0 {
+		t.Fatal("confirmed cleanup retained the dead runtime")
+	}
+	_, releaseNew, err := p.acquire(context.Background(), "A/1", poolTestConfig("A"))
+	if err != nil {
+		t.Fatal("same online VPN cannot start a replacement helper", err)
+	}
+	defer releaseNew()
+	if starts.Load() != 2 {
+		t.Fatal("replacement helper was not opened")
+	}
+}
+
+func TestSystemStopDoesNotAssumeClosedTransportMeansCleanup(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	s := newSession(client)
+	s.fail(errors.New("control connection lost"))
+	stop, err := s.EnableSystem(context.Background(), Upstream{Address: "127.0.0.1:23456", Username: "system", Password: strings.Repeat("s", 64)})
+	if err == nil || stop == nil {
+		t.Fatal("failed startup lost its cleanup capability", err)
+	}
+	if err := stop(); err == nil {
+		t.Fatal("closed transport without OS cleanup evidence reported success")
+	}
+}
+
 func TestSystemStopRetriesNativeFailureUntilAcknowledged(t *testing.T) {
 	for _, failStart := range []bool{false, true} {
 		t.Run(map[bool]string{false: "stop", true: "startup_rollback"}[failStart], func(t *testing.T) {
@@ -19,6 +89,10 @@ func TestSystemStopRetriesNativeFailureUntilAcknowledged(t *testing.T) {
 			defer peer.Close()
 			session := newSession(client)
 			defer session.fail(nil)
+			session.file = &cleanupTestTransport{controlTransport: session.file, check: func() error {
+				t.Error("live helper failure must still require its cleanup acknowledgement")
+				return nil
+			}}
 			_ = peer.SetDeadline(time.Now().Add(3 * time.Second))
 			result := make(chan error, 1)
 			go func() {

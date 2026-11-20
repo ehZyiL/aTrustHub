@@ -318,6 +318,10 @@ func (s *zjuSession) DialVPN(ctx context.Context, network, addr string) (net.Con
 // keeps the aTrust session alive, so a healthy answer means the session can
 // still carry traffic.
 func (s *zjuSession) Probe(ctx context.Context) error {
+	return s.ProbeDNS(ctx)
+}
+
+func (s *zjuSession) ProbeDNS(ctx context.Context) error {
 	if s.closed.Load() {
 		return errors.New("接入点已断开")
 	}

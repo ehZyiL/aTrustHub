@@ -25,7 +25,7 @@ func (b DNSBinding) Validate() error {
 	return nil
 }
 
-func DecideDNS(name, boundID string, gateways []Gateway, bindings []DNSBinding) Decision {
+func DecideDNS(name, boundID string, gateways []Gateway, bindings []DNSBinding, groups ...Group) Decision {
 	d := Decision{Action: "blocked"}
 	host, err := NormalizeHost(name)
 	if err != nil {
@@ -77,11 +77,34 @@ func DecideDNS(name, boundID string, gateways []Gateway, bindings []DNSBinding) 
 		d.Reason = "没有已知内网 DNS 归属"
 		return d
 	}
+	selected := owners[0]
 	if len(owners) > 1 {
-		d.Reason = "DNS 归属冲突，请设置该域名的默认网关"
-		return d
+		group, ok := equivalentDNSGroup(groups, owners, host)
+		if !ok {
+			d.Reason = "DNS 归属冲突，请设置该域名的默认网关"
+			return d
+		}
+		// DNS has no business port. Only an explicit declaration that name
+		// service is equivalent permits choosing another current owner.
+		found := false
+		for _, id := range group.Gateways {
+			for _, g := range owners {
+				if score, _, _ := claim(g.Current, host, 0, "dns"); g.ID == id && g.Online && score > 0 {
+					selected, found = g, true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+		if !found {
+			d.Reason = "同业务 DNS 网关均离线或已撤销该名称"
+			return d
+		}
+		d.RuleID = group.ID
 	}
-	g := owners[0]
+	g := selected
 	if score, _, _ := claim(g.Current, host, 0, "dns"); !g.Online || score == 0 {
 		d.Reason = "DNS 所属网关离线或已撤销该名称"
 		return d
@@ -89,4 +112,23 @@ func DecideDNS(name, boundID string, gateways []Gateway, bindings []DNSBinding) 
 	d.Action, d.Reason = "vpn", "由名称归属网关解析；DNS 答案不授予连接权限"
 	d.Candidates = []Candidate{{ID: g.ID, Name: g.Name, Version: g.Version, Generation: g.Generation, NeedsResolution: true}}
 	return d
+}
+
+func equivalentDNSGroup(groups []Group, owners []Gateway, host string) (Group, bool) {
+	for _, group := range groups {
+		if !group.DNSFailover || !MatchPattern(group.Pattern, host) {
+			continue
+		}
+		all := true
+		for _, g := range owners {
+			if !contains(group.Gateways, g.ID) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return group, true
+		}
+	}
+	return Group{}, false
 }

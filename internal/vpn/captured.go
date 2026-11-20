@@ -41,12 +41,25 @@ func originalRouteDial(ctx context.Context, network, address string) (net.Conn, 
 // DialCaptured accepts only IP destinations observed by the private helper.
 // A synthetic destination must have a published identity in the shared pool.
 func (m *Manager) DialCaptured(ctx context.Context, network, address string) (net.Conn, error) {
+	if network != "tcp" && network != "tcp4" {
+		return nil, errors.New("系统 TCP 捕获要求 IPv4 TCP")
+	}
+	return m.dialCaptured(ctx, network, address)
+}
+
+// DialCapturedUDP is the private datagram path. Until the platform exposes a
+// trusted original UDP egress, only authorized VPN exits can be used.
+func (m *Manager) DialCapturedUDP(ctx context.Context, address string) (net.Conn, error) {
+	return m.dialCaptured(ctx, "udp4", address)
+}
+
+func (m *Manager) dialCaptured(ctx context.Context, network, address string) (net.Conn, error) {
 	if _, ok := ctx.Value(originalDialContextKey{}).(OriginalDialFunc); !ok {
 		return nil, errors.New("系统捕获缺少可信原出口")
 	}
 	destination, err := netip.ParseAddrPort(address)
-	if err != nil || !destination.Addr().Is4() || network != "tcp" && network != "tcp4" {
-		return nil, errors.New("系统捕获目前仅支持 IPv4 TCP")
+	if err != nil || !destination.Addr().Is4() || destination.Port() == 0 {
+		return nil, errors.New("系统捕获要求 IPv4 目标及有效端口")
 	}
 	request := routing.Request{Network: network, Address: address, Entry: "系统 TUN"}
 	if !netip.MustParsePrefix(workeripc.CaptureAliasBlock).Contains(destination.Addr()) {
@@ -73,6 +86,9 @@ func (m *Manager) DialCaptured(ctx context.Context, network, address string) (ne
 	if err != nil {
 		release()
 		return nil, err
+	}
+	if udp, ok := conn.(*scopedUDPConn); ok {
+		go func() { <-udp.done; release() }()
 	}
 	return &mappedConn{Conn: conn, release: release}, nil
 }

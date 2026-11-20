@@ -36,6 +36,9 @@ func (e *engine) register(id string, config Config) (string, error) {
 		return "", err
 	}
 	defer unlock()
+	if err := e.reapRetiredPools(time.Now()); err != nil {
+		return "", err
+	}
 	routes, err := routeRows()
 	if err != nil {
 		return "", err
@@ -131,10 +134,9 @@ func (e *engine) registerPrepared(id string, config Config, aliases netip.Prefix
 	if err != nil {
 		return errors.Join(err, callUndo(undo))
 	}
-	e.aliasUndo = append(e.aliasUndo, undo)
 	ctx, cancel := context.WithCancel(e.ctx)
 	session := &captureSession{config: cloneConfig(config), aliases: aliases, resources: resources, gateways: gateways,
-		mappings: map[netip.Addr]aliasEntry{}, issued: map[netip.Addr]netip.Addr{}, ctx: ctx, cancel: cancel}
+		mappings: map[netip.Addr]aliasEntry{}, issued: map[netip.Addr]netip.Addr{}, undoAlias: undo, ctx: ctx, cancel: cancel}
 	for _, p := range resources {
 		session.rules.install = append(session.rules.install, func() (func() error, error) {
 			return e.shared.acquire("route/"+p.String(), func() (func() error, error) { return e.installRoute(p) })
@@ -177,9 +179,64 @@ func (e *engine) unregister(id string) error {
 	for _, appID := range apps {
 		result = errors.Join(result, e.detach(id, appID))
 	}
-	// Retain the alias route and immutable identity until this helper drains.
-	// There are at most sixteen pools; exhaustion fails without reusing one.
-	return errors.Join(result, session.rules.Disable())
+	result = errors.Join(result, session.rules.Disable())
+	if result != nil {
+		return result
+	}
+	return e.reapRetiredPools(time.Now())
+}
+
+func (e *engine) reapRetiredPools(now time.Time) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var result error
+	for id, session := range e.sessions {
+		if !session.retired || session.aliasFlows != 0 || len(session.rules.undo) != 0 {
+			continue
+		}
+		live := false
+		for _, entry := range session.mappings {
+			if now.Before(entry.expires) {
+				live = true
+				break
+			}
+		}
+		if live {
+			continue
+		}
+		if err := callUndo(session.undoAlias); err != nil {
+			result = errors.Join(result, err)
+			continue
+		}
+		delete(e.sessions, id)
+	}
+	return result
+}
+
+// Pin the mapping before looking up the connection owner. A slow lookup or
+// relay cannot cross from an old session into a new owner of the same pool.
+func (e *engine) holdAlias(address netip.Addr) (func(), error) {
+	if !netip.MustParsePrefix("198.19.0.0/16").Contains(address) {
+		return nil, nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, session := range e.sessions {
+		if !session.aliases.Contains(address) {
+			continue
+		}
+		entry, ok := session.mappings[address]
+		if session.retired || !ok || !time.Now().Before(entry.expires) {
+			break
+		}
+		session.aliasFlows++
+		return func() {
+			e.mu.Lock()
+			session.aliasFlows--
+			e.mu.Unlock()
+		}, nil
+	}
+	return nil, errors.New("DNS 映射已失效，请重新解析域名")
 }
 
 func (e *engine) enableRules(session *captureSession) error {

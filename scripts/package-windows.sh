@@ -15,12 +15,19 @@ if [[ ! "$bundle_name" =~ ^[a-zA-Z0-9._-]+$ || "$bundle_name" == "." || "$bundle
   printf 'Invalid bundle name\n' >&2
   exit 1
 fi
-bundle="$app_root/build/$bundle_name"
+mkdir -p "$app_root/build"
+bundle=$(mktemp -d "$app_root/build/.${bundle_name}.staging.XXXXXXXX")
+trap 'rm -rf -- "$bundle"' EXIT
 mkdir -p "$bundle/resources" "$bundle/LICENSES"
 
 cd "$app_root"
 env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-hub.exe" .
 env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-hub-capture.exe" ./cmd/app-helper
+helper_protocol=$("$bundle/easyconnect-hub-capture.exe" --protocol-version)
+if [[ "$helper_protocol" != 7 ]]; then
+  printf 'Windows capture helper protocol mismatch: expected 7, got %s\n' "$helper_protocol" >&2
+  exit 1
+fi
 env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" test -mod=readonly -trimpath -c -o "$bundle/windows-capture-tests.exe" ./internal/wincapture
 "$go_tool" list -m all > "$bundle/desktop-modules.txt"
 cd "$worker_root"
@@ -40,21 +47,45 @@ for module in github.com/egoist/mygo github.com/mythologyli/sing-tun github.com/
 done
 install -m 0644 "$app_root/packaging/windows/Wintun-LICENSE.txt" "$bundle/LICENSES/Wintun-LICENSE.txt"
 install -m 0644 "$app_root/WINDOWS-QUICKSTART.md" "$bundle/README.md"
+install -m 0644 "$app_root/scripts/measure-tun-performance.py" "$bundle/measure-tun-performance.py"
+cat > "$bundle/COMPONENTS.txt" <<EOF
+EasyConnect Hub Windows bundle
+Architecture: $target_arch
+Worker IPC protocol: 6
+Windows capture helper protocol: $helper_protocol
+Scope: IPv4 TCP and DNS. System IPv4 UDP for eligible L3 sessions is experimental; IPv6 is unsupported.
+GUI, worker and helper are a matched build from this bundle; do not mix files from other bundles.
+EOF
 install -m 0644 "$app_root/packaging/windows/test-capture.ps1" "$bundle/test-capture.ps1"
 install -m 0644 "$app_root/packaging/windows/test-worker.ps1" "$bundle/test-worker.ps1"
 
 cd "$bundle"
-sha256sum easyconnect-hub.exe easyconnect-worker.exe easyconnect-hub-capture.exe windows-capture-tests.exe test-capture.ps1 test-worker.ps1 > SHA256SUMS
+find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
 python_bin=python3
 if ! command -v python3 >/dev/null 2>&1 || ! python3 -c "" 2>/dev/null; then
   python_bin=python
 fi
-"$python_bin" - "$bundle" <<'PY'
+cd "$app_root/build"
+final_bundle="$app_root/build/$bundle_name"
+if [[ -e "$final_bundle" || -L "$final_bundle" ]]; then
+  rm -rf -- "$final_bundle"
+fi
+mv -- "$bundle" "$final_bundle"
+trap - EXIT
+bundle="$final_bundle"
+# PowerShell/worker execution can hold directory handles on Windows. Run the
+# process check after the directory rename, before replacing the archive.
+pwsh -NoProfile -ExecutionPolicy Bypass -File "$bundle/test-worker.ps1"
+archive_tmp="$app_root/build/.${bundle_name}.zip.tmp.$$"
+trap 'rm -f -- "$archive_tmp"' EXIT
+"$python_bin" - "$bundle" "$archive_tmp" <<'PY'
 import pathlib, sys, zipfile
 bundle = pathlib.Path(sys.argv[1])
-with zipfile.ZipFile(str(bundle) + '.zip', 'w', zipfile.ZIP_DEFLATED) as output:
+with zipfile.ZipFile(sys.argv[2], 'w', zipfile.ZIP_DEFLATED) as output:
     for file in sorted(bundle.rglob('*')):
         if file.is_file():
             output.write(file, file.relative_to(bundle.parent))
 PY
+mv -f -- "$archive_tmp" "$final_bundle.zip"
+trap - EXIT
 printf 'Windows bundle: %s\n' "$bundle"

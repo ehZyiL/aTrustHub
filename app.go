@@ -37,7 +37,7 @@ const appName = "EasyConnect Hub"
 // app is everything the window shows and the manager that does the work.
 // appBuild is shown in the footer and the startup log so an old running
 // instance is easy to tell apart from a freshly built one.
-const appBuild = "0.1.0-dev-multigateway-tun.2"
+const appBuild = "0.1.0-dev-multigateway-tun.11"
 
 //go:embed resources/icon.png
 var embeddedAppIcon []byte
@@ -506,7 +506,7 @@ func (a *app) start() {
 			}
 			if time.Since(last) > 60*time.Second {
 				last = time.Now()
-				a.tunLogf("巡检：on=%v pending=%v 已建=%q 当前=%q", a.tunOn, a.tunPending, a.tunPoints, a.onlineSnapshot())
+				a.tunLogf("旧版 TUN 巡检：on=%v pending=%v 已建=%q 当前=%q", a.tunOn, a.tunPending, a.tunPoints, a.onlineSnapshot())
 			}
 		}
 	}()

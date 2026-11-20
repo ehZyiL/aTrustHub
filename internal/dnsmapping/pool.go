@@ -62,24 +62,35 @@ func overlaps(p netip.Prefix, resource netpolicy.Range) bool {
 func Choose(occupied []netip.Prefix, resources []netpolicy.Range) (netip.Prefix, error) {
 	for i := 0; i < 16; i++ {
 		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 19, byte(i * 16), 0}), 20)
-		free := true
-		for _, used := range occupied {
-			if used.Overlaps(p) {
-				free = false
-				break
-			}
-		}
-		for _, resource := range resources {
-			if overlaps(p, resource) {
-				free = false
-				break
-			}
-		}
-		if free {
+		if available(p, occupied, resources) {
 			return p, nil
 		}
 	}
 	return netip.Prefix{}, errors.New("没有空闲的 DNS 映射池，请保留显式代理或等待旧映射退役")
+}
+
+// ChooseRequired preserves a live worker's existing pool only when it is still
+// available. Reservations belonging to old helpers or other sessions still win.
+func ChooseRequired(occupied []netip.Prefix, resources []netpolicy.Range, raw string) (netip.Prefix, error) {
+	prefix, err := netip.ParsePrefix(raw)
+	if err != nil || !ValidPrefix(prefix) || !available(prefix, occupied, resources) {
+		return netip.Prefix{}, errors.New("既有 worker DNS 映射池不可用，请重新登录该网关后切换接管模式")
+	}
+	return prefix, nil
+}
+
+func available(p netip.Prefix, occupied []netip.Prefix, resources []netpolicy.Range) bool {
+	for _, used := range occupied {
+		if used.Overlaps(p) {
+			return false
+		}
+	}
+	for _, resource := range resources {
+		if overlaps(p, resource) {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *Registry) prune() {
@@ -134,6 +145,37 @@ func (r *Registry) Begin(id Identity, prefix string, resources []netpolicy.Range
 	lease.inFlight++
 	var once sync.Once
 	return func() { once.Do(func() { r.mu.Lock(); lease.inFlight--; r.prune(); r.mu.Unlock() }) }, nil
+}
+
+// CheckPrefix checks a transport acknowledgement without allocating a pool.
+// A worker that has answered DNS cannot change pools until its next login.
+func (r *Registry) CheckPrefix(id Identity, raw string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.prune()
+	prefix, err := netip.ParsePrefix(raw)
+	if err != nil || !ValidPrefix(prefix) {
+		return errors.New("无效 DNS 映射池")
+	}
+	if current := r.pools[id.Key]; current != nil && (current.retired || current.prefix != prefix || current.identity != id) {
+		return errors.New("会话映射池不能重新绑定")
+	}
+	return nil
+}
+
+// Prefix returns the pool already bound to this live worker identity. It does
+// not allocate or restore a retired pool.
+func (r *Registry) Prefix(id Identity) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.prune()
+	if p := r.pools[id.Key]; p != nil {
+		if p.retired || p.identity != id {
+			return "", errors.New("会话映射池身份已变化，请重新登录该网关后切换接管模式")
+		}
+		return p.prefix.String(), nil
+	}
+	return "", nil
 }
 
 func (r *Registry) Stage(key, domain string, aliases []workeripc.DNSAlias) error {

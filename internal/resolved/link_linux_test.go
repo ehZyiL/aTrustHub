@@ -28,6 +28,44 @@ func TestDomainConfigValidation(t *testing.T) {
 	}
 }
 
+func TestCheckDomainsDelegateCompatibilityAndErrors(t *testing.T) {
+	ctx := context.Background()
+	unknownMethod := errors.New("busctl: Call failed: Unknown method ListDelegates or interface org.freedesktop.resolve1.Manager")
+	for _, test := range []struct {
+		name string
+		data string
+		err  error
+		want bool
+	}{
+		{name: "systemd before delegate API", err: unknownMethod},
+		{name: "new API with no delegates", data: `{"data":[[]]}`},
+		{name: "configured delegate", data: `{"data":[[["corp","/org/freedesktop/resolve1/delegate/corp"]]]}`, want: true},
+		{name: "permission failure", err: errors.New("access denied"), want: true},
+		{name: "malformed response", data: `not json`, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := checkDomains(ctx, func(_ context.Context, tool, _ string, args ...string) ([]byte, error) {
+				if tool != "busctl" || len(args) == 0 {
+					t.Fatalf("unexpected command: %s %v", tool, args)
+				}
+				if args[len(args)-1] == "Domains" {
+					return []byte(`{"data":[]}`), nil
+				}
+				if args[len(args)-1] != "ListDelegates" {
+					t.Fatalf("unexpected busctl arguments: %v", args)
+				}
+				if test.err != nil {
+					return nil, test.err
+				}
+				return []byte(test.data), nil
+			}, []string{"corp.test"}, 0)
+			if (err != nil) != test.want {
+				t.Fatalf("checkDomains() error=%v, want error=%t", err, test.want)
+			}
+		})
+	}
+}
+
 func namespaceCommand(ctx context.Context, tool, input string, args ...string) ([]byte, error) {
 	if tool != "ip" && tool != "busctl" {
 		return nil, errors.New("unsupported test command")

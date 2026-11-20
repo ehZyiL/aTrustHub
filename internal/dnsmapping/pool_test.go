@@ -9,6 +9,44 @@ import (
 	"time"
 )
 
+func TestRequiredPoolPreservesIdentityWithoutBypassingReservations(t *testing.T) {
+	const raw = "198.19.32.0/20"
+	prefix := netip.MustParsePrefix(raw)
+	if got, err := ChooseRequired(nil, nil, raw); err != nil || got != prefix {
+		t.Fatal(got, err)
+	}
+	for _, occupied := range [][]netip.Prefix{{prefix}, {netip.MustParsePrefix("198.19.0.0/16")}, {netip.MustParsePrefix("198.19.32.1/32")}} {
+		if _, err := ChooseRequired(occupied, nil, raw); err == nil {
+			t.Fatal("required pool bypassed an existing reservation", occupied)
+		}
+	}
+	if _, err := ChooseRequired(nil, []netpolicy.Range{{Min: "198.19.32.1", Max: "198.19.32.1"}}, raw); err == nil {
+		t.Fatal("required pool bypassed an authorized resource")
+	}
+	r := Registry{}
+	id := Identity{Key: "A/1", GatewayID: "A", Generation: 1, Version: "v1"}
+	if got, err := r.Prefix(id); got != "" || err != nil || len(r.pools) != 0 {
+		t.Fatal("pool lookup allocated a mapping")
+	}
+	finish, err := r.Begin(id, raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer finish()
+	other := id
+	other.Generation++
+	if got, err := r.Prefix(id); got != raw || err != nil {
+		t.Fatal(got, err)
+	}
+	if _, err := r.Prefix(other); err == nil {
+		t.Fatal("pool lookup crossed generation identity")
+	}
+	r.Retire(id.Key)
+	if _, err := r.Prefix(id); err == nil {
+		t.Fatal("retired pool was offered to a new capture mode")
+	}
+}
+
 func TestStageCapacityFailureLeavesWholeBatchUnchanged(t *testing.T) {
 	r := Registry{}
 	finish, err := r.Begin(Identity{Key: "A", GatewayID: "A"}, "198.19.0.0/20", nil)

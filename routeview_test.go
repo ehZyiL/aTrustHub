@@ -2,10 +2,50 @@ package main
 
 import (
 	"github.com/egoist/mygo/ui"
+	"github.com/qy/easyconnect/internal/model"
 	"github.com/qy/easyconnect/internal/store"
 	"strings"
 	"testing"
 )
+
+func TestDNSFailoverGroupUIAndPersistence(t *testing.T) {
+	a := testApp(t)
+	_, err := a.store.Update(func(cfg *model.Config) error {
+		for _, id := range []string{"A", "B"} {
+			cfg.Points = append(cfg.Points, model.AccessPoint{ID: id, Name: id})
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.cfg = a.store.Config()
+	a.openRoutes()
+	a.routes.tab = 2
+	a.routes.pattern = "corp.test"
+	a.routes.dnsFailover = true
+	for _, id := range []string{"A", "B"} {
+		selected := true
+		a.routes.shared[id] = &selected
+	}
+	a.addRoutePolicy(true)
+	if a.routes.err != "" {
+		t.Fatal(a.routes.err)
+	}
+	reloaded, err := store.Open(a.dir, nil)
+	if err != nil || len(reloaded.Config().Settings.SharedExits) != 1 || !reloaded.Config().Settings.SharedExits[0].DNSFailover {
+		t.Fatal("DNS group flag was not persisted", err)
+	}
+	texts := strings.Join(ui.NewTester(a.view, 1120, 800).Texts(), "|")
+	if !strings.Contains(texts, "DNS 离线备用") {
+		t.Fatal(texts)
+	}
+	a.routes.pattern = "192.0.2.1"
+	a.addRoutePolicy(true)
+	if a.routes.err == "" || len(a.store.Config().Settings.SharedExits) != 1 {
+		t.Fatal("IP-only group accepted DNS equivalence")
+	}
+}
 
 func TestRoutePolicyUIAndPersistence(t *testing.T) {
 	a := testApp(t)

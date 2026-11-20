@@ -1,9 +1,7 @@
 package wincapture
 
 import (
-	"encoding/binary"
 	"errors"
-	"math/bits"
 	"net/netip"
 
 	"github.com/qy/easyconnect/internal/dnsmapping"
@@ -43,44 +41,7 @@ func OriginalRoute(destination netip.Addr, routes []Route, excluded uint32) (Rou
 // ResourcePrefixes converts exact gateway ranges without widening them. A
 // full/default route is never accepted. IPv6 capture is not available yet.
 func ResourcePrefixes(ranges []netpolicy.Range) ([]netip.Prefix, error) {
-	compact, err := netpolicy.Compact(ranges)
-	if err != nil {
-		return nil, err
-	}
-	var out []netip.Prefix
-	var captured uint64
-	for _, r := range compact {
-		lo, hi, _ := r.Addresses()
-		if !lo.Is4() {
-			return nil, errors.New("Windows 软件接管暂不支持 IPv6 内网资源")
-		}
-		low, high := lo.As4(), hi.As4()
-		start, end := uint64(binary.BigEndian.Uint32(low[:])), uint64(binary.BigEndian.Uint32(high[:]))
-		captured += end - start + 1
-		if captured > 1<<20 {
-			return nil, errors.New("接管范围超过 1048576 个 IPv4 地址，请缩小捕获范围或使用显式代理")
-		}
-		for start <= end {
-			size := min(bits.TrailingZeros64(start), bits.Len64(end-start+1)-1)
-			if size >= 32 {
-				return nil, errors.New("Windows 软件接管不允许默认路由")
-			}
-			var b [4]byte
-			binary.BigEndian.PutUint32(b[:], uint32(start))
-			prefix := netip.PrefixFrom(netip.AddrFrom4(b), 32-size)
-			for _, reserved := range []string{"0.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "198.18.0.0/15", "224.0.0.0/3"} {
-				if prefix.Overlaps(netip.MustParsePrefix(reserved)) {
-					return nil, errors.New("VPN 资源包含本机、链路本地、映射或非单播范围，请使用显式代理")
-				}
-			}
-			out = append(out, prefix)
-			if len(out) > 2048 {
-				return nil, errors.New("VPN 资源需要过多系统路由，请使用显式代理")
-			}
-			start += 1 << size
-		}
-	}
-	return out, nil
+	return netpolicy.ResourcePrefixes(ranges)
 }
 
 // The adapter subnet and domain alias pool are separate. Adapter addresses

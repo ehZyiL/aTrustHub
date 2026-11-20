@@ -16,6 +16,7 @@ type routeDraft struct {
 	query, filter                                  string
 	pattern, protocol, ports, action, gateway, err string
 	shared                                         map[string]*bool
+	dnsFailover                                    bool
 	each, total                                    string
 }
 
@@ -144,7 +145,7 @@ func (a *app) addRoutePolicy(shared bool) {
 					ids = append(ids, p.ID)
 				}
 			}
-			s.SharedExits = append(s.SharedExits, routing.Group{ID: model.NewID(), Pattern: strings.TrimSpace(d.pattern), Protocol: d.protocol, PortMin: lo, PortMax: hi, Gateways: ids})
+			s.SharedExits = append(s.SharedExits, routing.Group{ID: model.NewID(), Pattern: strings.TrimSpace(d.pattern), Protocol: d.protocol, PortMin: lo, PortMax: hi, Gateways: ids, DNSFailover: d.dnsFailover})
 		} else {
 			action := map[string]string{"自动": "auto", "指定网关": "gateway", "原网络": "direct", "阻止": "block"}[d.action]
 			id := ""
@@ -286,6 +287,8 @@ func (a *app) routePolicies(c *ui.Context) {
 	}
 	ui.Divider(c)
 	ui.Text(c, "同业务备用出口（沿用上方目标、协议和端口）").FontSize(13).Bold()
+	ui.Checkbox(c, &d.dnsFailover, "名称服务也等价：DNS 所属网关离线时允许备用")
+	ui.Text(c, "此选项声明整个名称的 DNS 服务等价，与业务端口无关。新查询按下方网关顺序选择在线归属；固定 DNS 归属仍优先。已发布地址不改绑，查询超时不尝试其他网关。").FontSize(11).Wrap()
 	for _, p := range a.cfg.Points {
 		if d.shared[p.ID] == nil {
 			v := false
@@ -298,7 +301,11 @@ func (a *app) routePolicies(c *ui.Context) {
 	}
 	for i, g := range a.cfg.Settings.SharedExits {
 		ui.Row(c).Gap(6).Children(func() {
-			ui.Text(c, fmt.Sprintf("%s · %s:%d–%d · %s", g.Pattern, g.Protocol, g.PortMin, g.PortMax, strings.Join(g.Gateways, ", "))).FontSize(11).Grow(1).Wrap()
+			dns := ""
+			if g.DNSFailover {
+				dns = " · DNS 离线备用"
+			}
+			ui.Text(c, fmt.Sprintf("%s · %s:%d–%d · %s%s", g.Pattern, g.Protocol, g.PortMin, g.PortMax, strings.Join(g.Gateways, ", "), dns)).FontSize(11).Grow(1).Wrap()
 			if ui.Button(c, "删除").Label("删除出口组 " + g.ID).Clicked() {
 				a.updateRoutes(func(s *model.Settings) error {
 					s.SharedExits = append(s.SharedExits[:i], s.SharedExits[i+1:]...)

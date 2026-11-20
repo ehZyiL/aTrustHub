@@ -31,6 +31,7 @@ type Gateway struct {
 	Generation     int
 	Version        string
 	Online, Strict bool
+	UDP            bool // Strict IPv4 UDP has been negotiated for this generation.
 	Excluded       bool // aggregate exclusion; explicit bindings still work
 	Current        *workeripc.ResourceSnapshot
 	Known          *workeripc.ResourceSnapshot // attribution only; never authorizes a dial
@@ -56,12 +57,13 @@ type Decision struct {
 // Group explicitly declares equivalent exits for one target policy. Sharing
 // a CIDR or domain is insufficient to infer this relationship.
 type Group struct {
-	ID       string   `json:"id"`
-	Pattern  string   `json:"pattern"`
-	Protocol string   `json:"protocol"`
-	PortMin  int      `json:"portMin"`
-	PortMax  int      `json:"portMax"`
-	Gateways []string `json:"gateways"`
+	ID          string   `json:"id"`
+	Pattern     string   `json:"pattern"`
+	Protocol    string   `json:"protocol"`
+	PortMin     int      `json:"portMin"`
+	PortMax     int      `json:"portMax"`
+	Gateways    []string `json:"gateways"`
+	DNSFailover bool     `json:"dnsFailover,omitempty"` // Explicitly equivalent name service; new queries may use an online backup.
 }
 
 func NormalizeHost(host string) (string, error) {
@@ -223,12 +225,12 @@ func Decide(r Request, gateways []Gateway, groups []Group, policies ...Policy) D
 	}
 	if r.Mapped {
 		ip, e := netip.ParseAddr(host)
-		if e != nil || !netip.MustParsePrefix(workeripc.CaptureAliasBlock).Contains(ip) || r.GatewayID == "" || network != "tcp" {
+		if e != nil || !netip.MustParsePrefix(workeripc.CaptureAliasBlock).Contains(ip) || r.GatewayID == "" || network != "tcp" && network != "udp" {
 			d.Reason = "无效的映射身份"
 			return d
 		}
 		for _, g := range gateways {
-			if g.ID == r.GatewayID && g.Online && g.Strict {
+			if g.ID == r.GatewayID && g.Online && g.Strict && (network != "udp" || g.UDP) {
 				d.Action, d.Reason = "vpn", "映射绑定当前会话，核心再次校验身份和授权"
 				d.Owners = []string{g.ID}
 				d.Candidates = []Candidate{{ID: g.ID, Name: g.Name, Generation: g.Generation, Version: g.Version}}
@@ -291,7 +293,7 @@ func Decide(r Request, gateways []Gateway, groups []Group, policies ...Policy) D
 		d.Reason = "内网 IPv6 尚不支持"
 		return d
 	}
-	if network != "tcp" {
+	if network != "tcp" && network != "udp" {
 		d.Reason = "内网业务协议尚不支持，仅支持 IPv4 TCP"
 		return d
 	}
@@ -307,6 +309,10 @@ func Decide(r Request, gateways []Gateway, groups []Group, policies ...Policy) D
 		}
 		if !g.Strict {
 			d.Reason = "所属网关缺少严格 VPN 拨号能力，请更新配套核心"
+			continue
+		}
+		if network == "udp" && !g.UDP {
+			d.Reason = "所属网关没有可用的 IPv4 UDP 隧道，或核心版本不匹配"
 			continue
 		}
 		d.Candidates = append(d.Candidates, Candidate{ID: g.ID, Name: g.Name, Version: g.Version, Generation: g.Generation, NeedsResolution: dnsOnly})

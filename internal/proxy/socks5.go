@@ -41,6 +41,8 @@ type Options struct {
 	// Dial opens the connection to the destination the client asked for.
 	// It must be safe for concurrent use.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// DialDatagram enables the private IPv4 datagram link for system helpers.
+	DialDatagram func(ctx context.Context, addr string) (net.Conn, error)
 	// Auth, when set, asks for a username and 口令.
 	Auth *Auth
 	// OnConnect and OnClose report the life of one client connection.
@@ -61,13 +63,18 @@ type Server struct {
 	wg       sync.WaitGroup
 	handlers sync.WaitGroup
 	conns    map[net.Conn]struct{}
+	packets  chan struct{}
 	active   atomic.Int64
 	total    atomic.Int64
 }
 
 // New returns a Server that is not listening yet.
 func New(opts Options) *Server {
-	return &Server{opts: opts, conns: map[net.Conn]struct{}{}}
+	s := &Server{opts: opts, conns: map[net.Conn]struct{}{}}
+	if opts.DialDatagram != nil {
+		s.packets = make(chan struct{}, 128)
+	}
+	return s
 }
 
 // SetDial swaps the dialer used for new connections. When the global TUN
@@ -94,6 +101,12 @@ func (s *Server) Start() error {
 	}
 	if s.opts.Addr == "" {
 		return errors.New("proxy: no address")
+	}
+	if s.packets != nil {
+		host, _, err := net.SplitHostPort(s.opts.Addr)
+		if err != nil || host != "127.0.0.1" || !s.opts.SOCKSOnly || s.opts.Auth == nil || s.opts.Auth.Username == "" || s.opts.Auth.Credential == "" {
+			return errors.New("proxy: datagrams require an authenticated private IPv4 listener")
+		}
 	}
 	ln, err := net.Listen("tcp", s.opts.Addr)
 	if err != nil {
@@ -238,6 +251,10 @@ func (s *Server) handle(conn net.Conn) {
 	br := bufio.NewReaderSize(conn, 4096)
 	first, err := br.Peek(1)
 	if err != nil {
+		return
+	}
+	if s.packets != nil && first[0] == datagramPreface {
+		s.handleDatagrams(conn, br)
 		return
 	}
 	if first[0] == 0x04 {

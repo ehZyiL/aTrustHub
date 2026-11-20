@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -39,7 +41,7 @@ func validID(id string) bool {
 // The desktop creates a single-instance, local-only pipe before UAC. Both
 // endpoints verify the other's OS process identity. Secrets use this pipe,
 // never the command line, registry, environment or a temporary config file.
-func startHelper(ctx context.Context) (*os.File, error) {
+func startHelper(ctx context.Context) (*helperTransport, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -53,6 +55,9 @@ func startHelper(ctx context.Context) (*os.File, error) {
 	helper := filepath.Join(filepath.Dir(exe), "easyconnect-hub-capture.exe")
 	if info, err := os.Stat(helper); err != nil || !info.Mode().IsRegular() {
 		return nil, errors.New("缺少 Windows 网络助手，请解压完整测试包")
+	}
+	if err := checkHelperProtocol(ctx, helper); err != nil {
+		return nil, err
 	}
 	id, err := randomID()
 	if err != nil {
@@ -155,6 +160,10 @@ func startHelper(ctx context.Context) (*os.File, error) {
 	if !token.IsElevated() {
 		return nil, errors.New("网络助手未获管理员权限")
 	}
+	helperIdentity, err := processIdentity(peer, pid)
+	if err != nil {
+		return nil, fmt.Errorf("记录网络助手身份：%w", err)
+	}
 	f := os.NewFile(uintptr(h), name)
 	if err = f.SetDeadline(time.Now().Add(15 * time.Second)); err != nil {
 		f.Close()
@@ -162,7 +171,23 @@ func startHelper(ctx context.Context) (*os.File, error) {
 		return nil, windowsError("设置助手管道超时 SetDeadline", err)
 	}
 	owned = false
-	return f, nil
+	return &helperTransport{File: f, id: id, identity: helperIdentity}, nil
+}
+
+func checkHelperProtocol(ctx context.Context, helper string) error {
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(probeCtx, helper, "--protocol-version")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.WaitDelay = time.Second
+	output, err := cmd.Output()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err != nil || strings.TrimSpace(string(output)) != strconv.Itoa(ProtocolVersion) {
+		return fmt.Errorf("Windows 网络助手版本不匹配或无法校验（需要协议 v%d），请重新解压完整测试包", ProtocolVersion)
+	}
+	return nil
 }
 
 func connectDesktop(ctx context.Context, id string, expected Identity) (*os.File, windows.Handle, error) {

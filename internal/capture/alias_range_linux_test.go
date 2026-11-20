@@ -42,3 +42,18 @@ func TestAliasAllocationExcludesCorePoolWithoutAnyKernelRoute(t *testing.T) {
 		t.Fatal("exhaustion fell back to upstream resolver's private pool")
 	}
 }
+
+func TestAliasAllocationPreservesRequiredWorkerPoolOrRejects(t *testing.T) {
+	s := inventory(t, `[]`, `[]`, `[]`)
+	const wanted = "198.19.32.0/20"
+	if got, err := chooseAliasPrefix(s, nil, nil, wanted); err != nil || got != wanted {
+		t.Fatal(got, err)
+	}
+	if _, err := chooseAliasPrefix(s, nil, []string{wanted}, wanted); err == nil {
+		t.Fatal("required worker pool ignored a retirement reservation")
+	}
+	s = inventory(t, `[]`, `[{"dst":"198.19.32.1"}]`, `[]`)
+	if _, err := chooseAliasPrefix(s, nil, nil, wanted); err == nil {
+		t.Fatal("required worker pool ignored a foreign host route")
+	}
+}

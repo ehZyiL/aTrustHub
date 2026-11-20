@@ -3,6 +3,7 @@ package localapps
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -81,6 +82,83 @@ func TestSystemCaptureSharesPrivateEntryAndOriginalExit(t *testing.T) {
 		if s.stops.Load() != 1 || s.releases.Load() != 1 {
 			t.Fatal("scope leaked")
 		}
+	}
+}
+
+func TestSystemCaptureReconcilesRepeatedReconnects(t *testing.T) {
+	ctx := context.Background()
+	a, b := systemTestConfig("A"), systemTestConfig("B")
+	b.Networks = []netpolicy.Range{{Min: "10.45.0.8", Max: "10.45.0.8"}}
+	live := map[string]*fakeSystemSession{}
+	reject := ""
+	var coverageLost bool
+	acquire := func(_ context.Context, key string, _ wincapture.Config) (systemSession, func(), error) {
+		if key == reject {
+			return nil, nil, errors.New("new scope not ready")
+		}
+		if len(live) >= 3 {
+			return nil, nil, errors.New("too many scopes")
+		}
+		s := &fakeSystemSession{done: make(chan struct{})}
+		live[key] = s
+		return s, func() {
+			delete(live, key)
+			if key != a.Key && len(live) == 1 {
+				coverageLost = true
+			}
+			close(s.done)
+		}, nil
+	}
+	r, err := startSystemCapture(ctx, &dnsPool{}, []CaptureConfig{a, b},
+		func(context.Context, string, string) (net.Conn, error) { return nil, net.ErrClosed }, acquire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	originalA := live[a.Key]
+	for gen := 2; gen <= 33; gen++ {
+		guard := b
+		guard.Key, guard.Guard = fmt.Sprintf("guard-%d", gen), true
+		if err := r.Reconcile(ctx, []CaptureConfig{a, guard}); err != nil || len(live) != 2 {
+			t.Fatalf("offline generation %d allocated a redundant guard: %v", gen, err)
+		}
+		b.Key = fmt.Sprintf("B-%d", gen)
+		b.Identity.Generation = gen
+		reject = b.Key
+		if err := r.Reconcile(ctx, []CaptureConfig{a, b}); err == nil || len(live) != 2 {
+			t.Fatalf("failed generation %d lost old coverage: %v", gen, err)
+		}
+		reject = ""
+		if err := r.Reconcile(ctx, []CaptureConfig{a, b}); err != nil || len(live) != 2 || live[b.Key] == nil {
+			t.Fatalf("generation %d did not replace its previous scope: %v", gen, err)
+		}
+	}
+	if live[a.Key] != originalA || originalA.stops.Load() != 0 || coverageLost {
+		t.Fatal("reconnect interrupted capture coverage")
+	}
+}
+
+func TestSystemCaptureKeepsOldRoutesWithoutReplacementCoverage(t *testing.T) {
+	ctx := context.Background()
+	before, after := systemTestConfig("before"), systemTestConfig("after")
+	after.Identity.GatewayID = before.Identity.GatewayID
+	after.Networks = []netpolicy.Range{{Min: "10.45.0.8", Max: "10.45.0.8"}}
+	a := &fakeSystemSession{done: make(chan struct{})}
+	b := &fakeSystemSession{done: make(chan struct{})}
+	acquire := func(_ context.Context, key string, _ wincapture.Config) (systemSession, func(), error) {
+		if key == before.Key {
+			return a, func() {}, nil
+		}
+		return b, func() {}, nil
+	}
+	r, err := startSystemCapture(ctx, &dnsPool{}, []CaptureConfig{before},
+		func(context.Context, string, string) (net.Conn, error) { return nil, net.ErrClosed }, acquire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if err := r.Reconcile(ctx, []CaptureConfig{after}); err != nil || a.stops.Load() != 0 {
+		t.Fatal("previous resource could escape to the original network", err)
 	}
 }
 

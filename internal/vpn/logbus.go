@@ -99,13 +99,17 @@ func (b *LogBus) upsert(source, line string, event *RouteEvent) {
 			break
 		}
 	}
-	b.lines = append(b.lines, LogEntry{At: at, Source: source, Line: line, Route: event})
+	entry := LogEntry{At: at, Source: source, Line: line, Route: event}
+	if len(b.lines) < b.limit {
+		b.lines = append(b.lines, entry)
+	} else if len(b.lines) > 0 {
+		// At capacity, evict the oldest entry without reallocating the panel buffer.
+		copy(b.lines, b.lines[1:])
+		b.lines[len(b.lines)-1] = entry
+	}
 	// Only a first sighting goes to the file; repeats just refresh the panel.
 	if b.sink != nil && !replaced {
 		_, _ = fmt.Fprintf(b.sink, "%s [%s] %s\n", at.Format("2006-01-02 15:04:05"), source, line)
-	}
-	if over := len(b.lines) - b.limit; over > 0 {
-		b.lines = append([]LogEntry(nil), b.lines[over:]...)
 	}
 	notify := b.notify
 	b.mu.Unlock()

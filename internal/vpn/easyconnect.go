@@ -426,6 +426,16 @@ func (s *processSession) Close() error {
 var _ Prober = (*processSession)(nil)
 
 func (s *processSession) Probe(ctx context.Context) error {
+	if err := s.ProbeDNS(ctx); !errors.Is(err, errProbeUnavailable) {
+		return err
+	}
+	if target := healthTarget(s.info); target != "" {
+		return probeSession(ctx, s, target)
+	}
+	return errProbeUnavailable
+}
+
+func (s *processSession) ProbeDNS(ctx context.Context) error {
 	select {
 	case <-s.done:
 		return s.Err()
@@ -455,27 +465,10 @@ func (s *processSession) Probe(ctx context.Context) error {
 		if err := res.Unpack(reply); err != nil {
 			return fmt.Errorf("隧道 DNS 应答解析失败：%w", err)
 		}
+		if res.Rcode != dns.RcodeSuccess && res.Rcode != dns.RcodeNameError {
+			return fmt.Errorf("隧道 DNS 返回 %s", dns.RcodeToString[res.Rcode])
+		}
 		return nil
 	}
-
-	// 2. If business addresses or health targets exist, dial via tunnel.
-	target := s.info.HealthTarget
-	if target == "" && s.info.Resources != nil {
-		for _, r := range s.info.Resources.IPRules {
-			if r.Min == r.Max && r.PortMin == r.PortMax && r.PortMin > 0 {
-				target = net.JoinHostPort(r.Min, strconv.Itoa(r.PortMin))
-				break
-			}
-		}
-	}
-	if target != "" {
-		conn, err := s.Dial(ctx, "tcp", target)
-		if err != nil {
-			return fmt.Errorf("隧道业务探测失败：%w", err)
-		}
-		_ = conn.Close()
-		return nil
-	}
-
 	return errProbeUnavailable
 }

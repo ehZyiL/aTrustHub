@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -143,6 +142,8 @@ type View struct {
 	TunnelState string
 	TunnelErr   string
 	TunnelFails int
+	DNSProbe    ProbeResult
+	TCPProbe    ProbeResult
 	ClientIP    string
 	DNSServer   string
 	NodeGroups  []string
@@ -227,6 +228,8 @@ type endpoint struct {
 	tunnelState string
 	tunnelErr   string
 	tunnelFails int
+	dnsHealth   ProbeResult
+	tcpHealth   ProbeResult
 	// tunnelRebuilds counts automatic rebuilds since the tunnel last proved
 	// healthy, so a tunnel that dies immediately cannot be rebuilt forever.
 	tunnelRebuilds int
@@ -390,6 +393,7 @@ func (m *Manager) stopEndpointLocked(id string, closes *[]closeLater) {
 	ep.tunnelState = ""
 	ep.tunnelErr = ""
 	ep.tunnelFails = 0
+	ep.dnsHealth, ep.tcpHealth = ProbeResult{}, ProbeResult{}
 	if ep.cancel != nil {
 		ep.cancel()
 		ep.cancel = nil
@@ -479,6 +483,8 @@ func (m *Manager) Views() []View {
 			TunnelState: ep.tunnelState,
 			TunnelErr:   ep.tunnelErr,
 			TunnelFails: ep.tunnelFails,
+			DNSProbe:    ep.dnsHealth,
+			TCPProbe:    ep.tcpHealth,
 		}
 		if !ep.aliveAt.IsZero() {
 			v.AliveAt = ep.aliveAt.Unix()
@@ -634,6 +640,7 @@ func (m *Manager) connect(id string, gen int) {
 	cur.tunnelState = ""
 	cur.tunnelErr = ""
 	cur.tunnelFails = 0
+	cur.dnsHealth, cur.tcpHealth = ProbeResult{}, ProbeResult{}
 	cur.lastTraffic = time.Now()
 	// A fresh login starts the validity report from scratch.
 	cur.aliveFails = 0
@@ -1404,6 +1411,7 @@ func (m *Manager) SetTunServed(ids []string) {
 			ep.tunnelState = ""
 			ep.tunnelErr = ""
 			ep.tunnelFails = 0
+			ep.dnsHealth, ep.tcpHealth = ProbeResult{}, ProbeResult{}
 		case !want && ep.tunServed:
 			// TUN no longer carries it: log in again so the point gets its
 			// own tunnel back (a fresh proxy is created with that session).
@@ -1412,6 +1420,7 @@ func (m *Manager) SetTunServed(ids []string) {
 			ep.tunnelState = ""
 			ep.tunnelErr = ""
 			ep.tunnelFails = 0
+			ep.dnsHealth, ep.tcpHealth = ProbeResult{}, ProbeResult{}
 			if ep.state == StateOnline {
 				reconnect = append(reconnect, id)
 			}
@@ -1603,7 +1612,6 @@ func (m *Manager) probeAll(autoReconnect bool) {
 		gen    int
 		sess   Session
 		target string
-		useDNS bool
 	}
 	var probes []probe
 	idleAfter := time.Duration(0)
@@ -1631,16 +1639,9 @@ func (m *Manager) probeAll(autoReconnect bool) {
 				continue
 			}
 		}
-		target := keepAliveTarget(ep.info.Apps)
-		useDNS := false
-		if target == "" {
-			if _, ok := ep.sess.(Prober); !ok {
-				continue
-			}
-			useDNS = true
-		}
+		target := healthTarget(ep.info)
 		probes = append(probes, probe{
-			id: id, name: ep.cfg.Name, gen: ep.gen, sess: ep.sess, target: target, useDNS: useDNS,
+			id: id, name: ep.cfg.Name, gen: ep.gen, sess: ep.sess, target: target,
 		})
 	}
 	m.mu.RUnlock()
@@ -1652,26 +1653,10 @@ func (m *Manager) probeAll(autoReconnect bool) {
 		go func() {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-			var err error
-			if p.useDNS {
-				err = p.sess.(Prober).Probe(ctx)
-			} else {
-				err = probeSession(ctx, p.sess, p.target)
-				// An application can be down while the tunnel is fine. The
-				// remote DNS lookup proves the tunnel itself, so only both
-				// failing is a failure.
-				if err != nil {
-					if prober, ok := p.sess.(Prober); ok {
-						dnsCtx, dnsCancel := context.WithTimeout(context.Background(), 6*time.Second)
-						if prober.Probe(dnsCtx) == nil {
-							err = nil
-						}
-						dnsCancel()
-					}
-				}
-			}
+			dnsResult, tcpResult, err := sessionHealth(ctx, p.sess, p.target)
 			cancel()
 
+			m.recordHealth(p.id, p.gen, p.sess, dnsResult, tcpResult)
 			m.recordProbe(p.id, p.name, p.gen, p.sess, err, autoReconnect)
 		}()
 	}
@@ -1801,34 +1786,6 @@ func (m *Manager) noteTraffic(id string) {
 	m.mu.Unlock()
 }
 
-// keepAliveTarget returns one address of this point's own applications as
-// host:port, preferring an IPv4 literal so the probe exercises the tunnel
-// without needing a name lookup.
-func keepAliveTarget(apps []App) string {
-	for _, app := range apps {
-		for _, addr := range app.Addresses {
-			host := strings.TrimSpace(addr.Host)
-			if host == "" || strings.ContainsAny(host, "/-") || net.ParseIP(host) == nil {
-				continue
-			}
-			if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
-				continue
-			}
-			// A missing port means "all ports"; there is no single address to
-			// probe, so leave it to the DNS fallback.
-			if strings.TrimSpace(addr.Port) == "" {
-				continue
-			}
-			for _, port := range portsFor(addr.Port) {
-				if port > 0 {
-					return net.JoinHostPort(host, strconv.Itoa(port))
-				}
-			}
-		}
-	}
-	return ""
-}
-
 // errProbeUnavailable means this point offers no way to probe the tunnel, so
 // the result must not be counted as a failure.
 var errProbeUnavailable = errors.New("tunnel probe unavailable")
@@ -1854,10 +1811,7 @@ type Prober interface {
 }
 
 func probeSession(ctx context.Context, sess Session, target string) error {
-	if p, ok := sess.(Prober); ok {
-		return p.Probe(ctx)
-	}
-	conn, err := safeDial(ctx, sess, "tcp", target)
+	conn, err := safeStrictDial(ctx, sess, "tcp", target)
 	if err != nil {
 		return err
 	}

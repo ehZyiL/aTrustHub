@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/qy/easyconnect/internal/model"
+	"github.com/qy/easyconnect/internal/workeripc"
 )
 
 func tunnelApps() []App {
@@ -81,6 +82,7 @@ func TestIdleProbeMarksDeadTunnelAndSchedulesRebuild(t *testing.T) {
 	// connect() stamps lastTraffic; clear it so the tunnel counts as idle.
 	m.mu.Lock()
 	m.points["a"].info.Apps = tunnelApps()
+	m.points["a"].info.Resources = &workeripc.ResourceSnapshot{IPRules: []workeripc.IPRule{{Min: "10.1.2.3", Max: "10.1.2.3", PortMin: 3306, PortMax: 3306, Protocol: "tcp"}}}
 	m.points["a"].lastTraffic = time.Time{}
 	m.mu.Unlock()
 
@@ -140,20 +142,6 @@ func TestUnprobeableTunnelIsNotAFailure(t *testing.T) {
 	}
 	if v.State != StateOnline {
 		t.Fatalf("state = %v, want online", v.State)
-	}
-}
-
-func TestKeepAliveTargetSkipsDomainsAndRanges(t *testing.T) {
-	apps := []App{{Addresses: []AppAddress{
-		{Protocol: "tcp", Host: "db.internal.example", Port: "3306"},
-		{Protocol: "tcp", Host: "10.0.0.1-10.0.0.9", Port: "443"},
-		{Protocol: "tcp", Host: "10.1.2.3", Port: "3306"},
-	}}}
-	if got, want := keepAliveTarget(apps), "10.1.2.3:3306"; got != want {
-		t.Fatalf("keepAliveTarget = %q, want %q", got, want)
-	}
-	if got := keepAliveTarget(nil); got != "" {
-		t.Fatalf("keepAliveTarget(nil) = %q, want empty", got)
 	}
 }
 

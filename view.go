@@ -899,6 +899,18 @@ func (a *app) pointCard(c *ui.Context, v vpn.View) {
 		}
 		// A dead tunnel with a valid login looks "online" everywhere else, so
 		// the probe result needs its own line.
+		if v.State == vpn.StateOnline {
+			for _, probe := range []struct {
+				kind   string
+				result vpn.ProbeResult
+			}{{"DNS", v.DNSProbe}, {"TCP", v.TCPProbe}} {
+				colour := t.TextMuted
+				if probe.result.State == "failed" {
+					colour = t.Warning
+				}
+				ui.Text(c, healthProbeText(probe.kind, probe.result)).FontSize(11).TextColor(colour).Wrap()
+			}
+		}
 		if v.TunnelState != "" && v.State != vpn.StateError {
 			colour := t.Warning
 			label := "隧道保活探测失败"

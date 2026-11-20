@@ -229,7 +229,7 @@ func (a *app) localAppRow(c *ui.Context, p model.LocalApp) {
 	v := a.localView(p.ID)
 	online, _ := a.localPointOnline(p)
 	status, tone := localStatusText(t, p, v, online)
-	row := ui.Row(c).Padding(10, 12).Gap(10).AlignItems(ui.Center).Radius(8)
+	row := ui.Row(c).Padding(12, 14).Gap(10).AlignItems(ui.Center).Radius(8)
 	row.OnClick(func() {
 		a.openLocalAppEditor(p.ID)
 	})

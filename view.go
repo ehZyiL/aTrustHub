@@ -395,7 +395,7 @@ func (a *app) appRow(c *ui.Context, entry appEntry) {
 	t := c.Theme()
 	app := entry.App
 	enabled := a.appEnabled(entry.PointID, app.ID)
-	row := ui.Row(c).Padding(10, 12).Gap(10).AlignItems(ui.Center).Radius(8)
+	row := ui.Row(c).Padding(12, 14).Gap(10).AlignItems(ui.Center).Radius(8)
 	// 悬停时整行轻轻抬起：列表因此有“可以点”的手感。
 	if row.Hovered() {
 		row = row.Background(t.SurfaceHover)
@@ -871,8 +871,8 @@ func (a *app) statusBanner(c *ui.Context, views []vpn.View) {
 		summary += fmt.Sprintf(" · %d 个需要处理", failed)
 	}
 
-	card := ui.Column(c).Padding(12, 14).Gap(8).Radius(12).
-		Border(1, t.Border).Background(t.Surface).Shadow(0, 1, 3, 0, cardShadow(t))
+	card := ui.Column(c).Padding(12, 16).Gap(8).Radius(14).
+		Background(t.Surface.Mix(t.Accent, 0.04)).Shadow(0, 2, 10, 0, cardShadow(t))
 	card.Children(func() {
 		// 一条裤要带上说完了：状态、在线情况、统一入口和批量动作。
 		// 窗口窄时末尾的控件自动换行，不用另起一行版式。
@@ -1025,8 +1025,8 @@ func (a *app) emptyState(c *ui.Context) {
 
 func (a *app) pointCard(c *ui.Context, v vpn.View) {
 	t := c.Theme()
-	card := ui.Column(c).Key("point:"+v.ID).Padding(14).Gap(8).Radius(12).
-		Border(1, t.Border).Background(t.Surface).Shadow(0, 1, 3, 0, cardShadow(t))
+	card := ui.Column(c).Key("point:"+v.ID).Padding(16).Gap(8).Radius(14).
+		Background(t.Surface).Shadow(0, 2, 10, 0, cardShadow(t))
 	card.Children(func() {
 		// 三列卡片里可用宽度有限：名称单行省略，地址与说明合成一行。
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {

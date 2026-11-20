@@ -152,50 +152,66 @@ func (m *Manager) Start(p model.LocalApp, proxyAddress string, connections ...Co
 		m.mu.Unlock()
 		return errors.New("此项目已经启动")
 	}
-	r := &run{view: View{ID: p.ID, PointID: p.PointID, Mode: p.Mode, Observed: true}}
+	ctx, cancel := context.WithCancel(context.Background())
+	setupDone := make(chan struct{})
+	r := &run{
+		view:      View{ID: p.ID, PointID: p.PointID, Mode: p.Mode, Starting: true, Observed: true},
+		cancel:    cancel,
+		setupDone: setupDone,
+	}
+	m.runs[p.ID] = r
+	m.mu.Unlock()
+	m.notify()
+
 	dial := m.trackedDial(p, r, connection.Dial)
-	// Keep setup serialized with Stop/Close; only local bind/process creation
-	// happens here. No upstream VPN dial is performed until a client connects.
 	var done <-chan struct{}
 	var err error
-	var rollback func()
+	var stopFunc func() error
+	var localAddr string
+	var pid int
+
 	if p.Mode == model.LocalAppTCPForward {
 		var f *forward
 		f, err = startForward(p, dial)
 		if err == nil {
 			r.active = connection.Active
-			r.stop, r.view.LocalAddress = func() error { f.close(); return nil }, f.ln.Addr().String()
+			stopFunc = func() error { f.close(); return nil }
+			localAddr = f.ln.Addr().String()
 			done = f.done
 		}
 	} else {
-		ctx, cancel := context.WithCancel(context.Background())
 		s := proxy.New(proxy.Options{Addr: "127.0.0.1:0", Dial: dial, Context: ctx, SOCKSOnly: true})
 		err = s.Start()
 		if err == nil {
 			var b *browserProcess
-			b, err = launchBrowser(p, s.Addr().String())
+			b, err = launchBrowser(ctx, p, s.Addr().String())
 			if err == nil {
-				r.stop = func() error { cancel(); return s.Close() }
-				r.view.PID = b.pid
+				stopFunc = func() error { cancel(); return s.Close() }
+				pid = b.pid
 				browserDone := make(chan struct{})
 				done = browserDone
 				go func() { _ = b.cmd.Wait(); close(browserDone) }()
+			} else {
+				cancel()
+				_ = s.Close()
 			}
-		}
-		if err != nil {
-			rollback = func() { cancel(); _ = s.Close() }
+		} else {
+			cancel()
 		}
 	}
+
+	m.mu.Lock()
+	r.view.Starting = false
 	if err != nil {
 		r.view.Error = err.Error()
 	} else {
 		r.view.Running = true
+		r.view.LocalAddress = localAddr
+		r.view.PID = pid
+		r.stop = stopFunc
 	}
-	m.runs[p.ID] = r
 	m.mu.Unlock()
-	if rollback != nil {
-		rollback()
-	}
+	close(setupDone)
 	m.notify()
 	if done != nil {
 		go func() {

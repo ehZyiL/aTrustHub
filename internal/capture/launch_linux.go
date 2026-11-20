@@ -123,7 +123,7 @@ func (p *Process) Close() error {
 		return p.Err()
 	default:
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, err := p.client.call(ctx, frame{Type: "detach", ID: p.id})
 	p.finish(err)

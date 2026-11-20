@@ -200,3 +200,37 @@ func TestEasyConnectWorkerCancellationAndCrash(t *testing.T) {
 		})
 	}
 }
+
+func TestEasyConnectTunnelProbe(t *testing.T) {
+	exe, _ := os.Executable()
+	t.Setenv("EASYCONNECT_TEST_WORKER", "dns")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	sess, err := NewEasyConnectConnector(exe)(ctx, model.AccessPoint{Server: "gateway.invalid", Port: 443}, Credentials{
+		Login: "test-password",
+		Challenge: func(ctx context.Context, _ Challenge) (string, error) {
+			return "test-code", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer sess.Close()
+
+	prober, ok := sess.(Prober)
+	if !ok {
+		t.Fatal("processSession does not implement Prober")
+	}
+
+	probeCtx, pCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer pCancel()
+	if err := prober.Probe(probeCtx); err != nil {
+		t.Fatalf("probe failed on healthy session: %v", err)
+	}
+
+	_ = sess.Close()
+	if err := prober.Probe(probeCtx); err == nil {
+		t.Fatal("probe succeeded on closed session, want error")
+	}
+}

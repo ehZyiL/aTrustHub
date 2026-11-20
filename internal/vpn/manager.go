@@ -1650,6 +1650,7 @@ func (m *Manager) probeAll(autoReconnect bool) {
 	type probe struct {
 		id     string
 		name   string
+		gen    int
 		sess   Session
 		target string
 		useDNS bool
@@ -1689,7 +1690,7 @@ func (m *Manager) probeAll(autoReconnect bool) {
 			useDNS = true
 		}
 		probes = append(probes, probe{
-			id: id, name: ep.cfg.Name, sess: ep.sess, target: target, useDNS: useDNS,
+			id: id, name: ep.cfg.Name, gen: ep.gen, sess: ep.sess, target: target, useDNS: useDNS,
 		})
 	}
 	m.mu.RUnlock()
@@ -1721,7 +1722,7 @@ func (m *Manager) probeAll(autoReconnect bool) {
 			}
 			cancel()
 
-			m.recordProbe(p.id, p.name, err, autoReconnect)
+			m.recordProbe(p.id, p.name, p.gen, p.sess, err, autoReconnect)
 		}()
 	}
 	wg.Wait()
@@ -1730,9 +1731,9 @@ func (m *Manager) probeAll(autoReconnect bool) {
 // recordProbe applies one probe result. A failed probe never touches the
 // login: the session came from the portal and can stay valid while the tunnel
 // is gone, so the point is marked and then rebuilt from that session.
-func (m *Manager) recordProbe(id, name string, err error, autoReconnect bool) {
+func (m *Manager) recordProbe(id, name string, gen int, sess Session, err error, autoReconnect bool) {
 	m.mu.Lock()
-	if ep := m.points[id]; ep != nil {
+	if ep := m.points[id]; ep != nil && ep.gen == gen && ep.sess == sess {
 		ep.lastProbe = time.Now()
 	}
 	m.mu.Unlock()
@@ -1744,7 +1745,7 @@ func (m *Manager) recordProbe(id, name string, err error, autoReconnect bool) {
 
 	m.mu.Lock()
 	ep := m.points[id]
-	if ep == nil || ep.state != StateOnline {
+	if ep == nil || ep.gen != gen || ep.sess != sess || ep.state != StateOnline {
 		m.mu.Unlock()
 		return
 	}
@@ -1772,16 +1773,16 @@ func (m *Manager) recordProbe(id, name string, err error, autoReconnect bool) {
 		m.changed()
 		return
 	}
-	m.markTunnelDead(id, fmt.Sprintf("隧道保活连续失败 %d 次：%v", fails, err))
+	m.markTunnelDead(id, gen, sess, fmt.Sprintf("隧道保活连续失败 %d 次：%v", fails, err))
 }
 
 // markTunnelDead takes a point whose login still works but whose tunnel does
 // not, marks it, and rebuilds the tunnel from the saved session.
-func (m *Manager) markTunnelDead(id, reason string) {
+func (m *Manager) markTunnelDead(id string, gen int, sess Session, reason string) {
 	var closes []closeLater
 	m.mu.Lock()
 	ep := m.points[id]
-	if ep == nil || ep.state != StateOnline {
+	if ep == nil || ep.gen != gen || ep.sess != sess || ep.state != StateOnline {
 		m.mu.Unlock()
 		return
 	}

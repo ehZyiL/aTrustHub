@@ -2,6 +2,7 @@ package localapps
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/qy/easyconnect/internal/model"
 )
@@ -99,7 +101,7 @@ type browserProcess struct {
 	pid int
 }
 
-func launchBrowser(p model.LocalApp, proxyAddress string) (*browserProcess, error) {
+func launchBrowser(ctx context.Context, p model.LocalApp, proxyAddress string) (*browserProcess, error) {
 	if err := validateProxy(proxyAddress); err != nil {
 		return nil, err
 	}
@@ -107,7 +109,7 @@ func launchBrowser(p model.LocalApp, proxyAddress string) (*browserProcess, erro
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(exe, BrowserSupervisorFlag)
+	cmd := exec.CommandContext(ctx, exe, BrowserSupervisorFlag)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -124,13 +126,38 @@ func launchBrowser(p model.LocalApp, proxyAddress string) (*browserProcess, erro
 	}
 	err = json.NewEncoder(stdin).Encode(browserRequest{Executable: p.Executable, Proxy: proxyAddress, URL: p.URL, WorkDir: p.WorkDir})
 	_ = stdin.Close()
-	var ready browserReady
-	if err == nil {
-		err = json.NewDecoder(bufio.NewReader(io.LimitReader(stdout, 64<<10))).Decode(&ready)
+
+	type decodeResult struct {
+		ready browserReady
+		err   error
 	}
-	_ = stdout.Close()
+	ch := make(chan decodeResult, 1)
+	go func() {
+		var ready browserReady
+		dErr := json.NewDecoder(bufio.NewReader(io.LimitReader(stdout, 64<<10))).Decode(&ready)
+		_ = stdout.Close()
+		ch <- decodeResult{ready: ready, err: dErr}
+	}()
+
+	var ready browserReady
+	select {
+	case res := <-ch:
+		err = res.err
+		ready = res.ready
+	case <-time.After(15 * time.Second):
+		err = errors.New("浏览器启动超时")
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+
 	if err != nil || ready.Error != "" || ready.PID <= 0 {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
 		_ = cmd.Wait()
+		if err != nil {
+			return nil, err
+		}
 		if ready.Error != "" {
 			return nil, errors.New(ready.Error)
 		}
@@ -146,7 +173,7 @@ func OpenBrowser(executable, proxyAddress, target string) error {
 	if err := p.Validate(); err != nil {
 		return err
 	}
-	b, err := launchBrowser(p, proxyAddress)
+	b, err := launchBrowser(context.Background(), p, proxyAddress)
 	if err != nil {
 		return err
 	}

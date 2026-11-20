@@ -3,6 +3,7 @@ package wincapture
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 func powershell(ctx context.Context, script string) error {
@@ -75,4 +77,58 @@ func removeNRPT(ctx context.Context, id string) error {
 	return powershell(ctx, "$owned = @(Get-DnsClientNrptRule | Where-Object { $_.Comment -eq 'EasyConnectHub:"+id+"' })\n"+
 		"foreach ($rule in $owned) { Remove-DnsClientNrptRule -Name $rule.Name -Force }\n"+
 		"if ($owned.Count -gt 0) { Clear-DnsClientCache }\n")
+}
+
+func checkNRPTActive(id string, domains []string, address string) error {
+	const nrptPath = `SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig`
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, nrptPath, registry.QUERY_VALUE|registry.ENUMERATE_SUB_KEYS|registry.WOW64_64KEY)
+	if err != nil {
+		return errors.New("无法读取 Windows DNS 策略注册表")
+	}
+	defer k.Close()
+
+	subkeys, err := k.ReadSubKeyNames(-1)
+	if err != nil {
+		return errors.New("无法列出 Windows DNS 策略规则")
+	}
+
+	targetComment := "EasyConnectHub:" + id
+	foundRule := false
+	for _, sub := range subkeys {
+		sk, err := registry.OpenKey(k, sub, registry.QUERY_VALUE|registry.WOW64_64KEY)
+		if err != nil {
+			continue
+		}
+		comment, _, _ := sk.GetStringValue("Comment")
+		if comment == targetComment {
+			dnsServers, _, _ := sk.GetStringValue("GenericDNSServers")
+			names, _, _ := sk.GetStringsValue("Name")
+			sk.Close()
+
+			if !strings.Contains(dnsServers, address) {
+				return errors.New("Windows DNS 接管策略中的 DNS 服务器地址已被外部修改")
+			}
+			for _, d := range domains {
+				dClean := strings.Trim(strings.ToLower(d), ".")
+				dFound := false
+				for _, n := range names {
+					if strings.Trim(strings.ToLower(n), ".") == dClean {
+						dFound = true
+						break
+					}
+				}
+				if !dFound {
+					return fmt.Errorf("Windows DNS 接管策略中域名 %s 已被外部移除", d)
+				}
+			}
+			foundRule = true
+			break
+		}
+		sk.Close()
+	}
+
+	if !foundRule {
+		return errors.New("Windows DNS 接管策略已被其他网络操作或策略清除，请重新启动项目")
+	}
+	return nil
 }

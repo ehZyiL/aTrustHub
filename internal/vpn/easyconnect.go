@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/miekg/dns"
 	"github.com/qy/easyconnect/internal/model"
 	hubproxy "github.com/qy/easyconnect/internal/proxy"
 	"github.com/qy/easyconnect/internal/workeripc"
@@ -142,7 +143,21 @@ func NewEasyConnectConnector(path string) Connector {
 					if m.FlowReporting {
 						s.flows.Store(newFlowDials(m.Address, "hub", password))
 					}
-					s.info = SessionInfo{ClientIP: m.ClientIP, DNSServer: m.DNSServer, Resources: m.Resources}
+					var apps []App
+					if m.Resources != nil {
+						for i, r := range m.Resources.IPRules {
+							if r.Min == r.Max && r.PortMin == r.PortMax && r.PortMin > 0 {
+								apps = append(apps, App{
+									ID:   fmt.Sprintf("ip-rule-%d", i),
+									Name: fmt.Sprintf("%s:%d", r.Min, r.PortMin),
+									Addresses: []AppAddress{
+										{Protocol: "tcp", Host: r.Min, Port: strconv.Itoa(r.PortMin)},
+									},
+								})
+							}
+						}
+					}
+					s.info = SessionInfo{ClientIP: m.ClientIP, DNSServer: m.DNSServer, Resources: m.Resources, Apps: apps}
 					if err := ctx.Err(); err != nil {
 						return nil, err
 					}
@@ -345,4 +360,61 @@ func (s *processSession) Close() error {
 		}
 	})
 	return nil
+}
+
+var _ Prober = (*processSession)(nil)
+
+func (s *processSession) Probe(ctx context.Context) error {
+	select {
+	case <-s.done:
+		return s.Err()
+	case <-s.stopping:
+		return net.ErrClosed
+	default:
+	}
+
+	// 1. If remote DNS or internal domains are available, probe via tunnel DNS query.
+	hasDNS := s.info.DNSServer != "" || (s.info.Resources != nil && (s.info.Resources.DNSServer != "" || len(s.info.Resources.InternalDomains) > 0))
+	if hasDNS {
+		name := "dns.test."
+		if s.info.Resources != nil && len(s.info.Resources.InternalDomains) > 0 {
+			name = dns.Fqdn(s.info.Resources.InternalDomains[0])
+		}
+		q := new(dns.Msg)
+		q.SetQuestion(name, dns.TypeSOA)
+		packed, err := q.Pack()
+		if err != nil {
+			return err
+		}
+		reply, err := s.ExchangeDNS(ctx, packed)
+		if err != nil {
+			return fmt.Errorf("隧道 DNS 探测失败：%w", err)
+		}
+		res := new(dns.Msg)
+		if err := res.Unpack(reply); err != nil {
+			return fmt.Errorf("隧道 DNS 应答解析失败：%w", err)
+		}
+		return nil
+	}
+
+	// 2. If business addresses or health targets exist, dial via tunnel.
+	target := s.info.HealthTarget
+	if target == "" && s.info.Resources != nil {
+		for _, r := range s.info.Resources.IPRules {
+			if r.Min == r.Max && r.PortMin == r.PortMax && r.PortMin > 0 {
+				target = net.JoinHostPort(r.Min, strconv.Itoa(r.PortMin))
+				break
+			}
+		}
+	}
+	if target != "" {
+		conn, err := s.Dial(ctx, "tcp", target)
+		if err != nil {
+			return fmt.Errorf("隧道业务探测失败：%w", err)
+		}
+		_ = conn.Close()
+		return nil
+	}
+
+	return errProbeUnavailable
 }

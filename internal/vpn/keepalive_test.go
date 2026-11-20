@@ -156,3 +156,53 @@ func TestKeepAliveTargetSkipsDomainsAndRanges(t *testing.T) {
 		t.Fatalf("keepAliveTarget(nil) = %q, want empty", got)
 	}
 }
+
+func TestStaleProbeDoesNotPolluteNewSession(t *testing.T) {
+	conn := &fakeConnector{}
+	cfg := testConfig(model.AccessPoint{
+		ID: "a", Name: "A", Server: "a.example", Port: 443, Username: "u", InPool: true,
+	})
+	m := newTestManager(t, conn.Connect, cfg)
+	m.Connect("a")
+	waitFor(t, "online", func() bool {
+		v, _ := m.View("a")
+		return v.State == StateOnline
+	})
+
+	m.mu.Lock()
+	curGen := m.points["a"].gen
+	curSess := m.points["a"].sess
+	m.mu.Unlock()
+
+	// 1. Old probe with error must be ignored by current session
+	staleGen := curGen - 1
+	staleSess := &fakeSession{}
+	m.recordProbe("a", "A", staleGen, staleSess, errors.New("old probe failure"), true)
+
+	v, _ := m.View("a")
+	if v.TunnelState != "" || v.TunnelFails != 0 {
+		t.Fatalf("stale failure polluted current session: state=%q, fails=%d", v.TunnelState, v.TunnelFails)
+	}
+
+	// 2. Set current session fails to 2
+	m.recordProbe("a", "A", curGen, curSess, errors.New("real failure 1"), true)
+	m.recordProbe("a", "A", curGen, curSess, errors.New("real failure 2"), true)
+	v, _ = m.View("a")
+	if v.TunnelFails != 2 || v.TunnelState != "degraded" {
+		t.Fatalf("expected degraded/2, got state=%q, fails=%d", v.TunnelState, v.TunnelFails)
+	}
+
+	// 3. Stale success must not clear current session's failure count
+	m.recordProbe("a", "A", staleGen, staleSess, nil, true)
+	v, _ = m.View("a")
+	if v.TunnelFails != 2 || v.TunnelState != "degraded" {
+		t.Fatalf("stale success cleared current failures: state=%q, fails=%d", v.TunnelState, v.TunnelFails)
+	}
+
+	// 4. Stale 3rd failure must not kill current session
+	m.recordProbe("a", "A", staleGen, staleSess, errors.New("old 3rd failure"), true)
+	v, _ = m.View("a")
+	if v.State != StateOnline || v.TunnelState == "dead" {
+		t.Fatalf("stale 3rd failure killed current session: state=%v, tunnel=%q", v.State, v.TunnelState)
+	}
+}

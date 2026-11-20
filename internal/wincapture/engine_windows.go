@@ -272,7 +272,14 @@ func (e *engine) publish(aliases []workeripc.DNSAlias) error {
 		if old, ok := updates[a]; ok && old.original != o {
 			return errors.New("重复 DNS 映射冲突")
 		}
-		updates[a] = aliasEntry{o, now.Add(time.Duration(alias.TTL) * time.Second)}
+		newExpires := now.Add(time.Duration(alias.TTL) * time.Second)
+		if old, ok := e.mappings[a]; ok && old.expires.After(newExpires) {
+			newExpires = old.expires
+		}
+		if old, ok := updates[a]; ok && old.expires.After(newExpires) {
+			newExpires = old.expires
+		}
+		updates[a] = aliasEntry{o, newExpires}
 	}
 	if len(e.mappings)+len(updates) > 8192 {
 		return errors.New("DNS 映射表已满")
@@ -585,6 +592,11 @@ func (e *engine) checkNetwork() error {
 	if !e.rules.active && len(e.rules.undo) > 0 {
 		if err := e.rules.Disable(); err != nil {
 			return fmt.Errorf("软件接管规则清理未完成：%w", err)
+		}
+	}
+	if e.rules.active && len(e.config.Domains) > 0 {
+		if err := checkNRPTActive(e.id, e.config.Domains, e.dnsAddress.String()); err != nil {
+			return err
 		}
 	}
 	routes, err := routeRows()

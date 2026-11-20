@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/miekg/dns"
 	"github.com/qy/easyconnect/internal/workeripc"
 )
 
@@ -219,5 +220,62 @@ func TestDNSAliasPoolKeepsWorkerIdentityAcrossStopsAndRejectsLostController(t *t
 	case <-four.done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("disconnected VPN retained DNS listener")
+	}
+}
+
+type mockPublisher struct {
+	prefix   string
+	aliases  []workeripc.DNSAlias
+	pubErr   error
+	pubDelay time.Duration
+}
+
+func (m *mockPublisher) Prefix() string { return m.prefix }
+func (m *mockPublisher) Publish(ctx context.Context, aliases []workeripc.DNSAlias) error {
+	m.aliases = aliases
+	if m.pubDelay > 0 {
+		time.Sleep(m.pubDelay)
+	}
+	return m.pubErr
+}
+
+func TestExchangeMappedDNSDeductsTTL(t *testing.T) {
+	msg := new(dns.Msg)
+	msg.SetQuestion("app.internal.", dns.TypeA)
+	rr, err := dns.NewRR("app.internal. 60 IN A 198.19.0.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg.Answer = append(msg.Answer, rr)
+	packed, err := msg.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pub := &mockPublisher{prefix: "198.19.0.0/16"}
+	cfg := CaptureConfig{
+		MappedDNS: func(ctx context.Context, packet []byte, prefix string) (workeripc.Message, error) {
+			return workeripc.Message{
+				DNS: packed,
+				DNSAliases: []workeripc.DNSAlias{
+					{Address: "198.19.0.5", Original: "10.0.0.5", TTL: 60},
+				},
+			}, nil
+		},
+	}
+
+	out, err := exchangeMappedDNS(context.Background(), pub, cfg, []byte("query"))
+	if err != nil {
+		t.Fatalf("exchangeMappedDNS failed: %v", err)
+	}
+	resp := new(dns.Msg)
+	if err := resp.Unpack(out); err != nil {
+		t.Fatalf("failed to unpack response: %v", err)
+	}
+	if len(resp.Answer) == 0 {
+		t.Fatal("expected answer in response")
+	}
+	if ttl := resp.Answer[0].Header().Ttl; ttl > 60 {
+		t.Fatalf("TTL should be <= 60, got %d", ttl)
 	}
 }

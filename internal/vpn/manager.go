@@ -592,7 +592,7 @@ func (m *Manager) connect(id string, gen int) {
 	var p *proxy.Server
 	if cfg.SocksPort > 0 {
 		p, err = m.newProxy(cfg, ep, func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return m.dialBound(ctx, network, addr, id, gen, sess, false)
+			return m.dialBound(ctx, network, addr, id, gen, ep, false)
 		})
 		if err != nil {
 			_ = sess.Close()

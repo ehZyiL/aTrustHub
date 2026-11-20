@@ -98,7 +98,7 @@ func (m *Manager) LocalAppConnection(id string) (AppConnection, error) {
 		aliasMu.RLock()
 		mapped := aliasPrefix.IsValid() && aliasPrefix.Contains(ip)
 		aliasMu.RUnlock()
-		c, err := m.dialBound(ctx, network, address, id, gen, sess, mapped)
+		c, err := m.dialBound(ctx, network, address, id, gen, ep, mapped)
 		if !active() {
 			if c != nil {
 				_ = c.Close()

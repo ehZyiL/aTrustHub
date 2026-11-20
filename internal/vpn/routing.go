@@ -16,8 +16,9 @@ func resourceVersion(s *workeripc.ResourceSnapshot) string { return routing.Vers
 
 type routedSession struct {
 	candidate
-	gen     int
-	version string
+	endpoint *endpoint
+	gen      int
+	version  string
 }
 
 func (m *Manager) routeSnapshot(boundID string) ([]routing.Gateway, map[string]routedSession, model.Settings) {
@@ -40,7 +41,7 @@ func (m *Manager) routeSnapshot(boundID string) ([]routing.Gateway, map[string]r
 			version = resourceVersion(ep.info.Resources)
 		}
 		gateways = append(gateways, routing.Gateway{ID: id, Name: ep.cfg.Name, Generation: ep.gen, Version: version, Online: !m.closed && (ep.cfg.InPool || boundID == id) && ep.state == StateOnline && (ep.sess != nil || ep.tunServed), Strict: strict || ep.tunServed, Current: ep.info.Resources, Known: ep.knownResources})
-		sessions[id] = routedSession{candidate: candidate{id: id, name: ep.cfg.Name, sess: ep.sess, apps: ep.info.Apps, served: ep.tunServed}, gen: ep.gen, version: version}
+		sessions[id] = routedSession{candidate: candidate{id: id, name: ep.cfg.Name, sess: ep.sess, apps: ep.info.Apps, served: ep.tunServed}, endpoint: ep, gen: ep.gen, version: version}
 	}
 	return gateways, sessions, m.settings
 }
@@ -55,7 +56,7 @@ func (m *Manager) currentRoute(c routedSession, boundID string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	ep := m.points[c.id]
-	return !m.closed && ep != nil && ep.gen == c.gen && ep.sess == c.sess && ep.tunServed == c.served && ep.state == StateOnline && (ep.cfg.InPool || boundID == c.id) && (ep.resourceVersion == "" || ep.resourceVersion == c.version)
+	return !m.closed && ep != nil && ep == c.endpoint && ep.gen == c.gen && ep.tunServed == c.served && ep.state == StateOnline && (ep.cfg.InPool || boundID == c.id) && (ep.resourceVersion == "" || ep.resourceVersion == c.version)
 }
 
 func (m *Manager) dialResource(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -64,8 +65,8 @@ func (m *Manager) dialResource(ctx context.Context, network, addr string) (net.C
 
 // dialBound retains a launcher's session identity. Public traffic keeps its
 // original path; a known resource owned by another gateway is never borrowed.
-func (m *Manager) dialBound(ctx context.Context, network, addr, id string, gen int, sess Session, mapped bool) (net.Conn, error) {
-	return m.dialRoute(ctx, routing.Request{Network: network, Address: addr, GatewayID: id, AllowUnmanaged: true, Mapped: mapped}, &routedSession{candidate: candidate{id: id, sess: sess}, gen: gen})
+func (m *Manager) dialBound(ctx context.Context, network, addr, id string, gen int, ep *endpoint, mapped bool) (net.Conn, error) {
+	return m.dialRoute(ctx, routing.Request{Network: network, Address: addr, GatewayID: id, AllowUnmanaged: true, Mapped: mapped}, &routedSession{candidate: candidate{id: id}, endpoint: ep, gen: gen})
 }
 
 func (m *Manager) dialRoute(ctx context.Context, request routing.Request, required *routedSession) (net.Conn, error) {
@@ -76,7 +77,7 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 	gateways, sessions, settings := m.routeSnapshot(request.GatewayID)
 	if required != nil {
 		current, ok := sessions[required.id]
-		if !ok || current.gen != required.gen || current.sess != required.sess || !m.currentRoute(current, request.GatewayID) {
+		if !ok || current.gen != required.gen || current.endpoint != required.endpoint || !m.currentRoute(current, request.GatewayID) {
 			return nil, net.ErrClosed
 		}
 	}
@@ -186,7 +187,7 @@ func (m *Manager) recordRouteResult(c routedSession, success bool, elapsed time.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ep := m.points[c.id]
-	if ep == nil || ep.gen != c.gen || ep.sess != c.sess || ep.state != StateOnline {
+	if ep == nil || ep != c.endpoint || ep.gen != c.gen || ep.state != StateOnline {
 		return
 	}
 	if !success {

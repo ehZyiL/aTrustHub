@@ -5,7 +5,38 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/qy/easyconnect/internal/store"
 )
+
+// 设置页选的颜色模式要真的落盘，重开配置还是那一档。
+func TestAppearanceSavedBySettingsPage(t *testing.T) {
+	a := testApp(t)
+	a.openSettings()
+	a.settings.appearance = "深色"
+	a.saveSettings()
+	if a.settings.err != "" {
+		t.Fatalf("保存设置失败：%s", a.settings.err)
+	}
+	if got := a.cfg.Settings.Appearance; got != "dark" {
+		t.Fatalf("内存里的颜色模式 = %q，想要 dark", got)
+	}
+	secrets, err := store.NewFileSecrets(a.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(a.dir, secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Config().Settings.Appearance; got != "dark" {
+		t.Fatalf("落盘的颜色模式 = %q，想要 dark", got)
+	}
+	// 重新打开设置页应当回填深色，而不是退回默认。
+	a.openSettings()
+	if a.settings.appearance != "深色" {
+		t.Fatalf("重开后回填 = %q", a.settings.appearance)
+	}
+}
 
 // 颜色模式：三档必须真的改主题，不能只是下拉里的字。
 func TestAppearanceModePicksTheme(t *testing.T) {

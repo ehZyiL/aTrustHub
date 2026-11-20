@@ -36,7 +36,7 @@ const appName = "EasyConnect Hub"
 // app is everything the window shows and the manager that does the work.
 // appBuild is shown in the footer and the startup log so an old running
 // instance is easy to tell apart from a freshly built one.
-const appBuild = "0.1.0-dev-windows-capture.3"
+const appBuild = "0.1.0-dev-certificate-trust.1"
 
 type app struct {
 	win          *mygo.Window
@@ -121,11 +121,12 @@ type app struct {
 	sysProxySwitch bool
 
 	// editor is the add/edit dialog.
-	editor      editorDraft
-	authMu      sync.Mutex
-	authRequest *authenticationRequest
-	authDraft   authenticationDraft
-	dnsProbe    dnsProbeDraft
+	editor           editorDraft
+	authMu           sync.Mutex
+	authRequest      *authenticationRequest
+	authDraft        authenticationDraft
+	dnsProbe         dnsProbeDraft
+	certificateProbe certificateProbeDraft
 	// settings is the settings dialog.
 	settings settingsDraft
 	// deleting is the ID whose deletion the app asks about.
@@ -165,24 +166,27 @@ type app struct {
 }
 
 type editorDraft struct {
-	protocol          string
-	remoteDNS         string
-	internalDomains   string
-	certificateSHA256 string
-	advanced          bool
-	open              bool
-	editingID         string
-	name              string
-	address           string
-	username          string
-	authMode          string
-	authModeLabel     string
-	cred              string
-	totp              string
-	domain            string
-	socksPort         string
-	inPool            bool
-	autoConnect       bool
+	protocol               string
+	remoteDNS              string
+	internalDomains        string
+	certificateSHA256      string
+	certificateToken       string
+	certificateAddress     string
+	certificateAcceptedPin string
+	advanced               bool
+	open                   bool
+	editingID              string
+	name                   string
+	address                string
+	username               string
+	authMode               string
+	authModeLabel          string
+	cred                   string
+	totp                   string
+	domain                 string
+	socksPort              string
+	inPool                 bool
+	autoConnect            bool
 	// autoPick lets detection choose the auth mode: what a point saved by an
 	// older version (mode "auto") gets when it is opened.
 	autoPick     bool
@@ -527,6 +531,9 @@ func (a *app) shutdown() {
 		a.quitRequested = true
 		if a.dnsProbe.cancel != nil {
 			a.dnsProbe.cancel()
+		}
+		if a.certificateProbe.cancel != nil {
+			a.certificateProbe.cancel()
 		}
 		// 退出时两件事必须做到：TUN 的 utun/路由/DNS 全部还原，系统代理关掉。
 		// 否则用户下次开机就是「没网」，而且看不出是谁干的。

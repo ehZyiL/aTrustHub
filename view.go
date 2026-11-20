@@ -86,6 +86,7 @@ func (a *app) view(c *ui.Context) {
 	a.authenticationView(c)
 	a.localAppEditorView(c)
 	a.localAppDeleteView(c)
+	a.certificateProbeView(c)
 }
 
 // qrCard was removed: WeCom's QR login now uses a WebView popup.
@@ -874,6 +875,11 @@ func (a *app) pointCard(c *ui.Context, v vpn.View) {
 
 		if v.State == vpn.StateError && v.Error != "" {
 			ui.Text(c, v.Error).FontSize(12).TextColor(t.Danger)
+			if v.Protocol == model.ProtocolEasyConnect && vpn.IsGatewayCertificateError(v.Error) {
+				if ui.Button(c, "查看网关证书").Label("查看网关证书 " + v.Name).Clicked() {
+					a.openGatewayCertificate(v.ID)
+				}
+			}
 		}
 		// A dead tunnel with a valid login looks "online" everywhere else, so
 		// the probe result needs its own line.
@@ -1324,8 +1330,12 @@ func (a *app) editorView(c *ui.Context) {
 							ui.Field(c, "VPN DNS（可选，IPv4）", func() { ui.TextInput(c, &d.remoteDNS).Placeholder("留空使用网关下发的 DNS") })
 							ui.Field(c, "内网域名后缀（可选，逗号分隔）", func() { ui.TextInput(c, &d.internalDomains).Placeholder("例如：corp.example.com") })
 							ui.Field(c, "网关证书 SHA256（可选）", func() {
-								ui.TextInput(c, &d.certificateSHA256).Placeholder("填写经确认的指纹后启用旧证书兼容")
+								ui.TextInput(c, &d.certificateSHA256).Placeholder("可点击下方按钮读取，无需手工查找")
 							})
+							if ui.Button(c, "读取网关证书…").Clicked() {
+								a.openEditorCertificate()
+							}
+							ui.Text(c, "读取后展示证书信息，由你确认是否信任；只对当前接入点生效。").FontSize(11).TextColor(t.TextMuted).Wrap()
 						}
 					} else {
 						ui.Row(c).Gap(10).AlignItems(ui.End).Children(func() {
@@ -1672,17 +1682,18 @@ func (a *app) quitView(c *ui.Context) {
 
 func (a *app) openNewEditor() {
 	a.editor = editorDraft{
-		protocol:      "EasyConnect",
-		open:          true,
-		address:       "",
-		authMode:      string(model.AuthModePassword),
-		authModeLabel: model.AuthModePassword.Label(),
-		socksPort:     strconv.Itoa(a.cfg.NextSocksPort()),
-		inPool:        true,
-		autoConnect:   false,
-		monitor:       true,
-		monitorEvery:  "300",
-		secretStore:   secretStoreLabel(a.cfg.Settings.SecretStore),
+		certificateToken: model.NewID(),
+		protocol:         "EasyConnect",
+		open:             true,
+		address:          "",
+		authMode:         string(model.AuthModePassword),
+		authModeLabel:    model.AuthModePassword.Label(),
+		socksPort:        strconv.Itoa(a.cfg.NextSocksPort()),
+		inPool:           true,
+		autoConnect:      false,
+		monitor:          true,
+		monitorEvery:     "300",
+		secretStore:      secretStoreLabel(a.cfg.Settings.SecretStore),
 	}
 }
 
@@ -1702,26 +1713,29 @@ func (a *app) openEditor(v vpn.View) {
 		}
 	}
 	a.editor = editorDraft{
-		open:              true,
-		editingID:         p.ID,
-		protocol:          protocolLabel(p.Protocol),
-		remoteDNS:         p.RemoteDNS,
-		internalDomains:   strings.Join(p.InternalDomains, ", "),
-		certificateSHA256: p.CertificateSHA256,
-		name:              p.Name,
-		address:           model.FormatAccessAddress(p.Server, p.Port),
-		username:          p.Username,
-		authMode:          string(mode),
-		authModeLabel:     mode.Label(),
-		domain:            p.LoginDomain,
-		socksPort:         strconv.Itoa(p.SocksPort),
-		inPool:            p.InPool,
-		autoConnect:       p.AutoConnect,
-		monitor:           p.MonitorEnabled(),
-		monitorEvery:      strconv.Itoa(p.MonitorIntervalSeconds()),
-		secretStore:       secretStoreLabel(a.cfg.Settings.SecretStore),
-		hasPassword:       a.hasPassword(p.ID),
-		detected:          nil,
+		certificateToken:       model.NewID(),
+		certificateAddress:     net.JoinHostPort(p.Server, strconv.Itoa(p.Port)),
+		certificateAcceptedPin: p.CertificateSHA256,
+		open:                   true,
+		editingID:              p.ID,
+		protocol:               protocolLabel(p.Protocol),
+		remoteDNS:              p.RemoteDNS,
+		internalDomains:        strings.Join(p.InternalDomains, ", "),
+		certificateSHA256:      p.CertificateSHA256,
+		name:                   p.Name,
+		address:                model.FormatAccessAddress(p.Server, p.Port),
+		username:               p.Username,
+		authMode:               string(mode),
+		authModeLabel:          mode.Label(),
+		domain:                 p.LoginDomain,
+		socksPort:              strconv.Itoa(p.SocksPort),
+		inPool:                 p.InPool,
+		autoConnect:            p.AutoConnect,
+		monitor:                p.MonitorEnabled(),
+		monitorEvery:           strconv.Itoa(p.MonitorIntervalSeconds()),
+		secretStore:            secretStoreLabel(a.cfg.Settings.SecretStore),
+		hasPassword:            a.hasPassword(p.ID),
+		detected:               nil,
 	}
 	a.editor.hasTOTP = a.hasTOTP(p.ID)
 	// A point saved before the mode was a choice gets the mode the server
@@ -1749,6 +1763,10 @@ func (a *app) saveEditor() {
 	}
 	if strings.TrimSpace(server) == "" {
 		d.err = "服务器地址不能为空"
+		return
+	}
+	if err := d.checkCertificateAddress(server, port); err != nil {
+		d.err = err.Error()
 		return
 	}
 	mode := string(authModeFromLabel(d.authModeLabel))

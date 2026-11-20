@@ -2,13 +2,15 @@
 
 当前阶段：代码已接入，需 Windows 10/11 x64 实机验证。Linux 侧的隔离流量测试与交叉编译不能代替 Windows 验收。
 
-构建标识：`0.1.0-dev-windows-capture.3`。请完整替换解压目录内的程序。网络助手协议为 2，EasyConnect worker 协议为 5。
+构建标识：`0.1.0-dev-certificate-trust.1`。请完整替换解压目录内的程序。网络助手协议为 2，EasyConnect worker 协议为 5。
 
-本次修正 IPv4 接管网卡参数写回前未清零 `SitePrefixLength` 的问题，并将初始化、路由、管道和进程启动错误细化到操作名称及 Win32 错误码。接管失败也会记录在应用日志中。此修正针对 `.2` 中 UAC 批准后、DBX 窗口未出现时的通用“参数错误”；旧日志不足以确认具体失败接口，需用 `.3` 复测。
+本次增加网关证书读取、指纹计算、确认信任和重试登录。主程序与独立 worker 都需要更新。
+
+保留 `windows-capture.3` 的 IPv4 网卡修复：写回前清零 `SitePrefixLength`，并将初始化、路由、管道和进程启动错误细化到操作名称及 Win32 错误码。接管失败也会记录在应用日志中。此修正针对 `.2` 中 UAC 批准后、DBX 窗口未出现时的通用“参数错误”；旧日志不足以确认具体失败接口，仍需用新版复测。
 
 ## Windows 本机构建
 
-两个仓库保持并列：`aTrustHub` 使用 `feat/easyconnect-desktop`，`zju-connect` 使用 `feat/desktop-worker`（当前 worker 提交 `33340bb`）。安装满足 `go.mod` 要求的 Go 工具链，在 Windows x64 的普通 PowerShell 中进入 `aTrustHub`，逐条运行下面的命令；构建报错时先处理该步。
+两个仓库保持并列：`aTrustHub` 使用 `feat/easyconnect-desktop`，`zju-connect` 使用 `feat/desktop-worker`（配套 worker 提交 `c8cf566`）。两个仓库都需要拉取更新。安装满足 `go.mod` 要求的 Go 工具链，在 Windows x64 的普通 PowerShell 中进入 `aTrustHub`，逐条运行下面的命令；构建报错时先处理该步。
 
 ```powershell
 New-Item -ItemType Directory -Force .\build\windows-capture\resources | Out-Null
@@ -20,7 +22,7 @@ go test -mod=readonly -trimpath -c -o .\build\windows-capture\windows-capture-te
 .\build\windows-capture\windows-capture-tests.exe '-test.v' '-test.timeout=60s'
 ```
 
-退出旧版本后，普通双击 `build\windows-capture\easyconnect-hub.exe`，确认启动日志显示 `.3`。需要同时更新 GUI 和 `easyconnect-hub-capture.exe`，网卡修复在后者中；worker 来自独立仓库。自测失败时保留完整输出，真实 DBX 测试仍按下面的启动步骤进行。
+退出旧版本后，普通双击 `build\windows-capture\easyconnect-hub.exe`，确认启动日志显示 `0.1.0-dev-certificate-trust.1`。需要同时更新 GUI、`easyconnect-worker.exe` 和 `easyconnect-hub-capture.exe`；证书读取在独立仓库的 worker 中，网卡修复在网络助手中。自测失败时保留完整输出，真实 DBX 测试仍按下面的启动步骤进行。
 
 Linux 上交叉编译完整 ZIP 可继续使用 `bash scripts/package-windows.sh`，包含三个程序、自测程序、说明和许可证。
 
@@ -38,6 +40,19 @@ Linux 上交叉编译完整 ZIP 可继续使用 `bash scripts/package-windows.sh
 软件只会在接管规则确认就绪后启动。最后一个软件停止接管后，资源路由和内网域名策略会撤回；若本次会话启用了内网域名，助手和映射地址通道会保留到断开 VPN，以保持重启软件时的域名映射一致。
 
 等待 UAC 时可以取消启动。Windows 的授权提示可能仍显示，请关闭该提示再重试；稍后批准旧提示也不会启动软件或安装网络规则。规则操作已经发出时，停止会等待该次操作完成并撤回，避免影响同一 VPN 下其他软件。
+
+## 网关证书提示
+
+遇到“网关证书的域名字段格式不兼容”时：
+
+1. 点击接入点错误卡片上的 **查看网关证书**。程序自动读取证书并计算 SHA256，无需运行命令查找指纹。
+2. 核实接入地址、证书来源和指纹后，勾选 **我已核实网关来源，信任此证书**。
+3. 点击 **信任并重试连接**，随后输入图形验证码或动态口令。
+
+编辑接入点 → 高级选项也有 **读取网关证书…**。此入口确认后只填入编辑框，保存接入点后才生效。
+读取只做 TLS 握手，不发送账号密码，不会自动信任。首次请通过管理员或其他可信渠道核实；证书名称和颁发者由对端提供。
+已保存的指纹只作用于当前接入点。之后证书不一致会停止连接并显示新旧指纹，核实换证后才能替换。
+如提示核心不支持读取，请重新构建或替换 `easyconnect-worker.exe`，只更新 GUI 无法添加这个命令。
 
 ## 本机自测
 

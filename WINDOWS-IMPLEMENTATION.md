@@ -1,8 +1,9 @@
 # Windows implementation status — 2026-11-20
 
-This change implements a Windows experimental backend behind the existing
-Local Apps UI. It reuses the existing EasyConnect worker; it does not change
-the worker protocol, authentication, or the running Linux helper.
+The Windows experimental backend sits behind the existing Local Apps UI and
+reuses the EasyConnect worker. The shared certificate UI now also offers the
+worker's credential-free certificate probe; authentication remains on the
+existing login path. The running Linux helper is unaffected by these builds.
 
 ## Implemented
 
@@ -68,6 +69,34 @@ startup/runtime failures also reach the existing app log with the launch-time
 project name. Native regression tests inject Get/Set responses (including the
 `0xffffffff` sentinel), check preservation of other interface settings, and cover
 read/write failure diagnostics without modifying the host network.
+
+## Certificate trust flow (`certificate-trust.1`)
+
+Certificate errors offer a read/review/confirm/retry action. The access-point
+editor can also read a certificate into its unsaved draft. A short-lived worker
+does a direct TLS handshake without HTTP, credentials or a client certificate;
+it returns the original DER's SHA256, display labels, validity and malformed-SAN
+status. This is observation, not identity verification. Login still enforces
+the explicitly saved pin. Changed certificates require confirmation again.
+
+The GUI binds confirmation to the endpoint, previous pin and editor instance.
+Cancel, late responses, changed endpoints and failed persistence cannot silently
+establish trust. Headless UI tests exercise confirmation, nested-modal dismissal
+and deferred editor save; store failure restores the old pin. Worker tests cover
+normal/malformed certificates, original DER, no application payload, timeout,
+response correlation and old-worker handling.
+
+On 2026-11-20 the user-authorized graphical-captcha gateway was checked with the
+new worker. Independent TLS observation returned the same SHA256. The actual
+EasyConnect HTTP transport reproduced the malformed-SAN failure without a pin,
+rejected a wrong pin, and retrieved login initialization plus a 63x20 GIF captcha
+with the observed pin. No password was submitted, saved trust was not changed,
+and this is not a completed VPN-login or Windows-runtime test.
+
+Both repositories' Linux test suites and affected-package race checks pass;
+Windows-targeted vet for the certificate/IPC packages passes. The optional probe
+command keeps IPC version 5 but requires updating the GUI and sibling worker
+together (`zju-connect` commit `c8cf566`). The capture helper remains protocol 2.
 
 ## Dependency decision
 

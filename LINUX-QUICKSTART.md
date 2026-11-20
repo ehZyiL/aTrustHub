@@ -1,6 +1,6 @@
 # EasyConnect Hub · Linux 测试版
 
-当前为 0.1.0-dev-capture-flows.1 开发版，支持 EasyConnect 登录、代理浏览器和数据库 TCP 转发，
+当前为 `0.1.0-dev-certificate-trust.1` 开发版，支持 EasyConnect 登录、代理浏览器和数据库 TCP 转发，
 Linux 软件 TCP 接管实验入口默认显示，无需环境变量。已在 Fedora 45 x86_64 启动原生窗口。
 无需 Docker 或 v2rayN；基础代理以普通用户运行，软件接管需要先安装系统辅助服务。
 
@@ -13,8 +13,8 @@ Linux 软件 TCP 接管实验入口默认显示，无需环境变量。已在 Fe
 ```
 
 `easyconnect-hub` 和 `easyconnect-worker` 必须放在同一目录，并使用同一次构建的版本。
-本批 worker 和 Linux 辅助服务各自的控制协议均为 v5。请整体替换软件包，旧 worker 不兼容。
-本次将辅助服务协议升至 v5，确保实际运行的助手包含软件正常退出后的回收修复。
+本批 worker 和 Linux 辅助服务各自的控制协议均为 v5。worker 增加证书读取命令，需与主程序一起更新。
+辅助服务沿用 v5，包含软件正常退出后的回收修复。
 旧 v4 助手会明确提示更新；在「本机软件」中点击「安装 / 更新辅助服务」，通过系统认证后重新检查状态。
 从旧版切换时，先关闭当前主窗口，再运行本目录的 `start.sh`；仅覆盖磁盘文件不会更新已运行的进程。
 先前的 `capture-dns` 试用包仍为 v3，保留用于回退；不要混用两个包内的程序。
@@ -143,8 +143,12 @@ sudo ./uninstall-capture-helper.sh
 - EasyConnect 在线卡片新增 **DNS 诊断**：输入内网域名、选择记录类型并点击查询。显示服务器、资源数量、
   DNS 应答码及记录；勾选“检查软件接管解析”可以比较过滤后的应答。诊断本身不修改系统 DNS，解析成功不代表目标业务端口可达。
 - 网关未下发 DNS 时，可以在编辑页面的高级选项填写 VPN DNS 的 IPv4 地址、内网域名后缀。
-- 遇到 `SAN dNSName is malformed` 时，在高级选项填写经确认的网关证书 SHA256 指纹。
-  兼容处理仅对这张证书启用，指纹改变后会拒绝连接。
+- 遇到证书域名字段不兼容时，点击错误卡片上的 **查看网关证书**，程序自动读取证书并计算 SHA256。
+  核实网关来源后勾选确认，再点击 **信任并重试连接**，接下来按正常流程输入验证码。
+  也可以在编辑接入点 → 高级选项中点击 **读取网关证书…**，确认后 **信任并填入**，再保存接入点。
+  读取只做 TLS 握手，不发送账号密码，不会自动保存信任。首次应通过管理员或其他可信渠道核实；
+  证书名称和颁发者由对端提供，不能单凭这些文字判断来源。兼容处理仅对已确认的证书启用，
+  指纹改变后连接会停止，并显示原指纹和新指纹，需重新确认。手工填写指纹仍可使用。
 - 若端口被其他软件占用，可以更改该接入点端口，以及设置里的统一入口端口。
 
 ## 当前范围
@@ -170,8 +174,8 @@ Tailscale 节点通信和真实业务的长期共存仍待验证。
 
 目录结构应为相邻的 `aTrustHub/`、`zju-connect/`：
 
-本批配套 `zju-connect` 提交为 `33340bb6e170fec02b03554c3d00df2e24295f27`（`feat/desktop-worker` 分支）。
-worker 与 GUI 使用 v5 控制协议，打包脚本会检查双方消息结构一致。
+本批配套 `zju-connect` 提交为 `c8cf56658d878add57a281aee7b165a6944179fa`（`feat/desktop-worker` 分支）。
+worker 与 GUI 使用 v5 控制协议，增加不含凭据的证书读取命令；打包脚本会检查双方消息结构一致。
 
 ```bash
 cd aTrustHub
@@ -182,7 +186,7 @@ cd aTrustHub
 需要保留已有测试包时，可以指定新的包名：
 
 ```bash
-EASYCONNECT_BUNDLE_NAME=easyconnect-hub-linux-amd64-capture-flows ./scripts/package-linux.sh
+EASYCONNECT_BUNDLE_NAME=easyconnect-hub-linux-amd64-certificate-trust ./scripts/package-linux.sh
 ```
 
 Fedora 透明 TCP 的开发实验：`bash scripts/test-capture-linux.sh`。

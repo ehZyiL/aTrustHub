@@ -51,14 +51,8 @@ func (a *app) pointChoice(p model.AccessPoint) string {
 }
 
 func (a *app) localAppsSection(c *ui.Context) {
-	t := c.Theme()
 	ui.Column(c).Grow(1).MinHeight(0).Gap(10).Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "本机软件").FontSize(15).Bold()
-			ui.Text(c, fmt.Sprintf("%d 个", len(a.cfg.LocalApps))).FontSize(11).TextColor(t.TextMuted)
-			// 提示行占满剩余宽度：窗口窄时先缩它，搜素框与按钮不被挤出去。
-			ui.Text(c, localAppsHint()).FontSize(11).TextColor(t.TextMuted).
-				Grow(1).MinWidth(0).Ellipsis("…").Tooltip(localAppsHint())
+		pageBar(c, "本机软件", fmt.Sprintf("%d 个", len(a.cfg.LocalApps)), func() {
 			ui.SearchField(c, &a.localQuery).Placeholder("搜索名称、地址或接入点").
 				Label("搜索本机项目").Width(240)
 			// 工具栏级按钮跟其他页面保持同一尺寸（13），11 只用于列表行内。

@@ -11,7 +11,6 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/qy/easyconnect/internal/dnsmapping"
 	"github.com/qy/easyconnect/internal/localapps"
-	"github.com/qy/easyconnect/internal/model"
 	"github.com/qy/easyconnect/internal/vpn"
 	"github.com/qy/easyconnect/internal/workeripc"
 )
@@ -134,63 +133,42 @@ func (a *app) resourceCaptureConfigs() ([]localapps.CaptureConfig, error) {
 
 func supportsResourceTUN() bool { return runtime.GOOS == "windows" || runtime.GOOS == "linux" }
 
-func (a *app) resourceTUNControls(c *ui.Context) {
+// captureStatus 是应用接管的状态行：下拉负责开关，这里只报状态与修正入口。
+func (a *app) captureStatus(c *ui.Context) {
 	if !supportsResourceTUN() {
 		return
 	}
+	t := c.Theme()
 	status := resourceTUNStatus{}
 	if a.resourceTUN != nil {
 		status = a.resourceTUN.View()
 	}
-	ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-		label := "系统 TUN"
-		if status.Running {
-			label = "关闭系统 TUN"
-		} else if status.Busy {
-			label = "系统 TUN 处理中…"
+	switch {
+	case status.Running:
+		ui.Text(c, "应用接管：已接管 IPv4 TCP + DNS（UDP 试验）").
+			FontSize(13).TextColor(t.Success)
+	case status.Busy:
+		ui.Text(c, "应用接管：处理中…").FontSize(13).TextColor(t.Warning)
+	case status.CleanupPending:
+		ui.Text(c, "应用接管：上次的清理还没完成").FontSize(13).TextColor(t.Warning)
+	case status.Error != "":
+		ui.Text(c, "应用接管：需检查").FontSize(13).TextColor(t.Danger).
+			Tooltip(status.Error)
+	default:
+		ui.Text(c, "应用接管：未启用").FontSize(13).TextColor(t.TextMuted)
+	}
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+		if status.Error != "" && ui.Button(c, "查看失败原因").FontSize(11).Clicked() {
+			a.toast = status.Error
 		}
-		if status.Busy && a.resourceTUN != nil {
-			if ui.Button(c, "取消").Clicked() {
-				a.resourceTUN.Stop()
-			}
+		if status.Busy && a.resourceTUN != nil && ui.Button(c, "取消接管").FontSize(11).Clicked() {
+			a.resourceTUN.Stop()
 		}
-		if status.CleanupPending && a.resourceTUN != nil {
-			if ui.Button(c, "重试清理").Clicked() {
-				a.resourceTUN.Stop()
-			}
+		if status.CleanupPending && a.resourceTUN != nil && ui.Button(c, "重试清理").FontSize(11).Clicked() {
+			a.resourceTUN.Stop()
 		}
-		if ui.Button(c, label).Disabled(status.Busy || status.CleanupPending || a.tunOn || a.tunPending).Clicked() {
-			a.setupResourceTUN()
-			if a.resourceTUN != nil {
-				if status.Running {
-					a.resourceTUN.Stop()
-				} else {
-					a.tunWanted = false
-					if a.store != nil {
-						_, err := a.store.Update(func(cfg *model.Config) error { cfg.Settings.TunEnabled = false; return nil })
-						if err == nil {
-							err = a.saveConfig()
-						}
-						if err != nil {
-							a.toast = "保存接管模式失败：" + err.Error()
-							return
-						}
-					}
-					a.resourceTUN.Start()
-				}
-			}
-		}
-		if status.Running {
-			ui.Text(c, "IPv4 TCP + DNS · UDP 试验").FontSize(11).TextColor(c.Theme().TextMuted)
-		}
-		if status.Running || status.Error != "" {
-			ui.Row(c).Padding(5).OnClick(func() { a.logsOpen = true }).Tooltip("系统 TUN 与访问日志").Children(func() { ui.Icon(c, logIcon).Size(16, 16) })
-		}
-		if status.Error != "" {
-			ui.Text(c, "接管状态需检查").FontSize(11).TextColor(c.Theme().Danger).Tooltip(status.Error)
-			if ui.Button(c, "详情").Clicked() {
-				a.toast = status.Error
-			}
+		if ui.Button(c, "接管日志").FontSize(11).Clicked() {
+			a.openTUNLog()
 		}
 	})
 }

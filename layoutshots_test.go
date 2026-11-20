@@ -64,10 +64,16 @@ func TestLayoutShots(t *testing.T) {
 	shot("15-dialog-localapp-editor-min", 3, false, 880, 560)
 	a.localEditor.open = false
 
-	a.openSettings()
-	shot("11-dialog-settings", 0, false, 1120, 780)
-	shot("12-dialog-settings-dark", 0, true, 1120, 780)
-	shot("16-dialog-settings-min", 0, false, 880, 560)
+	a.openSettingsAt(settingGeneral)
+	shot("11-settings-general", 0, false, 1120, 780)
+	shot("12-settings-general-dark", 0, true, 1120, 780)
+	shot("16-settings-general-min", 0, false, 880, 560)
+	a.openSettingsAt(settingNetwork)
+	shot("18-settings-network", 0, false, 1120, 780)
+	a.openSettingsAt(settingLogs)
+	shot("19-settings-logs", 0, false, 1120, 780)
+	a.openSettingsAt(settingAbout)
+	shot("20-settings-about", 0, false, 1120, 780)
 	a.settings.open = false
 
 	if apps := a.allApps(); len(apps) > 0 {

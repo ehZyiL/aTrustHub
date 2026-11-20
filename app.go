@@ -223,7 +223,11 @@ type editorDraft struct {
 }
 
 type settingsDraft struct {
-	open          bool
+	open bool
+	// section 是设置页的当前分区（通用/网络与接管/日志/关于）。
+	section int
+	// mode 是接管方式下拉的绑定值，每帧从真实状态回读。
+	mode          string
 	host          string
 	port          string
 	interval      string

@@ -54,10 +54,10 @@ func layoutApp(t *testing.T) *app {
 func TestLayoutBoundsWithinWindow(t *testing.T) {
 	a := layoutApp(t)
 	labels := map[int][]string{
-		0: {"接入点", "全部接入点重新登录", "统一入口", "退出", "⌘1–⌘4", "＋ 添加接入点"},
-		1: {"网关资源", "搜索资源", "过滤资源", "网络授权与路由", "退出"},
-		2: {"访问日志", "复制全部", "清空", "退出"},
-		3: {"本机软件", "搜索本机项目", "＋ 添加项目", "公司主网关", "办公网线路", "退出"},
+		0: {"接入点", "全部接入点重新登录", "统一入口", "＋ 添加接入点"},
+		1: {"网关资源", "搜索资源", "过滤资源", "网络授权与路由"},
+		2: {"访问日志", "复制全部", "清空"},
+		3: {"本机软件", "搜索本机项目", "＋ 添加项目", "公司主网关", "办公网线路"},
 	}
 	sizes := []struct{ w, h int }{{1120, 780}, {880, 560}, {1440, 900}}
 	for _, size := range sizes {
@@ -80,6 +80,36 @@ func TestLayoutBoundsWithinWindow(t *testing.T) {
 			if tab == 3 {
 				if r, ok := tt.Find("搜索本机项目"); ok && r.W < 220 {
 					t.Errorf("%dx%d: 搜索框被挤到 %.1f（应 ≥220）", size.w, size.h, r.W)
+				}
+			}
+		}
+	}
+}
+
+// 设置页是整页多 tab：每个分区的关键控件都必须在窗口内。
+func TestSettingsPageFitsWindow(t *testing.T) {
+	a := layoutApp(t)
+	sections := map[int][]string{
+		settingGeneral: {"设置", "监听地址", "统一入口端口", "分流模式"},
+		settingNetwork: {"网络与接管", "接管方式", "当前接管：系统代理"},
+		settingLogs:    {"日志", "运行日志", "打开 TUN 日志"},
+		settingAbout:   {"关于", "版本", "项目主页", "打开数据目录"},
+	}
+	for _, size := range []struct{ w, h int }{{1120, 780}, {880, 560}} {
+		for section, want := range sections {
+			a.settings.open = false
+			a.openSettingsAt(section)
+			tt := ui.NewTester(a.view, size.w, size.h)
+			tt.Frame()
+			for _, label := range want {
+				r, ok := tt.Find(label)
+				if !ok {
+					t.Errorf("%dx%d 设置分区 %d: 找不到 %q", size.w, size.h, section, label)
+					continue
+				}
+				if r.X < -0.5 || r.Y < -0.5 ||
+					r.X+r.W > float32(size.w)+0.5 || r.Y+r.H > float32(size.h)+0.5 {
+					t.Errorf("%dx%d 设置分区 %d: %q 越出窗口 rect=%+v", size.w, size.h, section, label, r)
 				}
 			}
 		}

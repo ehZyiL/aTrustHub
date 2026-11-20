@@ -21,9 +21,6 @@ import (
 )
 
 // logIcon is a small document-with-lines glyph for the TUN log button.
-// githubIcon is the repository mark shown in the footer.
-var githubIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.3-1.7-1.3-1.7-1.1.7 0 0 0 0 1.2-.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.6 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/></svg>`))
-
 // copyIcon is two overlapping sheets, for "copy this address".
 var copyIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>`))
 
@@ -83,30 +80,32 @@ func (a *app) view(c *ui.Context) {
 		})
 	}
 	root.Children(func() {
-		a.header(c)
-		a.tabBar(c)
-		// 顶栏与内容之间一条发丝线：界面分层从这条线开始，而不是靠边框盒。
+		a.toolbar(c)
+		// 操作栏与内容之间一条发丝线。
 		ui.Divider(c)
-		switch a.tab {
-		case 1:
-			a.appsSection(c)
-		case 2:
-			a.accessSection(c)
-		case 3:
-			a.localAppsSection(c)
-		default:
-			// 首屏：状态横幅汇总在线情况与统一入口，下面每个接入点一张卡片。
-			// 系统代理没开时统一入口没有参与任何转发，横幅里也不列它；
-			// 需要手动配置端口时在「设置」里看。
-			a.pointsSection(c)
+		if a.settings.open {
+			a.settingsPage(c)
+		} else {
+			switch a.tab {
+			case 1:
+				a.appsSection(c)
+			case 2:
+				a.accessSection(c)
+			case 3:
+				a.localAppsSection(c)
+			default:
+				a.pointsSection(c)
+			}
 		}
-		if a.logsOpen {
-			a.logPanel(c)
+	})
+	// Esc 从设置页返回，和关闭弹窗的习惯一致。
+	root.OnShortcut(0, ui.KeyEscape, func() {
+		if a.settings.open {
+			a.settings.open = false
+			a.invalidate()
 		}
-		a.footer(c)
 	})
 	a.editorView(c)
-	a.settingsView(c)
 	a.dnsProbeView(c)
 	a.routesView(c)
 	if a.routeDetailOpen {
@@ -134,30 +133,6 @@ func (a *app) view(c *ui.Context) {
 }
 
 // qrCard was removed: WeCom's QR login now uses a WebView popup.
-
-func (a *app) tabBar(c *ui.Context) {
-	t := c.Theme()
-	ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
-		ui.Segmented(c, &a.tab, "接入点", appTabLabel(a.appCount()), accessTabLabel(), "本机软件").
-			Label("主要页面")
-		ui.Row(c).Grow(1)
-		ui.Text(c, pageHint(a.tab)).FontSize(11).TextColor(t.TextMuted)
-	})
-}
-
-// pageHint 是分段导航右侧的一句话，说明当前页面在看什么。
-func pageHint(tab int) string {
-	switch tab {
-	case 1:
-		return "网关下发的资源，逐个开关隧道代理"
-	case 2:
-		return "哪些连接走了隧道，哪些用了原网络"
-	case 3:
-		return "浏览器、数据库转发与软件接管"
-	default:
-		return "每个接入点独立连接，资源按网关归属选择出口"
-	}
-}
 
 func accessTabLabel() string {
 	return "访问日志"
@@ -224,13 +199,10 @@ func (a *app) appsSection(c *ui.Context) {
 		shown = append(shown, entry)
 	}
 
-	ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
-		ui.Text(c, "网关资源").FontSize(15).Bold()
+	pageBar(c, "网关资源", fmt.Sprintf("%d 个", len(all)), func() {
 		if ui.Button(c, "网络授权与路由").Clicked() {
 			a.openRoutes()
 		}
-		ui.Text(c, fmt.Sprintf("%d 个", len(all))).FontSize(11).TextColor(t.TextMuted)
-		ui.Row(c).Grow(1)
 		// 只看已启用 / 未启用的应用，排查时不用在 158 个里翻。
 		ui.Segmented(c, &a.appFilterIndex, "所有", "已启用", "未启用").
 			Label("过滤资源")
@@ -728,92 +700,140 @@ func firstRune(s string) string {
 	return "应"
 }
 
-func (a *app) header(c *ui.Context) {
+// gearIcon 是设置入口的齿轮。
+var gearIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.56V21a2 2 0 1 1-4 0v-.11a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1H3a2 2 0 1 1 0-4h.11a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.56V3a2 2 0 1 1 4 0v.11a1.7 1.7 0 0 0 1 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.56 1H21a2 2 0 1 1 0 4h-.11a1.7 1.7 0 0 0-1.56 1z"/></svg>`))
+
+// toolbar 是窗口顶部唯一的操作栏：品牌、页面导航、网络状态、设置与主操作全在一行。
+// 全局 TUN / 系统代理这类开关不再堆在这里，而是放进设置页的「网络」分组，
+// 顶栏只保留一个能看出当前接管方式的状态入口。
+func (a *app) toolbar(c *ui.Context) {
 	t := c.Theme()
-	ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Gap(16).Children(func() {
-		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			if a.icon != nil {
-				ui.Image(c, a.icon).Size(30, 30)
+	ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
+		if a.icon != nil {
+			ui.Image(c, a.icon).Size(24, 24)
+		}
+		ui.Text(c, appName).FontSize(15).Bold()
+		ui.Row(c).Grow(1)
+		ui.Segmented(c, &a.tab, "接入点", appTabLabel(a.appCount()), accessTabLabel(), "本机软件").
+			Label("主要页面")
+		chip := ui.Row(c).Padding(4, 10).Radius(8).Background(t.Surface).
+			Border(1, t.Border).AlignItems(ui.Center).Gap(6).
+			OnClick(func() { a.openSettingsAt(settingNetwork) }).
+			Tooltip("网络与接管设置")
+		chip.Children(func() {
+			colour := t.TextMuted
+			if online, _, _ := a.mgr.Counts(); online > 0 {
+				colour = t.Success
 			}
-			ui.Column(c).Gap(2).Children(func() {
-				ui.Text(c, appName).FontSize(18).Bold()
-				ui.Text(c, "EasyConnect / aTrust · 本地 HTTP 和 SOCKS5 代理").
-					FontSize(11).TextColor(t.TextMuted)
-			})
+			ui.Row(c).Size(6, 6).Radius(3).Background(colour)
+			ui.Text(c, a.networkSummary()).FontSize(11).TextColor(t.TextMuted)
 		})
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			chip := ui.Row(c).Padding(5, 10).Radius(999).Background(t.Surface).
-				Border(1, t.Border).AlignItems(ui.Center).Gap(6)
-			chip.Children(func() {
-				online, _, _ := a.mgr.Counts()
-				color := t.TextMuted
-				if online > 0 {
-					color = t.Success
+		iconButton(c, gearIcon, "设置", func() { a.openSettingsAt(a.settings.section) })
+		if ui.PrimaryButton(c, "＋ 接入点").Label("＋ 添加接入点").FontSize(11).Clicked() {
+			a.openNewEditor()
+		}
+	})
+}
+
+// networkSummary 是顶栏那个状态入口上的一句话：先报接管方式，再报在线数。
+func (a *app) networkSummary() string {
+	switch {
+	case a.resourceTUNActive():
+		return "系统接管"
+	case a.tunOn:
+		return "全局 TUN"
+	case a.sysProxyOn:
+		return "系统代理"
+	}
+	return a.describeProgress()
+}
+
+// 接管方式的四个档位。系统代理、全局 TUN 与应用接管互斥，所以做成一个下拉。
+const (
+	captureOff        = "不使用"
+	captureSystem     = "系统代理"
+	captureGlobalTUN  = "全局 TUN"
+	captureAppCapture = "应用接管"
+)
+
+// captureModes 是下拉里可选的值；应用接管只在支持的平台上出现。
+func captureModes() []string {
+	modes := []string{captureOff, captureSystem, captureGlobalTUN}
+	if supportsResourceTUN() {
+		modes = append(modes, captureAppCapture)
+	}
+	return modes
+}
+
+// captureMode 是当前真正生效的接管方式：先看应用接管，再看全局 TUN，最后系统代理。
+func (a *app) captureMode() string {
+	switch {
+	case a.resourceTUNActive():
+		return captureAppCapture
+	case a.tunOn || a.tunPending:
+		return captureGlobalTUN
+	case a.sysProxyOn:
+		return captureSystem
+	}
+	return captureOff
+}
+
+// applyCaptureMode 把接管方式切到 mode：先关闭其他两种，再开启所选的。
+// 切换是异步的，界面状态每帧从实际状态回读，不依赖本地变量。
+func (a *app) applyCaptureMode(mode string) {
+	from := a.captureMode()
+	if from == mode {
+		return
+	}
+	// 先停掉不在目标里的接管方式。
+	if from == captureAppCapture && a.resourceTUN != nil {
+		a.resourceTUN.Stop()
+	}
+	if from == captureGlobalTUN {
+		go a.stopTUNSerialized()
+	}
+	if from == captureSystem && supportsSystemProxy() {
+		a.toggleSystemProxy()
+	}
+	switch mode {
+	case captureSystem:
+		if supportsSystemProxy() {
+			a.toggleSystemProxy()
+		}
+	case captureGlobalTUN:
+		if pid := a.firstOnlinePoint(); pid != "" {
+			a.tunWanted = true
+			go a.startTUNSerialized(pid)
+		} else {
+			a.toast = "没有在线接入点，先登录再开 TUN"
+		}
+	case captureAppCapture:
+		a.setupResourceTUN()
+		if a.resourceTUN != nil {
+			if a.store != nil {
+				if _, err := a.store.Update(func(cfg *model.Config) error { cfg.Settings.TunEnabled = false; return nil }); err != nil {
+					a.toast = "保存接管模式失败：" + err.Error()
+					return
 				}
-				ui.Row(c).Size(7, 7).Radius(3.5).Background(color)
-				ui.Text(c, a.describeProgress()).FontSize(11).TextColor(t.TextMuted)
-			})
-			a.resourceTUNControls(c)
-			// Keep the inherited aTrust mode separate from the worker runtime.
-			if a.canUseGlobalTUN() {
-				shown := a.tunOn || a.tunPending
-				// Bind the switch to a persistent field: the framework writes
-				// the clicked value into the *bool after this frame builds, so
-				// a stack copy would lose it. Compare against `shown` next
-				// frame to detect the toggle.
-				a.tunSwitch = shown
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "全局 TUN").FontSize(13)
-					ui.Switch(c, &a.tunSwitch).Disabled(a.tunPending)
-					if a.tunPending {
-						ui.Text(c, "处理中…").FontSize(11).TextColor(t.TextMuted)
-					}
-				})
-				if a.tunSwitch != shown {
-					// 用户亲手拨动开关：把自动恢复的失败计数清掉，
-					// 让下一次登录仍按这次的选择还原。
-					a.tunResumeFails = 0
-					a.tunResumeAt = time.Time{}
-					a.tunPending = true
-					a.tunLogf("TUN开关点击: on=%v shown=%v", a.tunSwitch, shown)
-					if a.tunSwitch {
-						if pid := a.firstOnlinePoint(); pid != "" {
-							go a.startTUNSerialized(pid)
-						} else {
-							a.tunPending = false
-							a.toast = "没有在线接入点，先登录再开 TUN"
-						}
-					} else {
-						go a.stopTUNSerialized()
-					}
-					a.invalidate()
-				}
-				ui.Row(c).Padding(6).Radius(8).AlignItems(ui.Center).
-					OnClick(a.openTUNLog).Tooltip("TUN 日志").Children(func() {
-					ui.Icon(c, logIcon).Size(16, 16)
-				})
+				_ = a.saveConfig()
 			}
-			// Always shown, like the TUN switch: hidden controls make the app
-			// look broken. It is only disabled while the aggregate is down.
-			if supportsSystemProxy() {
-				agg := a.mgr.Aggregate()
-				a.sysProxySwitch = a.sysProxyOn && !a.resourceTUNActive()
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "系统代理").FontSize(13).TextColor(t.Text)
-					// TUN 接管时应用侧代理已经停了，再把系统指过去就是整机没网。
-					ui.Switch(c, &a.sysProxySwitch).Disabled(!agg.Running || a.tunOn || a.resourceTUNActive())
-				})
-				if !a.resourceTUNActive() && a.sysProxySwitch != a.sysProxyOn {
-					a.toggleSystemProxy()
-				}
-			}
-			if ui.Button(c, "设置").Clicked() {
-				a.openSettings()
-			}
-			if ui.PrimaryButton(c, "＋ 添加接入点").Clicked() {
-				a.openNewEditor()
-			}
-		})
+			a.resourceTUN.Start()
+		}
+	}
+	a.invalidate()
+}
+
+// pageBar 是每个页面内容顶部的上下文栏：左边标题与计数，右边本页的过滤、搜索
+// 与主操作。四个页面都用它，操作位置因此一致。
+func pageBar(c *ui.Context, title, count string, trailing func()) {
+	t := c.Theme()
+	ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
+		ui.Text(c, title).FontSize(15).Bold()
+		if count != "" {
+			ui.Text(c, count).FontSize(11).TextColor(t.TextMuted)
+		}
+		ui.Row(c).Grow(1)
+		trailing()
 	})
 }
 
@@ -910,19 +930,21 @@ func (a *app) statusBanner(c *ui.Context, views []vpn.View) {
 				ui.Text(c, firstErr).FontSize(11).TextColor(t.Danger).
 					MaxWidth(180).Ellipsis("…").Tooltip(firstErr)
 			}
-			if total > 0 {
-				if ui.Button(c, "全部登录").Label("全部接入点重新登录").FontSize(11).Clicked() {
-					a.mgr.ConnectAll(false)
-				}
-			}
 		})
 	})
 }
 
-// pointsSection 是首屏：一条状态横幅说明整体情况，下面是每个接入点一张卡片，
-// 常规窗口宽度下一行三张。
+// pointsSection 是首屏：顶部上下文栏 + 状态条 + 接入点列表（行间发丝分隔）。
 func (a *app) pointsSection(c *ui.Context) {
+	t := c.Theme()
 	views := a.mgr.Views()
+	pageBar(c, "接入点", fmt.Sprintf("%d 个", len(views)), func() {
+		if len(views) > 0 {
+			if ui.Button(c, "全部登录").Label("全部接入点重新登录").FontSize(11).Clicked() {
+				a.mgr.ConnectAll(false)
+			}
+		}
+	})
 	ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4).Children(func() {
 		ui.Column(c).Gap(12).Children(func() {
 			a.statusBanner(c, views)
@@ -930,16 +952,16 @@ func (a *app) pointsSection(c *ui.Context) {
 				a.emptyState(c)
 				return
 			}
-			// 窄窗口下三列会挤成一团，所以列数按上一帧的实际宽度决定。
-			grid := ui.Grid(c).Columns(a.pointColumns()).Gap(12)
-			grid.Children(func() {
-				for _, v := range views {
+			// 接入点是一个列表，行间只有发丝线；开关与操作都在行里，不另开弹层。
+			panel := ui.Column(c).Radius(12).Background(t.Surface)
+			panel.Children(func() {
+				for i, v := range views {
+					if i > 0 {
+						ui.Divider(c)
+					}
 					a.pointCard(c, v)
 				}
 			})
-			if w := grid.Bounds().W; w > 0 {
-				a.pointsWidth = w
-			}
 			a.recentFailures(c)
 		})
 	})
@@ -1261,10 +1283,7 @@ func (a *app) accessSection(c *ui.Context) {
 			entries = append(entries, e)
 		}
 	}
-	ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
-		ui.Text(c, "访问日志").FontSize(15).Bold()
-		ui.Text(c, fmt.Sprintf("%d 条", len(entries))).FontSize(11).TextColor(t.TextMuted)
-		ui.Row(c).Grow(1)
+	pageBar(c, "访问日志", fmt.Sprintf("%d 条", len(entries)), func() {
 		// 页面级工具栏用默认字号（13），面板内的动作才用 11。
 		if ui.Button(c, "复制全部").Clicked() {
 			var b strings.Builder
@@ -1318,47 +1337,6 @@ func (a *app) accessSection(c *ui.Context) {
 				}
 			})
 		})
-	})
-}
-
-// kbdChip 画一个键盘提示小方块（⌘K 这类），跟说明文字一起读。
-func kbdChip(c *ui.Context, label string) {
-	t := c.Theme()
-	ui.Row(c).Padding(1, 5).Radius(5).Border(1, t.Border).Background(t.Surface).
-		Children(func() { ui.Text(c, label).FontSize(10).TextColor(t.TextMuted) })
-}
-
-func (a *app) footer(c *ui.Context) {
-	t := c.Theme()
-	ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
-		if ui.Button(c, "退出").FontSize(11).Background(t.Danger).
-			TextColor(textOnFill).Clicked() {
-			a.askQuit()
-		}
-		kbdChip(c, "⌘1–⌘4")
-		ui.Text(c, "切换页面").FontSize(10).TextColor(t.TextMuted)
-		ui.Row(c).Grow(1)
-		ui.Text(c, "当前版本 "+appBuild).FontSize(10).TextColor(t.TextMuted)
-		if a.update != nil {
-			ui.Row(c).Padding(3, 8).Radius(8).AlignItems(ui.Center).Gap(5).
-				Tooltip("下载 v" + a.update.Version).
-				OnClick(func() { a.openUpdate() }).Children(func() {
-				ui.Text(c, "新版本 v"+a.update.Version).FontSize(11)
-			})
-		}
-		ui.Row(c).Padding(4).Radius(8).AlignItems(ui.Center).
-			Tooltip("项目主页：" + projectURL).
-			OnClick(func() { a.openProject() }).Children(func() {
-			ui.Icon(c, githubIcon).Size(15, 15)
-		})
-		if ui.Button(c, logLabel(a.logsOpen)).FontSize(11).Clicked() {
-			a.logsOpen = !a.logsOpen
-		}
-		if ui.Button(c, "打开数据目录").FontSize(11).Clicked() {
-			if err := mygo.Shell.OpenPath(a.dir); err != nil {
-				a.toast = "打不开数据目录：" + err.Error()
-			}
-		}
 	})
 }
 
@@ -1724,53 +1702,177 @@ func editorTitle(d *editorDraft) string {
 	return "编辑接入点"
 }
 
-func (a *app) settingsView(c *ui.Context) {
-	if !a.settings.open {
-		return
-	}
+// 设置页的分区编号：多 tab 共用这一个字段。
+const (
+	settingGeneral = iota
+	settingNetwork
+	settingLogs
+	settingAbout
+)
+
+// settingsPage 是整页设置：顶部多 tab，内容区随分区切换，底部固定保存。
+// 原来散在页脚与顶栏的东西——版本、数据目录、运行日志、退出、接管开关——
+// 全部收进这里，主界面因此只剩导航与内容。
+func (a *app) settingsPage(c *ui.Context) {
 	t := c.Theme()
 	d := &a.settings
-	ui.Modal(c, &d.open, func() {
-		ui.Column(c).Width(dialogNarrow).Gap(10).Children(func() {
-			dialogHeader(c, "设置", "监听地址、统一入口与自动化行为")
-			ui.Field(c, "监听地址", func() {
-				ui.TextInput(c, &d.host).Placeholder("127.0.0.1").Width(180)
-			})
-			ui.Row(c).Gap(10).AlignItems(ui.End).Children(func() {
-				ui.Field(c, "统一入口端口", func() {
-					ui.TextInput(c, &d.port).Width(110)
-				})
-				ui.Field(c, "健康检查间隔（秒）", func() {
-					ui.TextInput(c, &d.interval).Width(110)
-				})
-			})
-			ui.Field(c, "分流模式", func() {
-				ui.Select(c, &d.routing, routingLabelStrings()).Width(160)
-			})
-			ui.Column(c).Gap(4).Children(func() {
-				ui.Checkbox(c, &d.aggregate, "开启统一入口 SOCKS5")
-				ui.Checkbox(c, &d.autoReconnect, "连接断开时自动重连")
-				if supportsDockToggle() {
-					ui.Checkbox(c, &d.hideDock, "关闭后隐藏 Dock 图标")
-				}
-			})
-			ui.Text(c, "监听 127.0.0.1 只有本机能用；要让局域网里的设备用，"+
-				"改成 0.0.0.0，但 SOCKS5 没有认证，请只在自己信任的网络里这样做。").
-				FontSize(11).TextColor(t.TextMuted)
-			if d.err != "" {
-				ui.Text(c, d.err).FontSize(11).TextColor(t.Danger)
+	ui.Column(c).Grow(1).MinHeight(0).Gap(10).Children(func() {
+		ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
+			ui.Text(c, "设置").FontSize(15).Bold()
+			ui.Row(c).Grow(1)
+			if ui.Button(c, "返回").Label("关闭设置").FontSize(11).Clicked() {
+				d.open = false
 			}
-			dialogFooter(c, func() {
-				ui.Row(c).Grow(1)
-				if ui.Button(c, "取消").FontSize(11).Clicked() {
-					d.open = false
-				}
-				if ui.PrimaryButton(c, "保存").FontSize(11).Clicked() {
-					a.saveSettings()
+		})
+		ui.Segmented(c, &d.section, "通用", "网络与接管", "日志", "关于").Label("设置分类")
+		ui.Divider(c)
+		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4).Children(func() {
+			ui.Column(c).Gap(12).Children(func() {
+				switch d.section {
+				case settingNetwork:
+					a.captureSection(c)
+				case settingLogs:
+					a.logsSection(c)
+				case settingAbout:
+					a.aboutSection(c)
+				default:
+					a.generalSection(c)
 				}
 			})
 		})
+		if d.err != "" {
+			ui.Text(c, d.err).FontSize(11).TextColor(t.Danger)
+		}
+		ui.Divider(c)
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "改动保存后立即生效").FontSize(11).TextColor(t.TextMuted)
+			ui.Row(c).Grow(1)
+			if ui.Button(c, "取消").Label("取消设置").FontSize(11).Clicked() {
+				d.open = false
+			}
+			if ui.PrimaryButton(c, "保存").Label("保存设置").FontSize(11).Clicked() {
+				a.saveSettings()
+			}
+		})
 	})
+}
+
+// generalSection 是原来的设置弹窗内容，按整页排版重新分好组。
+func (a *app) generalSection(c *ui.Context) {
+	t := c.Theme()
+	d := &a.settings
+	ui.Field(c, "监听地址", func() {
+		ui.TextInput(c, &d.host).Placeholder("127.0.0.1").Width(180)
+	})
+	ui.Row(c).Gap(12).AlignItems(ui.End).Children(func() {
+		ui.Field(c, "统一入口端口", func() {
+			ui.TextInput(c, &d.port).Width(110)
+		})
+		ui.Field(c, "健康检查间隔（秒）", func() {
+			ui.TextInput(c, &d.interval).Width(110)
+		})
+	})
+	ui.Field(c, "分流模式", func() {
+		ui.Select(c, &d.routing, routingLabelStrings()).Width(160)
+	})
+	ui.Column(c).Gap(4).Children(func() {
+		ui.Checkbox(c, &d.aggregate, "开启统一入口 SOCKS5")
+		ui.Checkbox(c, &d.autoReconnect, "连接断开时自动重连")
+		if supportsDockToggle() {
+			ui.Checkbox(c, &d.hideDock, "关闭后隐藏 Dock 图标")
+		}
+	})
+	ui.Text(c, "监听 127.0.0.1 只有本机能用；要让局域网里的设备用，"+
+		"改成 0.0.0.0，但 SOCKS5 没有认证，请只在自己信任的网络里这样做。").
+		FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
+}
+
+// captureSection 是「网络与接管」：接管方式是一个下拉，状态与诊断在下面。
+func (a *app) captureSection(c *ui.Context) {
+	t := c.Theme()
+	d := &a.settings
+	// 下拉反映真实状态；用户改选时由 applyCaptureMode 负责先关掉其他方式。
+	d.mode = a.captureMode()
+	ui.Field(c, "接管方式", func() {
+		sel := ui.Select(c, &d.mode, captureModes()).Width(180)
+		if sel.Changed() {
+			a.applyCaptureMode(d.mode)
+		}
+	})
+	agg := a.mgr.Aggregate()
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+		ui.Text(c, "当前接管："+a.captureMode()).FontSize(11).TextColor(t.TextMuted)
+		ui.Row(c).Grow(1)
+		if agg.Running {
+			addr := "socks5://" + displayAddr(agg.Addr)
+			ui.Text(c, addr).Font("monospace").FontSize(11).TextColor(t.TextMuted)
+			if ui.Button(c, "复制入口").Label("复制统一入口地址").FontSize(11).Clicked() {
+				a.copyText(addr)
+			}
+		} else {
+			ui.Text(c, "统一入口未监听").FontSize(11).TextColor(t.TextMuted)
+		}
+	})
+	ui.Text(c, "系统代理只改浏览器等应用的代理设置；全局 TUN 接管整机 IPv4 TCP；"+
+		"应用接管只针对选中的应用。三者互斥，同一时间只能开一个。").
+		FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(620)
+	ui.Divider(c)
+	a.captureStatus(c)
+}
+
+// logsSection 是「日志」：运行日志开关与访问日志页入口。
+func (a *app) logsSection(c *ui.Context) {
+	t := c.Theme()
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "运行日志").FontSize(13).Bold()
+		ui.Row(c).Grow(1)
+		if ui.Button(c, logLabel(a.logsOpen)).FontSize(11).Clicked() {
+			a.logsOpen = !a.logsOpen
+		}
+		if ui.Button(c, "访问日志页").FontSize(11).Clicked() {
+			a.settings.open = false
+			a.tab = 2
+		}
+	})
+	if a.logsOpen {
+		a.logPanel(c)
+	} else {
+		ui.Text(c, "运行日志记录登录、断开、接管与连接失败；打开后可复制或清空。").
+			FontSize(11).TextColor(t.TextMuted)
+	}
+	ui.Divider(c)
+	ui.Text(c, "TUN 与接管日志").FontSize(13).Bold()
+	ui.Text(c, "系统 TUN 与应用接管的详细日志单独存放，排查接管问题时先看这里。").
+		FontSize(11).TextColor(t.TextMuted)
+	if ui.Button(c, "打开 TUN 日志").FontSize(11).Clicked() {
+		a.openTUNLog()
+	}
+}
+
+// aboutSection 是「关于」：版本、更新、项目主页、数据目录与退出。
+func (a *app) aboutSection(c *ui.Context) {
+	t := c.Theme()
+	ui.Field(c, "版本", func() { ui.Text(c, appName+" "+appBuild).FontSize(13) })
+	ui.Row(c).Gap(8).Wrap().Children(func() {
+		if ui.Button(c, "项目主页").FontSize(11).Clicked() {
+			a.openProject()
+		}
+		if ui.Button(c, "打开数据目录").FontSize(11).Clicked() {
+			if err := mygo.Shell.OpenPath(a.dir); err != nil {
+				a.toast = "打不开数据目录：" + err.Error()
+			}
+		}
+		if a.update != nil {
+			if ui.PrimaryButton(c, "下载 v"+a.update.Version).FontSize(11).Clicked() {
+				a.openUpdate()
+			}
+		}
+	})
+	ui.Divider(c)
+	ui.Text(c, "退出会断开所有隧道；正在接管时请先关闭接管再退出。").FontSize(11).TextColor(t.TextMuted)
+	if ui.Button(c, "退出 "+appName).FontSize(11).Background(t.Danger).TextColor(textOnFill).Clicked() {
+		a.askQuit()
+	}
 }
 
 func (a *app) deleteView(c *ui.Context) {
@@ -2331,6 +2433,7 @@ func (a *app) openSettings() {
 	s := a.cfg.Settings
 	a.settings = settingsDraft{
 		open:          true,
+		section:       a.settings.section,
 		host:          s.ListenHost,
 		port:          strconv.Itoa(s.AggregatePort),
 		interval:      strconv.Itoa(s.HealthIntervalSec),
@@ -2340,6 +2443,13 @@ func (a *app) openSettings() {
 		secretStore:   secretStoreLabel(s.SecretStore),
 		hideDock:      s.HideDock,
 	}
+}
+
+// openSettingsAt 从顶栏直接进入指定分区：齿轮进上次所在分区，网络状态进网络分区。
+func (a *app) openSettingsAt(section int) {
+	a.openSettings()
+	a.settings.section = section
+	a.invalidate()
 }
 
 func (a *app) saveSettings() {

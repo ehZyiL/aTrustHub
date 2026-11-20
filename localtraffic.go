@@ -33,6 +33,12 @@ func (a *app) logLocalAccess(e localapps.AccessEvent) {
 	a.bus.Upsert(source, line)
 }
 
+func (a *app) logLocalAppError(name string, err error) {
+	if a.bus != nil && err != nil {
+		a.bus.Add("app", fmt.Sprintf("本机软件「%s」接管失败：%s", logField(name), logField(err.Error())))
+	}
+}
+
 func localAccessLine(e localapps.AccessEvent) (string, string) {
 	r := e.Result
 	target := r.Target

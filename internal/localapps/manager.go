@@ -1,5 +1,5 @@
 // Package localapps manages explicit browser proxy sessions, local TCP
-// forwards, and the experimental Linux process-capture launcher.
+// forwards, and the experimental per-application capture launchers.
 package localapps
 
 import (
@@ -54,6 +54,7 @@ type Manager struct {
 	closed       bool
 	onChange     func()
 	onAccess     func(AccessEvent)
+	onError      func(name string, err error)
 	captureStart func(context.Context, model.LocalApp, DialFunc) (managedCapture, error)
 	dns          dnsPool
 }
@@ -69,6 +70,27 @@ func NewManager(onChange func(), observers ...func(AccessEvent)) *Manager {
 func (m *Manager) notify() {
 	if m.onChange != nil {
 		m.onChange()
+	}
+}
+
+// SetErrorHandler observes asynchronous capture failures, which cannot be
+// returned by StartCapture. The name is a launch-time snapshot, so a logger
+// does not need to read mutable UI configuration from a background goroutine.
+func (m *Manager) SetErrorHandler(handler func(name string, err error)) {
+	m.mu.Lock()
+	m.onError = handler
+	m.mu.Unlock()
+}
+
+func (m *Manager) reportError(name string, err error) {
+	if err == nil {
+		return
+	}
+	m.mu.Lock()
+	handler := m.onError
+	m.mu.Unlock()
+	if handler != nil {
+		handler(name, err)
 	}
 }
 
@@ -226,7 +248,7 @@ func (m *Manager) StartCapture(p model.LocalApp, dial DialFunc, active func() bo
 		setupErr := checkCaptureProgram(ctx, p)
 		if setupErr == nil && len(configs) > 0 {
 			ctx = context.WithValue(ctx, captureConfigKey{}, configs[0])
-			binding, setupErr = m.dns.acquire(configs[0])
+			binding, setupErr = m.dns.acquireContext(ctx, configs[0])
 			if setupErr == nil && binding != nil {
 				ctx = context.WithValue(ctx, dnsContextKey{}, binding)
 				defer binding.release()
@@ -235,12 +257,16 @@ func (m *Manager) StartCapture(p model.LocalApp, dial DialFunc, active func() bo
 		if setupErr != nil {
 			m.mu.Lock()
 			r.view.Starting = false
-			if ctx.Err() == nil {
+			report := ctx.Err() == nil
+			if report {
 				r.view.Error = setupErr.Error()
 			}
 			m.mu.Unlock()
 			cancel()
 			close(r.setupDone)
+			if report {
+				m.reportError(p.Name, setupErr)
+			}
 			m.notify()
 			return
 		}
@@ -266,6 +292,7 @@ func (m *Manager) StartCapture(p model.LocalApp, dial DialFunc, active func() bo
 				binding.release()
 			}
 			close(r.setupDone)
+			m.reportError(p.Name, err)
 			m.notify()
 			return
 		}
@@ -300,17 +327,20 @@ func (m *Manager) StartCapture(p model.LocalApp, dial DialFunc, active func() bo
 			binding.release()
 		}
 		m.mu.Lock()
+		var reportedErr error
 		if m.runs[p.ID] == r {
 			r.view.Running = false
 			r.view.PID = 0
 			if !r.view.Stopping {
 				if err := errors.Join(runErr, closeErr); err != nil {
 					r.view.Error = err.Error()
+					reportedErr = err
 				}
 			}
 		}
 		m.mu.Unlock()
 		cancel()
+		m.reportError(p.Name, reportedErr)
 		m.notify()
 	}()
 	return nil

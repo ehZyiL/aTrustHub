@@ -74,6 +74,36 @@ func TestDisconnectCancelsCaptureBeforeProgramRelease(t *testing.T) {
 	}
 }
 
+func TestDisconnectCancelsDNSBeforeCaptureStartup(t *testing.T) {
+	m := NewManager(nil)
+	defer m.Close()
+	started := make(chan struct{})
+	var launched atomic.Bool
+	m.dns.prepare = func(ctx context.Context, _ string, _ CaptureConfig) (aliasBinding, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	m.captureStart = func(context.Context, model.LocalApp, DialFunc) (managedCapture, error) {
+		launched.Store(true)
+		return &fakeCapture{done: make(chan struct{})}, nil
+	}
+	if err := m.StartCapture(captureProfile(), unusedDial, func() bool { return true }, aliasTestConfig("preparing")); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	done := make(chan struct{})
+	go func() { m.StopPoint("vpn"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("disconnect blocked on DNS preparation")
+	}
+	if v := m.View("ide"); v.Starting || v.Stopping || v.Running || v.Error != "" || launched.Load() {
+		t.Fatalf("cancelled DNS setup continued launching software: %+v", v)
+	}
+}
+
 func TestCaptureHelperFailureUpdatesStateAndAllowsRestart(t *testing.T) {
 	m := NewManager(nil)
 	defer m.Close()
@@ -152,5 +182,60 @@ func TestReconnectedVPNReleasesOldCapture(t *testing.T) {
 	}
 	if err := m.StartCapture(captureProfile(), unusedDial, active.Load); err == nil {
 		t.Fatal("expired VPN accepted a new launch")
+	}
+}
+
+func TestAsyncCaptureStartupFailureReportedWithProjectName(t *testing.T) {
+	for _, dnsFailure := range []bool{true, false} {
+		name := "capture"
+		if dnsFailure {
+			name = "dns"
+		}
+		t.Run(name, func(t *testing.T) {
+			m := NewManager(nil)
+			defer m.Close()
+			failure := errors.New("SetIpInterfaceEntry (Win32 87)")
+			var launched atomic.Bool
+			m.captureStart = func(context.Context, model.LocalApp, DialFunc) (managedCapture, error) {
+				launched.Store(true)
+				return nil, failure
+			}
+			var configs []CaptureConfig
+			if dnsFailure {
+				configs = []CaptureConfig{aliasTestConfig("diagnostics")}
+				m.dns.prepare = func(context.Context, string, CaptureConfig) (aliasBinding, error) {
+					return nil, failure
+				}
+			}
+			type report struct {
+				name string
+				err  error
+				view View
+			}
+			reports := make(chan report, 2)
+			m.SetErrorHandler(func(name string, err error) {
+				// Observers may inspect state: the manager lock must be released.
+				reports <- report{name, err, m.View("ide")}
+			})
+			if err := m.StartCapture(captureProfile(), unusedDial, func() bool { return true }, configs...); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case got := <-reports:
+				if got.name != "IDE" || !errors.Is(got.err, failure) || got.view.Running || got.view.Starting || got.view.Error != got.err.Error() {
+					t.Fatalf("incomplete asynchronous failure report: %+v", got)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("startup failure was not reported")
+			}
+			if dnsFailure && launched.Load() {
+				t.Fatal("launched after failed network preparation")
+			}
+			select {
+			case got := <-reports:
+				t.Fatalf("duplicate report: %+v", got)
+			default:
+			}
+		})
 	}
 }

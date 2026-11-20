@@ -36,7 +36,7 @@ func localModeLabel(mode string) string {
 }
 
 func captureExperimentEnabled() bool {
-	return runtime.GOOS == "linux" && os.Getenv("EASYCONNECT_EXPERIMENTAL_CAPTURE") != "0"
+	return (runtime.GOOS == "linux" || runtime.GOOS == "windows") && os.Getenv("EASYCONNECT_EXPERIMENTAL_CAPTURE") != "0"
 }
 
 func localProjectBusy(v localapps.View) bool { return v.Running || v.Starting || v.Stopping }
@@ -63,6 +63,9 @@ func (a *app) localAppsSection(c *ui.Context) {
 		intro := "先连接 VPN，再启动浏览器或数据库转发。普通软件及子进程的透明接管仍在开发。"
 		if captureExperimentEnabled() {
 			intro = "先连接 VPN，再添加并启动软件。软件 TCP 接管（实验）需安装辅助服务；内网 UDP/IPv6 暂不支持。"
+			if runtime.GOOS == "windows" {
+				intro = "先连接 VPN，再添加并启动软件。Windows 软件接管（实验）需要管理员授权网络助手；内网 UDP/IPv6 暂不支持。"
+			}
 		}
 		ui.Text(c, intro).FontSize(12).TextColor(t.TextMuted).Wrap()
 		ui.Text(c, "统计仅包含经过项目入口的 TCP 连接；成功表示 TCP 已建立。每次重新启动项目会重新计数。").FontSize(11).TextColor(t.TextMuted).Wrap()
@@ -284,7 +287,11 @@ func (a *app) localAppEditorView(c *ui.Context) {
 				})
 			})
 			if d.mode == localModeLabel(model.LocalAppCapture) {
-				ui.Text(c, "请先保存工作并关闭已有实例。启动前检查同一可执行文件的运行实例；脚本包装器、已有后台服务和 D-Bus 启动仍需自行确认。实验接管 IPv4 TCP，内网 UDP/IPv6 与 Flatpak 暂不支持。").FontSize(11).TextColor(t.Warning).Wrap()
+				note := "请先保存工作并关闭已有实例。启动前检查同一可执行文件的运行实例；脚本包装器、已有后台服务和 D-Bus 启动仍需自行确认。实验接管 IPv4 TCP，内网 UDP/IPv6 与 Flatpak 暂不支持。"
+				if runtime.GOOS == "windows" {
+					note = "请先保存工作并退出已有实例。接管所选 .exe 和新建的常规子进程，已有后台服务及需要管理员权限的软件暂不支持。停止接管会保留软件进程。仅支持 IPv4 TCP；首次使用需要实机验证。"
+				}
+				ui.Text(c, note).FontSize(11).TextColor(t.Warning).Wrap()
 			}
 			if d.err != "" {
 				ui.Text(c, d.err).FontSize(12).TextColor(t.Danger).Wrap()
@@ -455,7 +462,7 @@ func (a *app) startLocalApp(id string) {
 	defer a.localLife.Unlock()
 	if profile.Mode == model.LocalAppCapture {
 		if !captureExperimentEnabled() {
-			a.toast = "软件 TCP 接管仅支持 Linux；如设置了 EASYCONNECT_EXPERIMENTAL_CAPTURE=0，请取消后重新启动应用"
+			a.toast = "软件 TCP 接管支持 Linux 和 Windows；如设置了 EASYCONNECT_EXPERIMENTAL_CAPTURE=0，请取消后重新启动应用"
 			return
 		}
 		if a.captureSetupBusy() {
@@ -468,6 +475,9 @@ func (a *app) startLocalApp(id string) {
 			domains, err = localapps.DNSDomains(connection.Resources)
 			if err == nil {
 				config := localapps.CaptureConfig{Key: connection.Key, Domains: domains, Exchange: connection.DNS, MappedDNS: connection.MappedDNS, Active: connection.Active}
+				if point := a.cfg.Find(profile.PointID); point != nil {
+					config.Gateway = point.Server
+				}
 				config.Networks, err = localapps.CaptureNetworks(connection.Resources)
 				if err == nil {
 					err = a.local.StartCapture(profile, connection.Dial, connection.Active, config)
@@ -476,6 +486,7 @@ func (a *app) startLocalApp(id string) {
 		}
 		if err != nil {
 			a.toast = err.Error()
+			a.logLocalAppError(profile.Name, err)
 		} else {
 			a.toast = "正在准备「" + profile.Name + "」的 TCP 接管"
 		}

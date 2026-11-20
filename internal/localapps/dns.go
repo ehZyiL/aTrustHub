@@ -3,6 +3,7 @@ package localapps
 import (
 	"context"
 	"errors"
+	"net"
 	"sort"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 
 type CaptureConfig struct {
 	Key       string
+	Gateway   string
 	Domains   []string
 	Exchange  splitdns.ExchangeFunc
 	Networks  []netpolicy.Range
@@ -85,10 +87,19 @@ func DNSDomains(resources *workeripc.ResourceSnapshot) ([]string, error) {
 type dnsPool struct {
 	mu      sync.Mutex
 	entries map[string]*dnsEntry
+	pending map[string]*dnsPreparation
+	closed  bool
 	failed  map[string]bool
 	prepare func(context.Context, string, CaptureConfig) (aliasBinding, error)
 }
+type dnsPreparation struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+	err    error // published by closing done
+}
+
 type dnsEntry struct {
+	once    sync.Once
 	server  *splitdns.Server
 	cancel  context.CancelFunc
 	refs    int
@@ -113,72 +124,158 @@ type dnsContextKey struct{}
 type captureConfigKey struct{}
 
 func (p *dnsPool) acquire(config CaptureConfig) (*dnsBinding, error) {
+	return p.acquireContext(context.Background(), config)
+}
+
+// Preparation belongs to a single launch and can be cancelled. A committed
+// listener belongs to the VPN generation, not to the first launch's context.
+// Slow helper/UAC operations never hold the pool mutex.
+func (p *dnsPool) acquireContext(ctx context.Context, config CaptureConfig) (*dnsBinding, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(config.Domains) == 0 {
 		return nil, nil
 	}
 	if config.Key == "" || (config.Exchange == nil && config.MappedDNS == nil) {
 		return nil, errors.New("VPN 核心尚不支持软件 DNS")
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.entries == nil {
-		p.entries = make(map[string]*dnsEntry)
-	}
-	if p.failed[config.Key] {
-		return nil, errors.New("本次连接的 DNS 助手会话已结束，请重新连接 VPN 后再启动软件")
-	}
-	entry := p.entries[config.Key]
-	if entry != nil {
-		if strings.Join(entry.domains, "\n") != strings.Join(config.Domains, "\n") {
-			return nil, errors.New("VPN DNS 配置发生变化，请重新连接")
-		}
-		select {
-		case <-entry.server.Done():
-			return nil, errors.New("软件 DNS 入口已关闭，请重新启动项目")
-		default:
-		}
-	} else {
-		ctx, cancel := context.WithCancel(context.Background())
-		entry = &dnsEntry{cancel: cancel, domains: append([]string(nil), config.Domains...), active: config.Active}
-		ready := make(chan struct{})
-		exchange := config.Exchange
-		if config.MappedDNS != nil {
-			exchange = func(ctx context.Context, packet []byte) ([]byte, error) {
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-ready:
-				}
-				if entry.alias == nil {
-					return nil, errors.New("软件 DNS 规则尚未就绪")
-				}
-				return entry.alias.Exchange(ctx, packet)
-			}
-		}
-		server, err := splitdns.Listen(ctx, exchange)
-		if err != nil {
-			cancel()
+	for {
+		p.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			p.mu.Unlock()
 			return nil, err
 		}
-		entry.server = server
-		if config.MappedDNS != nil {
-			prepare := p.prepare
-			if prepare == nil {
-				prepare = prepareMappedDNS
-			}
-			entry.alias, err = prepare(ctx, server.Addr(), config)
+		if p.closed {
+			p.mu.Unlock()
+			return nil, net.ErrClosed
 		}
-		close(ready)
+		if config.Active != nil && !config.Active() {
+			p.mu.Unlock()
+			return nil, errors.New("VPN 会话已结束")
+		}
+		if p.failed[config.Key] {
+			p.mu.Unlock()
+			return nil, errors.New("本次连接的 DNS 助手会话已结束，请重新连接 VPN 后再启动软件")
+		}
+		if entry := p.entries[config.Key]; entry != nil {
+			if strings.Join(entry.domains, "\n") != strings.Join(config.Domains, "\n") {
+				p.mu.Unlock()
+				return nil, errors.New("VPN DNS 配置发生变化，请重新连接")
+			}
+			select {
+			case <-entry.server.Done():
+				p.mu.Unlock()
+				return nil, errors.New("软件 DNS 入口已关闭，请重新启动项目")
+			default:
+			}
+			binding := p.bind(config.Key, entry)
+			p.mu.Unlock()
+			return binding, nil
+		}
+		if pending := p.pending[config.Key]; pending != nil {
+			p.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-pending.done:
+				if pending.err != nil && !errors.Is(pending.err, context.Canceled) && !errors.Is(pending.err, context.DeadlineExceeded) {
+					return nil, pending.err
+				}
+			}
+			continue
+		}
+		setup, cancel := context.WithCancel(ctx)
+		pending := &dnsPreparation{cancel: cancel, done: make(chan struct{})}
+		if p.pending == nil {
+			p.pending = make(map[string]*dnsPreparation)
+		}
+		p.pending[config.Key] = pending
+		prepare := p.prepare
+		if prepare == nil {
+			prepare = prepareMappedDNS
+		}
+		p.mu.Unlock()
+
+		entry, err := prepareDNSEntry(setup, config, prepare)
+		p.mu.Lock()
+		if setup.Err() != nil {
+			err = setup.Err()
+		} else if p.closed {
+			err = net.ErrClosed
+		} else if config.Active != nil && !config.Active() {
+			err = errors.New("VPN 会话已结束")
+		}
 		if err != nil {
-			cancel()
-			_ = server.Close()
+			// Keep the reservation until rollback completes, so a waiting
+			// launch cannot install competing rules while cleanup runs.
+			p.mu.Unlock()
+			if entry != nil {
+				entry.close()
+			}
+			p.mu.Lock()
+		} else {
+			if p.entries == nil {
+				p.entries = make(map[string]*dnsEntry)
+			}
+			p.entries[config.Key] = entry
+		}
+		var binding *dnsBinding
+		if err == nil {
+			binding = p.bind(config.Key, entry)
+		}
+		pending.err = err
+		delete(p.pending, config.Key)
+		close(pending.done)
+		p.mu.Unlock()
+		cancel()
+		if err != nil {
 			return nil, err
 		}
-		p.entries[config.Key] = entry
 		if entry.alias != nil || entry.active != nil {
 			go p.watch(config.Key, entry)
 		}
+		return binding, nil
 	}
+}
+
+func prepareDNSEntry(setup context.Context, config CaptureConfig, prepare func(context.Context, string, CaptureConfig) (aliasBinding, error)) (*dnsEntry, error) {
+	life, cancel := context.WithCancel(context.Background())
+	entry := &dnsEntry{cancel: cancel, domains: append([]string(nil), config.Domains...), active: config.Active}
+	ready := make(chan struct{})
+	exchange := config.Exchange
+	if config.MappedDNS != nil {
+		exchange = func(ctx context.Context, packet []byte) ([]byte, error) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-ready:
+			}
+			if entry.alias == nil {
+				return nil, errors.New("软件 DNS 规则尚未就绪")
+			}
+			return entry.alias.Exchange(ctx, packet)
+		}
+	}
+	server, err := splitdns.Listen(life, exchange)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	entry.server = server
+	if config.MappedDNS != nil {
+		entry.alias, err = prepare(setup, server.Addr(), config)
+		if err == nil && entry.alias == nil {
+			err = errors.New("软件 DNS 助手未就绪")
+		}
+	}
+	close(ready)
+	return entry, err
+}
+
+// bind is called with p.mu held; the returned release may run concurrently
+// with a helper failure, pool close, or a different application's release.
+func (p *dnsPool) bind(key string, entry *dnsEntry) *dnsBinding {
 	entry.refs++
 	var once sync.Once
 	return &dnsBinding{address: entry.server.Addr(), domains: entry.domains, done: entry.server.Done(), alias: entry.alias, release: func() {
@@ -186,21 +283,25 @@ func (p *dnsPool) acquire(config CaptureConfig) (*dnsBinding, error) {
 			p.mu.Lock()
 			entry.refs--
 			last := entry.refs == 0 && (entry.active == nil || !entry.active())
-			if last {
-				if p.entries[config.Key] == entry {
-					delete(p.entries, config.Key)
-				}
+			if last && p.entries[key] == entry {
+				delete(p.entries, key)
 			}
 			p.mu.Unlock()
 			if last {
-				entry.cancel()
-				_ = entry.server.Close()
-				if entry.alias != nil {
-					_ = entry.alias.Close()
-				}
+				entry.close()
 			}
 		})
-	}}, nil
+	}}
+}
+
+func (e *dnsEntry) close() {
+	e.once.Do(func() {
+		e.cancel()
+		_ = e.server.Close()
+		if e.alias != nil {
+			_ = e.alias.Close()
+		}
+	})
 }
 
 func (p *dnsPool) watch(key string, entry *dnsEntry) {
@@ -219,36 +320,37 @@ func (p *dnsPool) watch(key string, entry *dnsEntry) {
 				continue
 			}
 		}
-		entry.cancel()
-		_ = entry.server.Close()
-		if entry.alias != nil {
-			_ = entry.alias.Close()
-		}
 		p.mu.Lock()
-		if entry.alias != nil && entry.active != nil && entry.active() {
-			if p.failed == nil {
-				p.failed = map[string]bool{}
-			}
-			p.failed[key] = true
-		}
 		if p.entries[key] == entry {
+			if entry.alias != nil && entry.active != nil && entry.active() {
+				if p.failed == nil {
+					p.failed = map[string]bool{}
+				}
+				p.failed[key] = true
+			}
 			delete(p.entries, key)
 		}
 		p.mu.Unlock()
+		entry.close()
 		return
 	}
 }
 
 func (p *dnsPool) close() {
 	p.mu.Lock()
+	p.closed = true
 	entries := p.entries
 	p.entries = nil
+	pending := make([]*dnsPreparation, 0, len(p.pending))
+	for _, preparation := range p.pending {
+		preparation.cancel()
+		pending = append(pending, preparation)
+	}
 	p.mu.Unlock()
 	for _, entry := range entries {
-		entry.cancel()
-		_ = entry.server.Close()
-		if entry.alias != nil {
-			_ = entry.alias.Close()
-		}
+		entry.close()
+	}
+	for _, preparation := range pending {
+		<-preparation.done
 	}
 }

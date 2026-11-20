@@ -12,7 +12,9 @@ if [[ ! "$bundle_name" =~ ^[a-zA-Z0-9._-]+$ || "$bundle_name" == "." || "$bundle
   printf 'Invalid bundle name\n' >&2
   exit 1
 fi
-bundle="$app_root/build/$bundle_name"
+mkdir -p "$app_root/build"
+bundle=$(mktemp -d "$app_root/build/.${bundle_name}.staging.XXXXXXXX")
+trap 'rm -rf -- "$bundle"' EXIT
 mkdir -p "$bundle/resources" "$bundle/LICENSES"
 
 cd "$app_root"
@@ -58,5 +60,15 @@ chmod +x "$bundle/easyconnect-hub" "$bundle/easyconnect-worker" "$bundle/easycon
 cd "$bundle"
 sha256sum easyconnect-hub easyconnect-worker easyconnect-hub-capture easyconnect-hub-capture@.service install-capture-helper.sh uninstall-capture-helper.sh test-worker.sh COMPONENTS.txt > SHA256SUMS
 cd "$app_root/build"
-tar -czf "$bundle_name.tar.gz" "$bundle_name"
-printf 'Linux bundle: %s\n' "$bundle"
+final_bundle="$app_root/build/$bundle_name"
+if [[ -e "$final_bundle" || -L "$final_bundle" ]]; then
+  rm -rf -- "$final_bundle"
+fi
+mv -- "$bundle" "$final_bundle"
+trap - EXIT
+archive_tmp="$app_root/build/.${bundle_name}.tar.gz.$$"
+trap 'rm -f -- "$archive_tmp"' EXIT
+tar -czf "$archive_tmp" "$bundle_name"
+mv -f -- "$archive_tmp" "$bundle_name.tar.gz"
+trap - EXIT
+printf 'Linux bundle: %s\n' "$final_bundle"

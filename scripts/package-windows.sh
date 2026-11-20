@@ -15,7 +15,9 @@ if [[ ! "$bundle_name" =~ ^[a-zA-Z0-9._-]+$ || "$bundle_name" == "." || "$bundle
   printf 'Invalid bundle name\n' >&2
   exit 1
 fi
-bundle="$app_root/build/$bundle_name"
+mkdir -p "$app_root/build"
+bundle=$(mktemp -d "$app_root/build/.${bundle_name}.staging.XXXXXXXX")
+trap 'rm -rf -- "$bundle"' EXIT
 mkdir -p "$bundle/resources" "$bundle/LICENSES"
 
 cd "$app_root"
@@ -62,12 +64,23 @@ python_bin=python3
 if ! command -v python3 >/dev/null 2>&1 || ! python3 -c "" 2>/dev/null; then
   python_bin=python
 fi
-"$python_bin" - "$bundle" <<'PY'
+final_bundle="$app_root/build/$bundle_name"
+if [[ -e "$final_bundle" || -L "$final_bundle" ]]; then
+  rm -rf -- "$final_bundle"
+fi
+mv -- "$bundle" "$final_bundle"
+trap - EXIT
+bundle="$final_bundle"
+archive_tmp="$app_root/build/.${bundle_name}.zip.tmp.$$"
+trap 'rm -f -- "$archive_tmp"' EXIT
+"$python_bin" - "$bundle" "$archive_tmp" <<'PY'
 import pathlib, sys, zipfile
 bundle = pathlib.Path(sys.argv[1])
-with zipfile.ZipFile(str(bundle) + '.zip', 'w', zipfile.ZIP_DEFLATED) as output:
+with zipfile.ZipFile(sys.argv[2], 'w', zipfile.ZIP_DEFLATED) as output:
     for file in sorted(bundle.rglob('*')):
         if file.is_file():
             output.write(file, file.relative_to(bundle.parent))
 PY
+mv -f -- "$archive_tmp" "$final_bundle.zip"
+trap - EXIT
 printf 'Windows bundle: %s\n' "$bundle"

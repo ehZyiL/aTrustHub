@@ -3,7 +3,7 @@ set -euo pipefail
 
 app_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 worker_root=$(cd -- "$app_root/../zju-connect" && pwd)
-diff -u <(sed 's/^package desktop$/package workeripc/' "$worker_root/internal/desktop/protocol.go") "$app_root/internal/workeripc/protocol.go"
+diff -u --strip-trailing-cr <(sed 's/^package desktop$/package workeripc/' "$worker_root/internal/desktop/protocol.go") "$app_root/internal/workeripc/protocol.go"
 go_tool=${GO:-go}
 target_arch=${GOARCH:-amd64}
 if [[ "$target_arch" != "amd64" ]]; then
@@ -24,7 +24,7 @@ env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=reado
 env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" test -mod=readonly -trimpath -c -o "$bundle/windows-capture-tests.exe" ./internal/wincapture
 "$go_tool" list -m all > "$bundle/desktop-modules.txt"
 cd "$worker_root"
-env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/easyconnect-worker.exe" ./cmd/easyconnect-worker
+env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-worker.exe" ./cmd/easyconnect-worker
 "$go_tool" list -m all > "$bundle/worker-modules.txt"
 
 install -m 0644 "$app_root/resources/icon.png" "$bundle/resources/icon.png"
@@ -44,7 +44,11 @@ install -m 0644 "$app_root/packaging/windows/test-capture.ps1" "$bundle/test-cap
 
 cd "$bundle"
 sha256sum easyconnect-hub.exe easyconnect-worker.exe easyconnect-hub-capture.exe windows-capture-tests.exe test-capture.ps1 > SHA256SUMS
-python3 - "$bundle" <<'PY'
+python_bin=python3
+if ! command -v python3 >/dev/null 2>&1 || ! python3 -c "" 2>/dev/null; then
+  python_bin=python
+fi
+"$python_bin" - "$bundle" <<'PY'
 import pathlib, sys, zipfile
 bundle = pathlib.Path(sys.argv[1])
 with zipfile.ZipFile(str(bundle) + '.zip', 'w', zipfile.ZIP_DEFLATED) as output:

@@ -74,7 +74,9 @@ func NewEasyConnectConnector(path string) Connector {
 			return nil, err
 		}
 		password := hex.EncodeToString(secret)
-		s := &processSession{cmd: exec.Command(bin), session: model.NewID(), events: make(chan workeripc.Message, 8), done: make(chan struct{}), stopping: make(chan struct{}), dnsPending: make(map[string]chan workeripc.Message), dnsSlots: make(chan struct{}, workeripc.MaxDNSRequests), outgoing: make(chan workerWrite, 32)}
+		cmd := exec.Command(bin)
+		hideWorkerCmd(cmd)
+		s := &processSession{cmd: cmd, session: model.NewID(), events: make(chan workeripc.Message, 8), done: make(chan struct{}), stopping: make(chan struct{}), dnsPending: make(map[string]chan workeripc.Message), dnsSlots: make(chan struct{}, workeripc.MaxDNSRequests), outgoing: make(chan workerWrite, 32)}
 		// Lifetime is explicit: the login context expires after authentication.
 		s.cmd.Stderr = io.Discard
 		stdin, err := s.cmd.StdinPipe()

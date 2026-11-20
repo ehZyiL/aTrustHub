@@ -14,10 +14,10 @@
 New-Item -ItemType Directory -Force .\build\windows-capture\resources | Out-Null
 go build -mod=readonly -trimpath '-ldflags=-H=windowsgui' -o .\build\windows-capture\easyconnect-hub.exe .
 go build -mod=readonly -trimpath '-ldflags=-H=windowsgui' -o .\build\windows-capture\easyconnect-hub-capture.exe ./cmd/app-helper
-go -C ..\zju-connect build -mod=readonly -trimpath -o ..\aTrustHub\build\windows-capture\easyconnect-worker.exe ./cmd/easyconnect-worker
+go -C ..\zju-connect build -mod=readonly -trimpath '-ldflags=-H=windowsgui' -o ..\aTrustHub\build\windows-capture\easyconnect-worker.exe ./cmd/easyconnect-worker
 Copy-Item .\resources\icon.png .\build\windows-capture\resources\icon.png -Force
 go test -mod=readonly -trimpath -c -o .\build\windows-capture\windows-capture-tests.exe ./internal/wincapture
-.\build\windows-capture\windows-capture-tests.exe -test.v -test.timeout=60s
+.\build\windows-capture\windows-capture-tests.exe '-test.v' '-test.timeout=60s'
 ```
 
 退出旧版本后，普通双击 `build\windows-capture\easyconnect-hub.exe`，确认启动日志显示 `.3`。需要同时更新 GUI 和 `easyconnect-hub-capture.exe`，网卡修复在后者中；worker 来自独立仓库。自测失败时保留完整输出，真实 DBX 测试仍按下面的启动步骤进行。

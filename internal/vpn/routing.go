@@ -101,6 +101,12 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(total)*time.Millisecond)
 	defer cancel()
 	if decision.Action == "direct" {
+		if err := checkCapturedDirect(ctx, decision); err != nil {
+			decision.Action = "blocked"
+			decision.Reason = err.Error()
+			m.logRoute(request, decision, routedSession{}, 0, 0, err)
+			return nil, err
+		}
 		started := time.Now()
 		conn, err := originalRouteDial(ctx, network, decision.Target)
 		if required != nil && !m.currentRoute(sessions[required.id], request.GatewayID) {

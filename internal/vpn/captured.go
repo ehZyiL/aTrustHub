@@ -7,12 +7,20 @@ import (
 	"net"
 	"net/netip"
 
+	"github.com/qy/easyconnect/internal/netpolicy"
 	"github.com/qy/easyconnect/internal/routing"
 	"github.com/qy/easyconnect/internal/workeripc"
 )
 
 type OriginalDialFunc = func(context.Context, string, string) (net.Conn, error)
 type originalDialContextKey struct{}
+type capturedOwnershipKey struct{}
+
+// Capture guards retain attribution even when a configured gateway is deleted.
+// They never authorize a connection or override an explicit direct policy.
+func WithCapturedOwnership(ctx context.Context, ranges []netpolicy.Range) context.Context {
+	return context.WithValue(ctx, capturedOwnershipKey{}, ranges)
+}
 
 // WithOriginalDial is supplied only by the trusted capture adapter. Public
 // SOCKS requests cannot provide an egress capability or a mapping identity.
@@ -67,4 +75,23 @@ func (m *Manager) DialCaptured(ctx context.Context, network, address string) (ne
 		return nil, err
 	}
 	return &mappedConn{Conn: conn, release: release}, nil
+}
+
+func checkCapturedDirect(ctx context.Context, decision routing.Decision) error {
+	if len(decision.Owners) != 0 || decision.RuleID != "" {
+		return nil
+	}
+	destination, err := netip.ParseAddrPort(decision.Target)
+	if err != nil {
+		return nil
+	}
+	if ranges, ok := ctx.Value(capturedOwnershipKey{}).([]netpolicy.Range); ok {
+		for _, r := range ranges {
+			lo, hi, err := r.Addresses()
+			if err == nil && lo.BitLen() == destination.Addr().BitLen() && lo.Compare(destination.Addr()) <= 0 && hi.Compare(destination.Addr()) >= 0 {
+				return errors.New("该捕获资源的网关已移除，禁止回退原网络")
+			}
+		}
+	}
+	return nil
 }

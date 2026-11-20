@@ -695,7 +695,8 @@ func (a *app) header(c *ui.Context) {
 				ui.Row(c).Size(7, 7).Radius(3.5).Background(color)
 				ui.Text(c, a.describeProgress()).FontSize(12).TextColor(t.TextMuted)
 			})
-			// Only the existing aTrust helper supports system TUN.
+			a.resourceTUNControls(c)
+			// Keep the inherited aTrust mode separate from the worker runtime.
 			if a.canUseGlobalTUN() {
 				shown := a.tunOn || a.tunPending
 				// Bind the switch to a persistent field: the framework writes
@@ -738,13 +739,13 @@ func (a *app) header(c *ui.Context) {
 			// look broken. It is only disabled while the aggregate is down.
 			if supportsSystemProxy() {
 				agg := a.mgr.Aggregate()
-				a.sysProxySwitch = a.sysProxyOn
+				a.sysProxySwitch = a.sysProxyOn && !a.resourceTUNActive()
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, "系统代理").FontSize(13).TextColor(t.Text)
 					// TUN 接管时应用侧代理已经停了，再把系统指过去就是整机没网。
-					ui.Switch(c, &a.sysProxySwitch).Disabled(!agg.Running || a.tunOn)
+					ui.Switch(c, &a.sysProxySwitch).Disabled(!agg.Running || a.tunOn || a.resourceTUNActive())
 				})
-				if a.sysProxySwitch != a.sysProxyOn {
+				if !a.resourceTUNActive() && a.sysProxySwitch != a.sysProxyOn {
 					a.toggleSystemProxy()
 				}
 			}
@@ -2030,6 +2031,10 @@ func (a *app) firstOnlinePoint() string {
 }
 
 func (a *app) toggleSystemProxy() {
+	if a.resourceTUNActive() {
+		a.toast = "请先关闭系统 TUN 再切换系统代理"
+		return
+	}
 	if a.tunOn && !a.sysProxyOn {
 		a.toast = "全局 TUN 已经接管流量，先关掉 TUN 再用系统代理"
 		a.sysProxySwitch = a.sysProxyOn

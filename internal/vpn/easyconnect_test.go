@@ -33,6 +33,9 @@ func init() {
 	if decoder.Decode(&start) != nil || start.Config == nil {
 		os.Exit(2)
 	}
+	if mode == "silent-startup-exit" {
+		os.Exit(1)
+	}
 	var writer sync.Mutex
 	emit := func(m workeripc.Message) {
 		writer.Lock()
@@ -178,6 +181,17 @@ func TestEasyConnectWorkerRoundtripAndLifetime(t *testing.T) {
 	case <-sess.(SessionWatcher).Done():
 	default:
 		t.Fatal("worker survived pipe EOF")
+	}
+}
+
+func TestEasyConnectSilentStartupExitExplainsBundleMismatch(t *testing.T) {
+	t.Setenv("EASYCONNECT_TEST_WORKER", "silent-startup-exit")
+	exe, _ := os.Executable()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := NewEasyConnectConnector(exe)(ctx, model.AccessPoint{Server: "gateway.invalid", Port: 443}, Credentials{Login: "test-password"})
+	if err == nil || !strings.Contains(err.Error(), "尚未完成协议握手") || !strings.Contains(err.Error(), "退出码 1") || !strings.Contains(err.Error(), "完整测试包") {
+		t.Fatalf("silent exit lost actionable bundle diagnosis: %v", err)
 	}
 }
 

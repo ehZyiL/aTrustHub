@@ -29,15 +29,22 @@ func (s *Session) EnableSystem(ctx context.Context, upstream Upstream) (func() e
 	if err := upstream.validate(); err != nil {
 		return nil, err
 	}
-	if _, err := s.request(ctx, frame{Type: "system_on", Upstream: &upstream}); err != nil {
-		return nil, err
+	var mu sync.Mutex
+	stopped := false
+	stop := func() error {
+		mu.Lock()
+		defer mu.Unlock()
+		if stopped {
+			return nil
+		}
+		_, err := s.request(context.Background(), frame{Type: "system_off"})
+		stopped = err == nil
+		return err
 	}
-	var once sync.Once
-	var closeErr error
-	return func() error {
-		once.Do(func() { _, closeErr = s.request(context.Background(), frame{Type: "system_off"}) })
-		return closeErr
-	}, nil
+	// A failed enable may still own rules whose rollback failed. Keep its
+	// cleanup capability until the helper acknowledges a successful removal.
+	_, err := s.request(ctx, frame{Type: "system_on", Upstream: &upstream})
+	return stop, err
 }
 
 func (e *engine) startOriginalExit() error {

@@ -37,7 +37,7 @@ const appName = "EasyConnect Hub"
 // app is everything the window shows and the manager that does the work.
 // appBuild is shown in the footer and the startup log so an old running
 // instance is easy to tell apart from a freshly built one.
-const appBuild = "0.1.0-dev-certificate-trust.2"
+const appBuild = "0.1.0-dev-multigateway-tun.1"
 
 //go:embed resources/icon.png
 var embeddedAppIcon []byte
@@ -49,6 +49,7 @@ type app struct {
 	bus          *vpn.LogBus
 	cfg          model.Config
 	local        *localapps.Manager
+	resourceTUN  *resourceTUNController
 	localEditor  localAppDraft
 	localCatalog installedAppsCatalog
 	localDelete  string
@@ -341,6 +342,7 @@ func newApp() (*app, error) {
 		a.invalidate,
 	)
 	a.mgr.Apply(a.cfg)
+	a.setupResourceTUN()
 	return a, nil
 }
 
@@ -447,6 +449,16 @@ func (a *app) start() {
 	// 上一轮如果被强杀，root helper 可能还占着 127.0.0.1:53。
 	a.cleanupStaleHelper()
 	a.mgr.Start()
+	if runtime.GOOS == "windows" {
+		_, port, err := net.SplitHostPort(a.mgr.Aggregate().Addr)
+		if err == nil {
+			if err := recoverResourceProxy(a.dir, net.JoinHostPort("127.0.0.1", port)); err != nil {
+				a.tunLogf("系统捕获代理恢复：%v", err)
+			} else {
+				a.sysProxyOn = systemProxyEnabled()
+			}
+		}
+	}
 
 	// A slow tick makes TUN follow the online set even when no log line or
 	// click happens to trigger a repaint.
@@ -545,6 +557,12 @@ func (a *app) createWindow() {
 
 func (a *app) shutdown() {
 	a.shutdownOnce.Do(func() {
+		if a.resourceTUN != nil {
+			if err := a.resourceTUN.Close(); err != nil {
+				a.tunLogf("系统捕获清理未完成：%v", err)
+				a.sysProxyOn = false
+			}
+		}
 		a.closeCaptureSetup()
 		// A real quit: window closes must go through, or macOS cancels the
 		// termination and the process stays alive with no usable UI.
@@ -756,6 +774,9 @@ func (a *app) describeProgress() string {
 // points at is no longer listening. Leaving it on would cut the whole machine
 // off, which is worse than losing the VPN.
 func (a *app) guardSystemProxy() {
+	if a.resourceTUNActive() {
+		return
+	}
 	if !a.sysProxyOn {
 		return
 	}

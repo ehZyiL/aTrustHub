@@ -773,6 +773,9 @@ func (a *app) cleanupStaleHelper() {
 
 // The inherited TUN helper only understands aTrust saved sessions.
 func (a *app) canUseGlobalTUN() bool {
+	if a.resourceTUNActive() {
+		return false
+	}
 	if !supportsElevatedTUN() {
 		return false
 	}

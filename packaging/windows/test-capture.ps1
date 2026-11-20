@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
+& "$PSScriptRoot\test-worker.ps1"
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {

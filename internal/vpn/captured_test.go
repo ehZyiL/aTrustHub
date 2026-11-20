@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/qy/easyconnect/internal/model"
+	"github.com/qy/easyconnect/internal/netpolicy"
 	"github.com/qy/easyconnect/internal/workeripc"
 )
 
@@ -97,5 +98,18 @@ func TestCapturedMappingsKeepGatewayGenerationAndOriginalDomain(t *testing.T) {
 	m.mu.Unlock()
 	if _, err := m.DialCaptured(ctx, "tcp", "198.19.16.1:443"); err == nil {
 		t.Fatal("old alias rebound to new generation")
+	}
+}
+
+func TestDeletedGatewayCaptureCannotFallBackToOriginal(t *testing.T) {
+	m := routeTestManager(t, model.DefaultSettings())
+	var calls atomic.Int32
+	ctx := WithOriginalDial(context.Background(), func(context.Context, string, string) (net.Conn, error) { calls.Add(1); return nil, net.ErrClosed })
+	ctx = WithCapturedOwnership(ctx, []netpolicy.Range{{Min: "10.44.0.8", Max: "10.44.0.8"}})
+	if _, err := m.DialCaptured(ctx, "tcp", "10.44.0.8:443"); err == nil || calls.Load() != 0 {
+		t.Fatal("deleted internal owner escaped to original")
+	}
+	if _, err := m.DialCaptured(ctx, "tcp", "192.0.2.80:443"); err == nil || calls.Load() != 1 {
+		t.Fatal("unrelated original traffic blocked")
 	}
 }

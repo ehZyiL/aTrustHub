@@ -8,6 +8,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/qy/easyconnect/internal/netpolicy"
 	"github.com/qy/easyconnect/internal/proxy"
 	"github.com/qy/easyconnect/internal/vpn"
 	"github.com/qy/easyconnect/internal/wincapture"
@@ -20,30 +21,38 @@ type systemSession interface {
 	EnableSystem(context.Context, wincapture.Upstream) (func() error, error)
 }
 type systemScope struct {
-	stop    func() error
-	release func()
-	dns     *dnsBinding
+	stop     func() error
+	release  func()
+	dns      *dnsBinding
+	startErr error
 }
 type windowsSystemCapture struct {
-	mu       sync.Mutex
-	dns      *dnsPool
-	acquire  func(context.Context, string, wincapture.Config) (systemSession, func(), error)
-	scopes   map[string]systemScope
-	order    []string
-	proxy    *proxy.Server
-	upstream wincapture.Upstream
-	dial     DialFunc
-	life     context.Context
-	cancel   context.CancelFunc
-	done     chan struct{}
-	err      error
-	closed   bool
+	ownershipMu sync.RWMutex
+	known       []netpolicy.Range
+	mu          sync.Mutex
+	dns         *dnsPool
+	acquire     func(context.Context, string, wincapture.Config) (systemSession, func(), error)
+	scopes      map[string]systemScope
+	order       []string
+	proxy       *proxy.Server
+	upstream    wincapture.Upstream
+	dial        DialFunc
+	life        context.Context
+	cancel      context.CancelFunc
+	done        chan struct{}
+	err         error
+	cleanupErr  error
+	closed      bool
 }
 
 func (m *Manager) StartSystemCapture(ctx context.Context, configs []CaptureConfig, dial DialFunc) (SystemCapture, error) {
-	return startSystemCapture(ctx, &m.dns, configs, dial, func(ctx context.Context, key string, config wincapture.Config) (systemSession, func(), error) {
+	run, err := startSystemCapture(ctx, &m.dns, configs, dial, func(ctx context.Context, key string, config wincapture.Config) (systemSession, func(), error) {
 		return wincapture.Acquire(ctx, key, config)
 	})
+	if run == nil {
+		return nil, err
+	}
+	return run, err
 }
 
 func startSystemCapture(ctx context.Context, dns *dnsPool, configs []CaptureConfig, dial DialFunc, acquire func(context.Context, string, wincapture.Config) (systemSession, func(), error)) (*windowsSystemCapture, error) {
@@ -59,11 +68,17 @@ func startSystemCapture(ctx context.Context, dns *dnsPool, configs []CaptureConf
 	r := &windowsSystemCapture{dns: dns, acquire: acquire, scopes: map[string]systemScope{}, dial: dial, life: life, cancel: cancel, done: make(chan struct{})}
 	for _, config := range configs {
 		if err := r.Add(ctx, config); err != nil {
-			return nil, errors.Join(err, r.Close())
+			if cleanupErr := r.Close(); cleanupErr != nil {
+				return r, errors.Join(err, cleanupErr)
+			}
+			return nil, err
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, errors.Join(err, r.Close())
+		if cleanupErr := r.Close(); cleanupErr != nil {
+			return r, errors.Join(err, cleanupErr)
+		}
+		return nil, err
 	}
 	return r, nil
 }
@@ -93,8 +108,8 @@ func (r *windowsSystemCapture) Add(ctx context.Context, config CaptureConfig) er
 	if r.closed {
 		return net.ErrClosed
 	}
-	if _, ok := r.scopes[config.Key]; ok {
-		return nil
+	if scope, ok := r.scopes[config.Key]; ok {
+		return scope.startErr
 	}
 	binding, err := r.dns.acquireContext(ctx, config)
 	if err != nil {
@@ -126,7 +141,10 @@ func (r *windowsSystemCapture) Add(ctx context.Context, config CaptureConfig) er
 		password := hex.EncodeToString(secret[:])
 		r.proxy = proxy.New(proxy.Options{Addr: "127.0.0.1:0", Auth: &proxy.Auth{Username: "system", Credential: password}, Context: r.life, SOCKSOnly: true,
 			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-				return r.dial(vpn.WithOriginalDial(ctx, session.OriginalDial), network, address)
+				r.ownershipMu.RLock()
+				known := append([]netpolicy.Range(nil), r.known...)
+				r.ownershipMu.RUnlock()
+				return r.dial(vpn.WithCapturedOwnership(vpn.WithOriginalDial(ctx, session.OriginalDial), known), network, address)
 			}})
 		if err := r.proxy.Start(); err != nil {
 			r.proxy = nil
@@ -134,15 +152,27 @@ func (r *windowsSystemCapture) Add(ctx context.Context, config CaptureConfig) er
 		}
 		r.upstream = wincapture.Upstream{Address: r.proxy.Addr().String(), Username: "system", Password: password}
 	}
+	r.ownershipMu.Lock()
+	r.known = append(r.known, config.Networks...)
+	r.ownershipMu.Unlock()
 	stop, err := session.EnableSystem(ctx, r.upstream)
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil && !config.Active() {
+		err = errors.New("启用期间 VPN 会话已变化")
+	}
 	if err != nil {
+		if stop != nil {
+			if cleanupErr := stop(); cleanupErr != nil {
+				// Keep the session and DNS references for a later cleanup retry.
+				err = errors.Join(err, cleanupErr)
+				r.scopes[config.Key] = systemScope{stop: stop, release: release, dns: binding, startErr: err}
+				r.order = append(r.order, config.Key)
+				keep = true
+			}
+		}
 		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return errors.Join(err, stop())
-	}
-	if !config.Active() {
-		return errors.Join(errors.New("启用期间 VPN 会话已变化"), stop())
 	}
 	r.scopes[config.Key] = systemScope{stop: stop, release: release, dns: binding}
 	r.order = append(r.order, config.Key)
@@ -164,26 +194,43 @@ func (r *windowsSystemCapture) Add(ctx context.Context, config CaptureConfig) er
 }
 
 func (r *windowsSystemCapture) Done() <-chan struct{} { return r.done }
-func (r *windowsSystemCapture) Err() error            { r.mu.Lock(); defer r.mu.Unlock(); return r.err }
+func (r *windowsSystemCapture) Err() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return errors.Join(r.err, r.cleanupErr)
+}
 func (r *windowsSystemCapture) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.closed {
-		return r.err
+	if !r.closed {
+		r.closed = true
+		r.cancel()
+		defer close(r.done)
 	}
-	r.closed = true
+	var cleanupErr error
 	for i := len(r.order) - 1; i >= 0; i-- {
-		scope := r.scopes[r.order[i]]
-		r.err = errors.Join(r.err, scope.stop())
+		key := r.order[i]
+		scope, ok := r.scopes[key]
+		if !ok {
+			continue
+		}
+		if err := scope.stop(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+			continue
+		}
 		scope.release()
 		if scope.dns != nil {
 			scope.dns.release()
 		}
+		delete(r.scopes, key)
 	}
-	r.cancel()
 	if r.proxy != nil {
-		r.err = errors.Join(r.err, r.proxy.Close())
+		if err := r.proxy.Close(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else {
+			r.proxy = nil
+		}
 	}
-	close(r.done)
-	return r.err
+	r.cleanupErr = cleanupErr
+	return cleanupErr
 }

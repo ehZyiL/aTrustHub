@@ -1,13 +1,70 @@
 package wincapture
 
 import (
+	"bufio"
 	"context"
+	"net"
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qy/easyconnect/internal/workeripc"
 )
+
+func TestSystemStopRetriesNativeFailureUntilAcknowledged(t *testing.T) {
+	for _, failStart := range []bool{false, true} {
+		t.Run(map[bool]string{false: "stop", true: "startup_rollback"}[failStart], func(t *testing.T) {
+			client, peer := net.Pipe()
+			defer peer.Close()
+			session := newSession(client)
+			defer session.fail(nil)
+			_ = peer.SetDeadline(time.Now().Add(3 * time.Second))
+			result := make(chan error, 1)
+			go func() {
+				reader := bufio.NewReaderSize(peer, maxFrame)
+				for i, command := range []string{"system_on", "system_off", "system_off"} {
+					var request frame
+					if err := readFrame(reader, &request); err != nil {
+						result <- err
+						return
+					}
+					if request.Type != command {
+						result <- net.ErrClosed
+						return
+					}
+					reply := frame{Type: "ok"}
+					if i == 1 || i == 0 && failStart {
+						reply = frame{Type: "error", Error: "native cleanup pending"}
+					}
+					if err := writeFrame(peer, reply); err != nil {
+						result <- err
+						return
+					}
+				}
+				result <- nil
+			}()
+			stop, err := session.EnableSystem(context.Background(), Upstream{Address: "127.0.0.1:23456", Username: "system", Password: strings.Repeat("s", 64)})
+			if (err != nil) != failStart || stop == nil {
+				t.Fatal("startup lost cleanup capability", err)
+			}
+			if err := stop(); err == nil {
+				t.Fatal("failed removal reported success")
+			}
+			if err := stop(); err != nil {
+				t.Fatal("removal was not retried", err)
+			}
+			if err := <-result; err != nil {
+				t.Fatal(err)
+			}
+			// A completed stop must remain successful after transport shutdown.
+			session.fail(nil)
+			if err := stop(); err != nil {
+				t.Fatal("completed stop repeated a request", err)
+			}
+		})
+	}
+}
 
 func TestSystemScopeSharesRuntimeWithoutOverridingApplicationBinding(t *testing.T) {
 	e, counts := testSessionEngine(t)

@@ -24,8 +24,8 @@ env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=reado
 env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" test -mod=readonly -trimpath -c -o "$bundle/windows-capture-tests.exe" ./internal/wincapture
 "$go_tool" list -m all > "$bundle/desktop-modules.txt"
 cd "$worker_root"
-env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-worker.exe" ./cmd/easyconnect-worker
-"$go_tool" list -m all > "$bundle/worker-modules.txt"
+env GOWORK=off GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-worker.exe" ./cmd/easyconnect-worker
+env GOWORK=off "$go_tool" list -m all > "$bundle/worker-modules.txt"
 
 install -m 0644 "$app_root/resources/icon.png" "$bundle/resources/icon.png"
 install -m 0644 "$app_root/LICENSE" "$bundle/LICENSES/aTrustHub-AGPL-3.0.txt"
@@ -41,9 +41,10 @@ done
 install -m 0644 "$app_root/packaging/windows/Wintun-LICENSE.txt" "$bundle/LICENSES/Wintun-LICENSE.txt"
 install -m 0644 "$app_root/WINDOWS-QUICKSTART.md" "$bundle/README.md"
 install -m 0644 "$app_root/packaging/windows/test-capture.ps1" "$bundle/test-capture.ps1"
+install -m 0644 "$app_root/packaging/windows/test-worker.ps1" "$bundle/test-worker.ps1"
 
 cd "$bundle"
-sha256sum easyconnect-hub.exe easyconnect-worker.exe easyconnect-hub-capture.exe windows-capture-tests.exe test-capture.ps1 > SHA256SUMS
+sha256sum easyconnect-hub.exe easyconnect-worker.exe easyconnect-hub-capture.exe windows-capture-tests.exe test-capture.ps1 test-worker.ps1 > SHA256SUMS
 python_bin=python3
 if ! command -v python3 >/dev/null 2>&1 || ! python3 -c "" 2>/dev/null; then
   python_bin=python

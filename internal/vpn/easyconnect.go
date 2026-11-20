@@ -277,6 +277,7 @@ func (s *processSession) read(r io.Reader) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 4096), workeripc.MaxMessage)
 	ready := false
+	received := false
 	for scanner.Scan() {
 		var m workeripc.Message
 		if json.Unmarshal(scanner.Bytes(), &m) != nil || m.Version != workeripc.Version || m.Session != s.session {
@@ -284,6 +285,7 @@ func (s *processSession) read(r io.Reader) {
 			_ = s.cmd.Process.Kill()
 			break
 		}
+		received = true
 		if m.Type == "error" {
 			s.setError(errors.New(m.Error))
 			continue
@@ -332,7 +334,10 @@ func (s *processSession) read(r io.Reader) {
 		s.setError(errors.New("EasyConnect 核心通信中断"))
 		_ = s.cmd.Process.Kill()
 	}
-	if err := s.cmd.Wait(); err != nil {
+	waitErr := s.cmd.Wait()
+	if !received {
+		s.setError(fmt.Errorf("EasyConnect 核心尚未完成协议握手就退出（退出码 %d）；请完整替换 GUI、worker 和网络助手的配套完整测试包，或运行 test-worker.ps1 检查版本", s.cmd.ProcessState.ExitCode()))
+	} else if waitErr != nil {
 		s.setError(errors.New("EasyConnect 核心已退出，请重新连接"))
 	}
 	close(s.done)

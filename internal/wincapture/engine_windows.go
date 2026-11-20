@@ -48,26 +48,29 @@ type captureSession struct {
 }
 
 type engine struct {
-	mu           sync.Mutex
-	ctx          context.Context
-	cancel       context.CancelFunc
-	tun          tun.WinTun
-	stack        tun.Stack
-	index        uint32
-	installRoute func(netip.Prefix) (func() error, error)
-	aliasUndo    []func() error
-	adapter      netip.Prefix
-	dnsAddress   netip.Addr
-	id           string
-	parent       windows.Handle
-	apps         map[string]*registration
-	sessions     map[string]*captureSession
-	shared       sharedRules
-	slots        chan struct{}
-	once         sync.Once
-	closeErr     error
-	drainOnce    sync.Once
-	drainErr     error
+	mu             sync.Mutex
+	ctx            context.Context
+	cancel         context.CancelFunc
+	tun            tun.WinTun
+	stack          tun.Stack
+	index          uint32
+	installRoute   func(netip.Prefix) (func() error, error)
+	reserveMapping func(string, string, time.Time) error
+	aliasUndo      []func() error
+	adapter        netip.Prefix
+	dnsAddress     netip.Addr
+	id             string
+	parent         windows.Handle
+	apps           map[string]*registration
+	sessions       map[string]*captureSession
+	shared         sharedRules
+	dnsPolicy      dnsPolicy
+	lastDNSCheck   time.Time
+	slots          chan struct{}
+	once           sync.Once
+	closeErr       error
+	drainOnce      sync.Once
+	drainErr       error
 }
 
 func newEngine(ctx context.Context, id string, parent windows.Handle, sessionID string, config Config) (_ *engine, err error) {
@@ -113,6 +116,13 @@ func newEngine(ctx context.Context, id string, parent windows.Handle, sessionID 
 		}
 	}
 	allocationRoutes := append([]Route(nil), existing...)
+	retired, err := loadMappingReservations(time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("读取映射退役记录：%w", err)
+	}
+	for _, prefix := range retired {
+		allocationRoutes = append(allocationRoutes, Route{Prefix: prefix})
+	}
 	for _, raw := range config.ReservedPools {
 		allocationRoutes = append(allocationRoutes, Route{Prefix: netip.MustParsePrefix(raw)})
 	}
@@ -122,6 +132,11 @@ func newEngine(ctx context.Context, id string, parent windows.Handle, sessionID 
 	}
 	for _, address := range addresses {
 		if prefix, e := netip.ParsePrefix(address.String()); e == nil && prefix.Addr().Is4() {
+			for _, resource := range resources {
+				if resource.Contains(prefix.Addr()) {
+					return nil, errors.New("VPN 资源覆盖本机接口地址，请缩小捕获范围")
+				}
+			}
 			allocationRoutes = append(allocationRoutes, Route{Prefix: netip.PrefixFrom(prefix.Addr(), 32)})
 		}
 	}
@@ -143,6 +158,10 @@ func newEngine(ctx context.Context, id string, parent windows.Handle, sessionID 
 	life, cancel := context.WithCancel(ctx)
 	e := &engine{ctx: life, cancel: cancel, adapter: adapter, dnsAddress: adapter.Addr().Next().Next(),
 		id: id, parent: parent, apps: map[string]*registration{}, sessions: map[string]*captureSession{}, shared: sharedRules{}, slots: make(chan struct{}, 512)}
+	e.dnsPolicy.apply = func(before, after []string) error {
+		return updateNRPT(e.ctx, e.id, before, after, e.dnsAddress.String())
+	}
+	e.reserveMapping = saveMappingReservation
 	defer func() {
 		if err != nil {
 			_ = e.Close()
@@ -163,10 +182,10 @@ func newEngine(ctx context.Context, id string, parent windows.Handle, sessionID 
 	e.index = uint32(iface.Index)
 	e.installRoute = func(p netip.Prefix) (func() error, error) {
 		row, err := addRoute(e.index, p)
-		if err != nil {
+		if row == nil {
 			return nil, err
 		}
-		return func() error { return removeRoute(row) }, nil
+		return func() error { return removeRoute(row) }, err
 	}
 	if err = configureAdapter(e.index, netip.PrefixFrom(adapter.Addr().Next(), adapter.Bits())); err != nil {
 		return nil, err
@@ -355,6 +374,20 @@ func (e *engine) publish(sessionID string, aliases []workeripc.DNSAlias) error {
 	}
 	if len(session.mappings)+newEntries > 8192 {
 		return errors.New("DNS 映射表已满")
+	}
+	if len(updates) > 0 {
+		if e.reserveMapping == nil {
+			return errors.New("映射退役记录服务未就绪")
+		}
+		var expires time.Time
+		for _, entry := range updates {
+			if entry.expires.After(expires) {
+				expires = entry.expires
+			}
+		}
+		if err := e.reserveMapping(sessionID, session.aliases.String(), expires); err != nil {
+			return errors.New("无法保存映射退役记录，拒绝发布 DNS 答案")
+		}
 	}
 	for addr, entry := range updates {
 		session.mappings[addr] = entry
@@ -546,7 +579,11 @@ func (e *engine) dnsQuery(ctx context.Context, q *dns.Msg) *dns.Msg {
 	e.mu.Lock()
 	var selected *captureSession
 	best, conflict := 0, false
+	sharedAddress := ""
 	for _, session := range e.sessions {
+		if session.config.SharedDNS && !session.retired && len(session.config.Domains) > 0 {
+			sharedAddress = session.config.DNSAddress
+		}
 		for _, domain := range session.config.Domains {
 			if !dns.IsSubDomain(domain+".", q.Question[0].Name) {
 				continue
@@ -562,11 +599,14 @@ func (e *engine) dnsQuery(ctx context.Context, q *dns.Msg) *dns.Msg {
 		e.mu.Unlock()
 		return new(dns.Msg).SetRcode(q, dns.RcodeRefused)
 	}
-	if conflict || selected.retired {
+	if sharedAddress == "" && (conflict || selected.retired) {
 		e.mu.Unlock()
 		return fail()
 	}
 	address, life := selected.config.DNSAddress, selected.ctx
+	if sharedAddress != "" {
+		address, life = sharedAddress, e.ctx
+	}
 	e.mu.Unlock()
 	queryCtx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(life, cancel)
@@ -574,7 +614,7 @@ func (e *engine) dnsQuery(ctx context.Context, q *dns.Msg) *dns.Msg {
 	defer cancel()
 	answer, _, err := (&dns.Client{Net: "tcp", Timeout: 8 * time.Second}).ExchangeContext(queryCtx, q, address)
 	e.mu.Lock()
-	retired := selected.retired
+	retired := sharedAddress == "" && selected.retired
 	e.mu.Unlock()
 	if err != nil || retired {
 		return fail()
@@ -704,17 +744,18 @@ func (e *engine) checkNetwork() error {
 	}
 	// Failed cleanup stays owned. Retry on the next heartbeat even if the
 	// DNS lease keeps an idle helper alive until VPN disconnect.
-	for id, session := range e.sessions {
+	for _, session := range e.sessions {
 		if !session.rules.active && len(session.rules.undo) > 0 {
 			if err := session.rules.Disable(); err != nil {
 				return fmt.Errorf("软件接管规则清理未完成：%w", err)
 			}
 		}
-		if session.rules.active && len(session.config.Domains) > 0 {
-			if err := checkNRPTActive(id, session.config.Domains, e.dnsAddress.String()); err != nil {
-				return err
-			}
+	}
+	if domains := e.dnsPolicy.domains("", nil); len(domains) > 0 && time.Since(e.lastDNSCheck) >= 30*time.Second {
+		if err := checkNRPTActive(e.ctx, e.id, domains, e.dnsAddress.String()); err != nil {
+			return err
 		}
+		e.lastDNSCheck = time.Now()
 	}
 	routes, err := routeRows()
 	if err != nil {

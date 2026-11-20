@@ -13,6 +13,31 @@ import (
 	"time"
 )
 
+func TestMappedDNSSelectionSharesProductionOwnershipAndGeneration(t *testing.T) {
+	a, b := routeTestSession("A"), routeTestSession("B")
+	a.info.Resources = &workeripc.ResourceSnapshot{InternalDomains: []string{"a.test"}}
+	m := routeTestManager(t, model.DefaultSettings(), a, b)
+	packet, _ := new(dns.Msg).SetQuestion("b.test.", dns.TypeA).Pack()
+	key, current, err := m.SelectMappedDNS(packet)
+	if err != nil || !current() {
+		t.Fatal(key, err)
+	}
+	connection, err := m.LocalAppConnection("B")
+	if err != nil || connection.Key != key {
+		t.Fatal("selector bypassed shared generation identity", key, err)
+	}
+	m.mu.Lock()
+	m.points["B"].gen++
+	m.mu.Unlock()
+	if current() {
+		t.Fatal("old selection survived generation change")
+	}
+	m.Disconnect("B")
+	if _, _, err := m.SelectMappedDNS(packet); err == nil {
+		t.Fatal("offline owner fell back")
+	}
+}
+
 type routeDNSSession struct {
 	*routeSession
 	queries  atomic.Int32

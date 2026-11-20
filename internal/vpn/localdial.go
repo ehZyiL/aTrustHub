@@ -17,6 +17,7 @@ import (
 type AppConnection struct {
 	Key              string
 	Identity         dnsmapping.Identity
+	SelectDNS        func([]byte) (string, func() bool, error)
 	Dial             func(context.Context, string, string) (net.Conn, error)
 	Active           func() bool
 	DNS              func(context.Context, []byte) ([]byte, error)
@@ -60,6 +61,7 @@ func (m *Manager) LocalAppConnection(id string) (AppConnection, error) {
 	connection.AliasNetworks = m.aliasNetworks()
 	identity := dnsmapping.Identity{Key: connection.Key, GatewayID: id, Generation: gen, Version: resourceVersion(connection.Resources)}
 	connection.Identity = identity
+	connection.SelectDNS = m.SelectMappedDNS
 	connection.BeginPublication = func(prefix string) (func(), error) {
 		if !active() {
 			return nil, net.ErrClosed

@@ -20,6 +20,8 @@ func testSessionEngine(t *testing.T) (*engine, map[netip.Prefix]int) {
 	counts := map[netip.Prefix]int{}
 	e := &engine{ctx: ctx, cancel: cancel, adapter: netip.MustParsePrefix("198.18.0.0/30"),
 		sessions: map[string]*captureSession{}, apps: map[string]*registration{}, shared: sharedRules{}}
+	e.reserveMapping = func(string, string, time.Time) error { return nil }
+	e.dnsPolicy.apply = func([]string, []string) error { return nil }
 	e.installRoute = func(p netip.Prefix) (func() error, error) {
 		counts[p]++
 		return func() error { counts[p]--; return nil }, nil
@@ -150,5 +152,62 @@ func TestRuntimeDNSSelectsOneGatewayAndOfflineDoesNotFallback(t *testing.T) {
 	}
 	if callsA.Load() != 1 || callsB.Load() != 1 {
 		t.Fatal("offline DNS fell back")
+	}
+}
+
+func TestEngineSharedDNSAcceptsOverlapAndUsesCentralSelector(t *testing.T) {
+	e, _ := testSessionEngine(t)
+	var calls atomic.Int32
+	address := testGatewayDNS(t, &calls)
+	for i, id := range []string{strings.Repeat("a", 32), strings.Repeat("b", 32)} {
+		config := poolTestConfig(id)
+		config.Domains, config.DNSAddress, config.SharedDNS = []string{"corp.test"}, address, true
+		if err := e.registerPrepared(id, config, netip.MustParsePrefix([]string{"198.19.0.0/20", "198.19.16.0/20"}[i]), nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if answer := e.dnsQuery(context.Background(), new(dns.Msg).SetQuestion("corp.test.", dns.TypeA)); answer.Rcode != dns.RcodeSuccess {
+		t.Fatal(answer)
+	}
+	if calls.Load() != 1 {
+		t.Fatal("broadcast to overlapping gateway DNS", calls.Load())
+	}
+}
+
+func TestMappingPublicationWaitsForCrashRecoveryRecord(t *testing.T) {
+	e, _ := testSessionEngine(t)
+	id := strings.Repeat("a", 32)
+	if err := e.registerPrepared(id, poolTestConfig("A"), netip.MustParsePrefix("198.19.0.0/20"), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	aliases := []workeripc.DNSAlias{{Address: "198.19.0.1", Original: "10.44.0.8", TTL: 60}}
+	e.reserveMapping = func(string, string, time.Time) error { return errors.New("journal write failed") }
+	if err := e.publish(id, aliases); err == nil {
+		t.Fatal("published without durable retirement")
+	}
+	if len(e.sessions[id].mappings) != 0 || len(e.sessions[id].issued) != 0 {
+		t.Fatal("failed journal changed mapping")
+	}
+	var expiry time.Time
+	e.reserveMapping = func(gotID, prefix string, expires time.Time) error {
+		if gotID != id || prefix != "198.19.0.0/20" {
+			t.Fatal("wrong durable identity")
+		}
+		expiry = expires
+		return nil
+	}
+	if err := e.publish(id, aliases); err != nil {
+		t.Fatal(err)
+	}
+	if expiry.Before(time.Now().Add(59 * time.Second)) {
+		t.Fatal("retirement shorter than promised TTL")
+	}
+	before := expiry
+	aliases[0].TTL = 1
+	if err := e.publish(id, aliases); err != nil {
+		t.Fatal(err)
+	}
+	if expiry.Before(before) {
+		t.Fatal("short refresh shortened durable retirement")
 	}
 }

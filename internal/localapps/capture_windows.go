@@ -45,6 +45,7 @@ func windowsConfig(ctx context.Context, config CaptureConfig) wincapture.Config 
 	result := windowsSessionConfig(config)
 	if binding, ok := ctx.Value(dnsContextKey{}).(*dnsBinding); ok {
 		result.DNSAddress, result.Domains = binding.address, binding.domains
+		result.SharedDNS = binding.sharedDNS
 	}
 	return result
 }

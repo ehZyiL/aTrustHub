@@ -14,7 +14,7 @@ import (
 	"github.com/qy/easyconnect/internal/workeripc"
 )
 
-const ProtocolVersion = 4
+const ProtocolVersion = 5
 const maxFrame = 256 << 10
 
 type Config struct {
@@ -25,6 +25,7 @@ type Config struct {
 	Gateway         string            `json:"gateway"`
 	Networks        []netpolicy.Range `json:"networks,omitempty"`
 	DNSAddress      string            `json:"dnsAddress,omitempty"`
+	SharedDNS       bool              `json:"sharedDNS,omitempty"`
 	Domains         []string          `json:"domains,omitempty"`
 	ReservedPools   []string          `json:"reservedPools,omitempty"`
 	AliasNetworks   []netpolicy.Range `json:"aliasNetworks,omitempty"`

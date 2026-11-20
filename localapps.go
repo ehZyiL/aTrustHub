@@ -475,6 +475,7 @@ func (a *app) startLocalApp(id string) {
 			domains, err = localapps.DNSDomains(connection.Resources)
 			if err == nil {
 				config := localapps.CaptureConfig{Key: connection.Key, Identity: connection.Identity, Domains: domains, Exchange: connection.DNS, MappedDNS: connection.MappedDNS, ConfirmAliases: connection.ConfirmAliases, BeginPublication: connection.BeginPublication, ReservedPools: connection.ReservedPools, AliasNetworks: connection.AliasNetworks, Active: connection.Active}
+				config.SelectDNS = connection.SelectDNS
 				if point := a.cfg.Find(profile.PointID); point != nil {
 					config.Gateway = point.Server
 				}

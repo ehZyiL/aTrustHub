@@ -58,3 +58,23 @@ func TestPrefixCollision(t *testing.T) {
 		t.Fatalf("prefix allocation: %v", err)
 	}
 }
+
+func TestCaptureRejectsOverbroadAndReservedRanges(t *testing.T) {
+	for _, r := range []netpolicy.Range{
+		{Min: "10.0.0.0", Max: "10.255.255.255"},
+		{Min: "127.0.0.1", Max: "127.0.0.1"},
+		{Min: "169.254.1.1", Max: "169.254.1.1"},
+		{Min: "198.19.0.1", Max: "198.19.0.2"},
+		{Min: "224.0.0.1", Max: "224.0.0.1"},
+	} {
+		if _, err := ResourcePrefixes([]netpolicy.Range{r}); err == nil {
+			t.Fatal("unsafe capture accepted", r)
+		}
+	}
+	if _, err := ResourcePrefixes([]netpolicy.Range{{Min: "10.0.0.0", Max: "10.15.255.255"}}); err != nil {
+		t.Fatal("bounded capture rejected", err)
+	}
+	if _, err := ResourcePrefixes([]netpolicy.Range{{Min: "10.0.0.0", Max: "10.15.255.255"}, {Min: "172.16.0.1", Max: "172.16.0.1"}}); err == nil {
+		t.Fatal("aggregate limit bypassed")
+	}
+}

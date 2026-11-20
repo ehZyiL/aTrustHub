@@ -13,8 +13,9 @@ import (
 func TestPublishShorterRefreshKeepsLongerExpiration(t *testing.T) {
 	s := &captureSession{aliases: netip.MustParsePrefix("198.19.0.0/20"), mappings: make(map[netip.Addr]aliasEntry)}
 	e := &engine{
-		adapter:  netip.MustParsePrefix("198.18.0.0/30"),
-		sessions: map[string]*captureSession{"A": s},
+		reserveMapping: func(string, string, time.Time) error { return nil },
+		adapter:        netip.MustParsePrefix("198.18.0.0/30"),
+		sessions:       map[string]*captureSession{"A": s},
 	}
 
 	addr := netip.MustParseAddr("198.19.0.10")
@@ -72,6 +73,7 @@ func TestPublishShorterRefreshKeepsLongerExpiration(t *testing.T) {
 func TestExpiredPublishedAddressCannotBeRebound(t *testing.T) {
 	s := &captureSession{aliases: netip.MustParsePrefix("198.19.0.0/20"), mappings: make(map[netip.Addr]aliasEntry)}
 	e := &engine{adapter: netip.MustParsePrefix("198.18.0.0/30"), sessions: map[string]*captureSession{"A": s}}
+	e.reserveMapping = func(string, string, time.Time) error { return nil }
 	a := workeripc.DNSAlias{Address: "198.19.0.10", Original: "10.0.0.8", TTL: 1}
 	if err := e.publish("A", []workeripc.DNSAlias{a}); err != nil {
 		t.Fatal(err)

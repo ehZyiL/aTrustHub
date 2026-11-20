@@ -2,6 +2,7 @@ package wincapture
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 
@@ -11,7 +12,56 @@ import (
 
 const recoveryRoot = `SOFTWARE\EasyConnectHub\CaptureRecovery`
 
-// Journal only the helper identity, never upstream credentials or domains.
+func journalDNS(id string, state dnsRecovery) error {
+	if err := state.validate(); err != nil {
+		return err
+	}
+	if err := journalSession(id); err != nil {
+		return err
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, recoveryRoot+`\`+id, registry.SET_VALUE|registry.WOW64_64KEY)
+	if err != nil {
+		return err
+	}
+	defer key.Close()
+	return key.SetStringValue("DNSState", string(data))
+}
+
+func readJournalDNS(id string) (*dnsRecovery, error) {
+	if !validID(id) {
+		return nil, errors.New("DNS 恢复标识无效")
+	}
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, recoveryRoot+`\`+id, registry.QUERY_VALUE|registry.WOW64_64KEY)
+	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer key.Close()
+	data, _, err := key.GetStringValue("DNSState")
+	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var state dnsRecovery
+	if len(data) > maxFrame || json.Unmarshal([]byte(data), &state) != nil {
+		return nil, errors.New("DNS 恢复记录损坏，保留当前策略")
+	}
+	if err := state.validate(); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+// Journal the helper identity; journalDNS adds the exact before/after DNS
+// values for compare-and-remove recovery. No upstream credentials are stored.
 // HKLM is writable by the elevated helper, not ordinary desktop applications.
 // A journal entry exists before NRPT changes; after a reboot, the next helper
 // can remove exactly those orphaned rules without touching another VPN's DNS.

@@ -15,6 +15,7 @@ type mappedDNS struct {
 func prepareMappedDNS(ctx context.Context, address string, config CaptureConfig) (aliasBinding, error) {
 	settings := windowsSessionConfig(config)
 	settings.DNSAddress, settings.Domains = address, config.Domains
+	settings.SharedDNS = config.sharedDNSAddress != ""
 	session, release, err := wincapture.Acquire(ctx, config.Key, settings)
 	if err != nil {
 		return nil, err

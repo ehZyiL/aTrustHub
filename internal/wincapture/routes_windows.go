@@ -19,6 +19,7 @@ var ipHelper = windows.NewLazySystemDLL("iphlpapi.dll")
 var initializeRoute = ipHelper.NewProc("InitializeIpForwardEntry")
 var createRoute = ipHelper.NewProc("CreateIpForwardEntry2")
 var deleteRoute = ipHelper.NewProc("DeleteIpForwardEntry2")
+var getRoute = ipHelper.NewProc("GetIpForwardEntry2")
 
 func routeRows() ([]Route, error) {
 	var table *windows.MibIpForwardTable2
@@ -66,15 +67,52 @@ func addRoute(index uint32, prefix netip.Prefix) (*windows.MibIpForwardRow2, err
 	if code != 0 {
 		return nil, fmt.Errorf("路由 %s（接口 %d）：%w", prefix, index, windowsError("CreateIpForwardEntry2", syscall.Errno(code)))
 	}
+	// Save the OS-normalized row, including LUID and default protocol fields,
+	// so cleanup compares against what was actually installed.
+	code, _, _ = getRoute.Call(uintptr(unsafe.Pointer(&row)))
+	if code != 0 {
+		return &row, windowsError("确认接管路由 GetIpForwardEntry2", syscall.Errno(code))
+	}
 	return &row, nil
 }
 
 func removeRoute(row *windows.MibIpForwardRow2) error {
-	code, _, _ := deleteRoute.Call(uintptr(unsafe.Pointer(row)))
-	if code == 0 || syscall.Errno(code) == windows.ERROR_NOT_FOUND {
+	return removeOwnedRoute(row, func(current *windows.MibIpForwardRow2) error {
+		code, _, _ := getRoute.Call(uintptr(unsafe.Pointer(current)))
+		if code != 0 {
+			return syscall.Errno(code)
+		}
 		return nil
+	}, func(current *windows.MibIpForwardRow2) error {
+		code, _, _ := deleteRoute.Call(uintptr(unsafe.Pointer(current)))
+		if code != 0 {
+			return syscall.Errno(code)
+		}
+		return nil
+	})
+}
+
+func removeOwnedRoute(expected *windows.MibIpForwardRow2, read, remove func(*windows.MibIpForwardRow2) error) error {
+	if expected == nil {
+		return errors.New("缺少路由所有权记录")
 	}
-	return windowsError("删除接管路由 DeleteIpForwardEntry2", syscall.Errno(code))
+	current := *expected
+	if err := read(&current); errors.Is(err, windows.ERROR_NOT_FOUND) {
+		return nil
+	} else if err != nil {
+		return windowsError("核对接管路由", err)
+	}
+	if current.InterfaceIndex != expected.InterfaceIndex || expected.InterfaceLuid != 0 && current.InterfaceLuid != expected.InterfaceLuid ||
+		current.DestinationPrefix != expected.DestinationPrefix || current.NextHop != expected.NextHop || current.Metric != expected.Metric ||
+		current.Protocol != expected.Protocol || current.SitePrefixLength != expected.SitePrefixLength || current.Loopback != expected.Loopback ||
+		current.AutoconfigureAddress != expected.AutoconfigureAddress || current.Publish != expected.Publish || current.Immortal != expected.Immortal ||
+		expected.ValidLifetime == ^uint32(0) && current.ValidLifetime != expected.ValidLifetime || expected.PreferredLifetime == ^uint32(0) && current.PreferredLifetime != expected.PreferredLifetime {
+		return errors.New("接管路由已被外部修改，保留当前路由并停止清理")
+	}
+	if err := remove(&current); err != nil && !errors.Is(err, windows.ERROR_NOT_FOUND) {
+		return windowsError("删除接管路由", err)
+	}
+	return nil
 }
 
 // Binding the outgoing socket excludes our adapter without modifying the

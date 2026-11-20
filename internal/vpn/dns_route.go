@@ -3,6 +3,7 @@ package vpn
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/miekg/dns"
 	"github.com/qy/easyconnect/internal/routing"
 	"github.com/qy/easyconnect/internal/splitdns"
@@ -12,6 +13,31 @@ import (
 func (m *Manager) PreviewDNS(name, gatewayID string) routing.Decision {
 	g, _, s := m.routeSnapshot(gatewayID)
 	return routing.DecideDNS(name, gatewayID, g, s.DNSBindings)
+}
+
+// SelectMappedDNS is a pure selection step for the shared capture DNS listener.
+// The selected session's existing publisher remains responsible for allocation.
+func (m *Manager) SelectMappedDNS(packet []byte) (string, func() bool, error) {
+	q := new(dns.Msg)
+	if q.Unpack(packet) != nil || q.Response || q.Opcode != dns.OpcodeQuery || len(q.Question) != 1 || q.Question[0].Qclass != dns.ClassINET || q.IsTsig() != nil {
+		return "", nil, errors.New("无效 DNS 请求")
+	}
+	g, sessions, settings := m.routeSnapshot("")
+	d := routing.DecideDNS(q.Question[0].Name, "", g, settings.DNSBindings)
+	if d.Action != "vpn" || len(d.Candidates) != 1 {
+		return "", nil, errors.New("DNS 归属冲突、离线或未授权")
+	}
+	c, ok := sessions[d.Candidates[0].ID]
+	if !ok || !m.currentRoute(c, c.id) {
+		return "", nil, errors.New("DNS 会话已变化")
+	}
+	return fmt.Sprintf("%p/%d", c.endpoint, c.gen), func() bool {
+		if !m.currentRoute(c, c.id) {
+			return false
+		}
+		current := m.PreviewDNS(q.Question[0].Name, "")
+		return current.Action == "vpn" && len(current.Candidates) == 1 && current.Candidates[0].ID == c.id && current.Candidates[0].Generation == c.gen && current.Candidates[0].Version == c.version
+	}, nil
 }
 
 // ExchangeResourceDNS selects exactly one owner before querying its cache.

@@ -7,7 +7,6 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/miekg/dns"
 	"github.com/qy/easyconnect/internal/dnsmapping"
 )
 
@@ -42,6 +41,11 @@ func (e *engine) register(id string, config Config) (string, error) {
 		return "", err
 	}
 	occupied := []netip.Prefix{e.adapter}
+	retired, err := loadMappingReservations(time.Now())
+	if err != nil {
+		return "", err
+	}
+	occupied = append(occupied, retired...)
 	for _, route := range routes {
 		if route.Prefix.Bits() >= 15 {
 			occupied = append(occupied, route.Prefix)
@@ -58,6 +62,11 @@ func (e *engine) register(id string, config Config) (string, error) {
 	}
 	for _, address := range addresses {
 		if prefix, err := netip.ParsePrefix(address.String()); err == nil && prefix.Addr().Is4() {
+			for _, resource := range resources {
+				if resource.Contains(prefix.Addr()) {
+					return "", errors.New("VPN 资源覆盖本机接口地址")
+				}
+			}
 			occupied = append(occupied, netip.PrefixFrom(prefix.Addr(), 32))
 		}
 	}
@@ -98,16 +107,9 @@ func (e *engine) registerPrepared(id string, config Config, aliases netip.Prefix
 		}
 		allResources = append(allResources, session.resources...)
 		allGateways = append(allGateways, session.gateways...)
-		// Until the shared DNS policy transaction is installed, refuse an
-		// overlapping namespace rather than let NRPT choose a random owner.
-		if !session.retired {
-			for _, a := range config.Domains {
-				for _, b := range session.config.Domains {
-					if dns.IsSubDomain(a+".", b+".") || dns.IsSubDomain(b+".", a+".") {
-						return errors.New("接管 DNS 后缀与另一网关重叠，请先使用指定网关代理")
-					}
-				}
-			}
+		if !session.retired && len(config.Domains) > 0 && len(session.config.Domains) > 0 &&
+			(config.SharedDNS != session.config.SharedDNS || config.SharedDNS && config.DNSAddress != session.config.DNSAddress) {
+			return errors.New("多网关接管必须使用同一个资源 DNS 选择器")
 		}
 	}
 	for _, p := range allResources {
@@ -140,7 +142,7 @@ func (e *engine) registerPrepared(id string, config Config, aliases netip.Prefix
 	}
 	if len(config.Domains) > 0 {
 		session.rules.install = append(session.rules.install, func() (func() error, error) {
-			return installNRPT(e.ctx, id, config.Domains, e.dnsAddress.String())
+			return e.dnsPolicy.acquire(id, config.Domains)
 		})
 	}
 	e.sessions[id] = session

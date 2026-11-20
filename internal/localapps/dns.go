@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -20,6 +21,8 @@ import (
 type CaptureConfig struct {
 	Key              string
 	Identity         dnsmapping.Identity
+	SelectDNS        func([]byte) (string, func() bool, error)
+	sharedDNSAddress string
 	Gateway          string
 	Domains          []string
 	Exchange         splitdns.ExchangeFunc
@@ -138,6 +141,7 @@ type dnsPool struct {
 	closed  bool
 	failed  map[string]bool
 	prepare func(context.Context, string, CaptureConfig) (aliasBinding, error)
+	router  *splitdns.Server
 }
 type dnsPreparation struct {
 	cancel context.CancelFunc
@@ -146,20 +150,23 @@ type dnsPreparation struct {
 }
 
 type dnsEntry struct {
-	once    sync.Once
-	server  *splitdns.Server
-	cancel  context.CancelFunc
-	refs    int
-	domains []string
-	alias   aliasBinding
-	active  func() bool
+	once       sync.Once
+	server     *splitdns.Server
+	cancel     context.CancelFunc
+	refs       int
+	domains    []string
+	alias      aliasBinding
+	active     func() bool
+	dnsAddress string
+	sharedDNS  bool
 }
 type dnsBinding struct {
-	address string
-	domains []string
-	release func()
-	done    <-chan struct{}
-	alias   aliasBinding
+	address   string
+	domains   []string
+	release   func()
+	done      <-chan struct{}
+	alias     aliasBinding
+	sharedDNS bool
 }
 
 type aliasBinding interface {
@@ -233,6 +240,20 @@ func (p *dnsPool) acquireContext(ctx context.Context, config CaptureConfig) (*dn
 			continue
 		}
 		setup, cancel := context.WithCancel(ctx)
+		if runtime.GOOS == "windows" && config.SelectDNS != nil {
+			if p.router == nil {
+				var err error
+				p.router, err = splitdns.Listen(context.Background(), func(ctx context.Context, packet []byte) ([]byte, error) {
+					return p.exchangeSelected(ctx, config.SelectDNS, packet)
+				})
+				if err != nil {
+					cancel()
+					p.mu.Unlock()
+					return nil, err
+				}
+			}
+			config.sharedDNSAddress = p.router.Addr()
+		}
 		pending := &dnsPreparation{cancel: cancel, done: make(chan struct{})}
 		if p.pending == nil {
 			p.pending = make(map[string]*dnsPreparation)
@@ -310,8 +331,12 @@ func prepareDNSEntry(setup context.Context, config CaptureConfig, prepare func(c
 		return nil, err
 	}
 	entry.server = server
+	entry.dnsAddress = server.Addr()
+	if config.sharedDNSAddress != "" {
+		entry.dnsAddress, entry.sharedDNS = config.sharedDNSAddress, true
+	}
 	if config.MappedDNS != nil {
-		entry.alias, err = prepare(setup, server.Addr(), config)
+		entry.alias, err = prepare(setup, entry.dnsAddress, config)
 		if err == nil && entry.alias == nil {
 			err = errors.New("软件 DNS 助手未就绪")
 		}
@@ -325,7 +350,7 @@ func prepareDNSEntry(setup context.Context, config CaptureConfig, prepare func(c
 func (p *dnsPool) bind(key string, entry *dnsEntry) *dnsBinding {
 	entry.refs++
 	var once sync.Once
-	return &dnsBinding{address: entry.server.Addr(), domains: entry.domains, done: entry.server.Done(), alias: entry.alias, release: func() {
+	return &dnsBinding{address: entry.dnsAddress, sharedDNS: entry.sharedDNS, domains: entry.domains, done: entry.server.Done(), alias: entry.alias, release: func() {
 		once.Do(func() {
 			p.mu.Lock()
 			entry.refs--
@@ -387,6 +412,8 @@ func (p *dnsPool) close() {
 	p.mu.Lock()
 	p.closed = true
 	entries := p.entries
+	router := p.router
+	p.router = nil
 	p.entries = nil
 	pending := make([]*dnsPreparation, 0, len(p.pending))
 	for _, preparation := range p.pending {
@@ -394,6 +421,9 @@ func (p *dnsPool) close() {
 		pending = append(pending, preparation)
 	}
 	p.mu.Unlock()
+	if router != nil {
+		_ = router.Close()
+	}
 	for _, entry := range entries {
 		entry.close()
 	}

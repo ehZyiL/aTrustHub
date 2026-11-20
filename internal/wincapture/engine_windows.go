@@ -541,7 +541,12 @@ func (e *engine) NewPacketConnection(ctx context.Context, conn N.PacketConn, met
 	if system, err := e.selectSystem(metadata.Destination.Addr); err != nil {
 		return err
 	} else if system != nil {
-		return errors.New("系统捕获暂不支持内网业务 UDP")
+		upstream, err := system.dial.DialDatagramContext(system.ctx, metadata.Destination.String())
+		if err != nil {
+			return err
+		}
+		packetstack.RelayUDP(system.ctx, conn, metadata.Destination, upstream)
+		return nil
 	}
 	address, err := e.originalTarget(metadata.Destination.AddrPort())
 	if err != nil {

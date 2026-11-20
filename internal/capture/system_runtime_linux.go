@@ -229,8 +229,24 @@ func (r *systemRuntime) NewConnection(_ context.Context, incoming net.Conn, meta
 	return nil
 }
 
-func (r *systemRuntime) NewPacketConnection(context.Context, N.PacketConn, M.Metadata) error {
-	return errors.New("capture: system mode supports IPv4 TCP and scoped DNS only")
+func (r *systemRuntime) NewPacketConnection(_ context.Context, incoming N.PacketConn, metadata M.Metadata) error {
+	select {
+	case r.slots <- struct{}{}:
+		defer func() { <-r.slots }()
+	default:
+		return errors.New("capture: system connection limit reached")
+	}
+	release, err := r.acquireTarget(metadata.Destination.Addr)
+	if err != nil {
+		return err
+	}
+	defer release()
+	upstream, err := r.dial.DialDatagramContext(r.ctx, metadata.Destination.String())
+	if err != nil {
+		return err
+	}
+	packetstack.RelayUDP(r.ctx, incoming, metadata.Destination, upstream)
+	return nil
 }
 
 func (r *systemRuntime) NewError(_ context.Context, err error) {

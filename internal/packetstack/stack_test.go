@@ -3,6 +3,7 @@ package packetstack
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -18,9 +19,11 @@ import (
 	"github.com/metacubex/gvisor/pkg/tcpip/stack"
 	"github.com/metacubex/gvisor/pkg/tcpip/transport/tcp"
 	"github.com/metacubex/gvisor/pkg/tcpip/transport/udp"
+	"github.com/qy/easyconnect/internal/proxy"
 	"github.com/sagernet/sing/common/buf"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+	xproxy "golang.org/x/net/proxy"
 )
 
 type memoryTun struct {
@@ -51,6 +54,7 @@ func (d *memoryTun) Close() error { d.once.Do(d.cancel); return nil }
 type echoHandler struct {
 	seen     chan M.Metadata
 	failures chan error
+	helper   *proxy.SOCKSDialer
 }
 
 func (h *echoHandler) NewConnection(ctx context.Context, conn net.Conn, metadata M.Metadata) error {
@@ -67,6 +71,14 @@ func (h *echoHandler) NewConnection(ctx context.Context, conn net.Conn, metadata
 }
 func (h *echoHandler) NewPacketConnection(ctx context.Context, conn N.PacketConn, metadata M.Metadata) error {
 	h.seen <- metadata
+	if metadata.Destination.Port != 53 {
+		upstream, err := h.helper.DialDatagramContext(ctx, metadata.Destination.String())
+		if err != nil {
+			return err
+		}
+		RelayUDP(ctx, conn, metadata.Destination, upstream)
+		return nil
+	}
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	b := buf.NewSize(65535)
 	if _, err := conn.ReadPacket(b); err != nil {
@@ -85,6 +97,41 @@ func (h *echoHandler) NewError(_ context.Context, err error) {
 func TestPacketStackTCPHalfCloseAndUDP(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	const udpTarget = "203.0.113.7:9000"
+	echo, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		b := make([]byte, 1400)
+		for {
+			n, from, err := echo.ReadFromUDP(b)
+			if err != nil {
+				return
+			}
+			if _, err := echo.WriteToUDP(b[:n], from); err != nil {
+				return
+			}
+		}
+	}()
+	auth := &proxy.Auth{Username: "helper", Credential: "fixture-secret"}
+	linkProxy := proxy.New(proxy.Options{Addr: "127.0.0.1:0", SOCKSOnly: true, Auth: auth, Context: ctx,
+		Dial: func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("TCP not expected") },
+		DialDatagram: func(_ context.Context, target string) (net.Conn, error) {
+			if target != udpTarget {
+				return nil, errors.New("unexpected UDP destination")
+			}
+			return net.DialUDP("udp4", nil, echo.LocalAddr().(*net.UDPAddr))
+		}})
+	if err := linkProxy.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer linkProxy.Close()
+	helper, err := proxy.NewSOCKSDialer(linkProxy.Addr().String(), &xproxy.Auth{User: auth.Username, Password: auth.Credential})
+	if err != nil {
+		t.Fatal(err)
+	}
 	client := stack.New(stack.Options{NetworkProtocols: []stack.NetworkProtocolFactory{ipv4.NewProtocol}, TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol}})
 	link := channel.New(128, MTU, "")
 	if err := client.CreateNIC(1, link); err != nil {
@@ -97,7 +144,7 @@ func TestPacketStackTCPHalfCloseAndUDP(t *testing.T) {
 	client.SetRouteTable([]tcpip.Route{{Destination: header.IPv4EmptySubnet, NIC: 1}})
 	life, stop := context.WithCancel(ctx)
 	device := &memoryTun{ctx: life, cancel: stop, client: link}
-	handler := &echoHandler{seen: make(chan M.Metadata, 2), failures: make(chan error, 2)}
+	handler := &echoHandler{seen: make(chan M.Metadata, 3), failures: make(chan error, 2), helper: helper}
 	server := New(ctx, device, handler)
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
@@ -150,5 +197,24 @@ func TestPacketStackTCPHalfCloseAndUDP(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
+	}
+	destination.Port = 9000
+	business, err := gonet.DialUDP(client, nil, &destination, ipv4.ProtocolNumber)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer business.Close()
+	_ = business.SetDeadline(time.Now().Add(3 * time.Second))
+	datagrams := [][]byte{[]byte("first"), {}, []byte("last datagram")}
+	for _, payload := range datagrams {
+		if _, err := business.Write(payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, want := range datagrams {
+		n, err := business.Read(data)
+		if err != nil || !bytes.Equal(data[:n], want) {
+			t.Fatalf("business UDP reply: %q, want %q, err %v", data[:n], want, err)
+		}
 	}
 }

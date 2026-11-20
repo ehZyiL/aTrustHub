@@ -82,16 +82,19 @@ func (r *linuxSystemCapture) start(ctx, life context.Context, configs []CaptureC
 		return err
 	}
 	password := hex.EncodeToString(secret[:])
+	captureDial := func(ctx context.Context, network, address string) (net.Conn, error) {
+		r.mu.RLock()
+		original, known := r.original, r.known
+		r.mu.RUnlock()
+		if original == nil || life.Err() != nil {
+			return nil, net.ErrClosed
+		}
+		return dial(vpn.WithCapturedOwnership(vpn.WithOriginalDial(ctx, original.DialContext), known), network, address)
+	}
 	r.proxy = proxy.New(proxy.Options{Addr: "127.0.0.1:0", Context: life, SOCKSOnly: true,
-		Auth: &proxy.Auth{Username: "system", Credential: password},
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			r.mu.RLock()
-			original, known := r.original, r.known
-			r.mu.RUnlock()
-			if original == nil || life.Err() != nil {
-				return nil, net.ErrClosed
-			}
-			return dial(vpn.WithCapturedOwnership(vpn.WithOriginalDial(ctx, original.DialContext), known), network, address)
+		Auth: &proxy.Auth{Username: "system", Credential: password}, Dial: captureDial,
+		DialDatagram: func(ctx context.Context, address string) (net.Conn, error) {
+			return captureDial(ctx, "udp4", address)
 		}})
 	if err := r.proxy.Start(); err != nil {
 		return err

@@ -1,4 +1,4 @@
-// Package packetstack connects an IPv4 TUN device to the shared TCP and DNS stack.
+// Package packetstack connects an IPv4 TUN device to the shared packet stack.
 package packetstack
 
 // This adapter follows sing-tun's stack_gvisor.go forwarding model, using the
@@ -139,9 +139,8 @@ func (s *Stack) readLoop() {
 		if len(data) < header.IPv4MinimumSize || data[0]>>4 != 4 {
 			continue
 		}
-		// TCP and UDP DNS are the only supported forwarded protocols. In
-		// particular, do not let the local stack impersonate a remote ICMP
-		// echo response and make an unreachable VPN target appear healthy.
+		// Only pass TCP and UDP to the handlers. A local ICMP echo would make an
+		// unreachable VPN target appear healthy.
 		if protocol := data[9]; protocol != uint8(tcp.ProtocolNumber) && protocol != uint8(udp.ProtocolNumber) {
 			continue
 		}

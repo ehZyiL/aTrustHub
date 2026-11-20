@@ -32,7 +32,12 @@ func (a *app) setupResourceTUN() {
 	lastMessage := ""
 	a.resourceTUN = &resourceTUNController{configs: a.resourceCaptureConfigs,
 		start: func(ctx context.Context, configs []localapps.CaptureConfig) (localapps.SystemCapture, error) {
-			return a.local.StartSystemCapture(ctx, configs, a.mgr.DialCaptured)
+			return a.local.StartSystemCapture(ctx, configs, func(ctx context.Context, network, address string) (net.Conn, error) {
+				if network == "udp4" {
+					return a.mgr.DialCapturedUDP(ctx, address)
+				}
+				return a.mgr.DialCaptured(ctx, network, address)
+			})
 		},
 		suspendProxy: func() (func() error, error) {
 			_, port, err := net.SplitHostPort(a.mgr.Aggregate().Addr)
@@ -138,7 +143,7 @@ func (a *app) resourceTUNControls(c *ui.Context) {
 		status = a.resourceTUN.View()
 	}
 	ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-		label := "系统 TUN (TCP)"
+		label := "系统 TUN"
 		if status.Running {
 			label = "关闭系统 TUN"
 		} else if status.Busy {
@@ -176,7 +181,7 @@ func (a *app) resourceTUNControls(c *ui.Context) {
 			}
 		}
 		if status.Running {
-			ui.Text(c, "IPv4 TCP + DNS").FontSize(11).TextColor(c.Theme().TextMuted)
+			ui.Text(c, "IPv4 TCP + DNS · UDP 试验").FontSize(11).TextColor(c.Theme().TextMuted)
 		}
 		if status.Running || status.Error != "" {
 			ui.Row(c).Padding(5).OnClick(func() { a.logsOpen = true }).Tooltip("系统 TUN 与访问日志").Children(func() { ui.Icon(c, logIcon).Size(16, 16) })

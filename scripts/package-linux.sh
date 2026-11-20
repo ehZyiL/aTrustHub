@@ -47,7 +47,7 @@ EasyConnect Hub Linux bundle
 Architecture: $target_arch
 Worker IPC protocol: 6
 Linux capture helper protocol: $helper_protocol
-Scope: IPv4 TCP and DNS. Business UDP and IPv6 capture are not supported.
+Scope: IPv4 TCP and DNS. System IPv4 UDP for eligible L3 sessions is experimental; IPv6 is unsupported.
 GUI, worker and helper are a matched build from this bundle; do not mix files from other bundles.
 EOF
 install -m 0644 "$app_root/packaging/linux/easyconnect-hub-capture@.service" "$bundle/easyconnect-hub-capture@.service"

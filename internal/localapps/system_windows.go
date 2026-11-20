@@ -220,15 +220,18 @@ func (r *windowsSystemCapture) addLocked(ctx context.Context, config CaptureConf
 			return err
 		}
 		password := hex.EncodeToString(secret[:])
+		dial := func(ctx context.Context, network, address string) (net.Conn, error) {
+			r.ownershipMu.RLock()
+			known := make([]netpolicy.Range, 0, len(r.known))
+			for network := range r.known {
+				known = append(known, network)
+			}
+			r.ownershipMu.RUnlock()
+			return r.dial(vpn.WithCapturedOwnership(vpn.WithOriginalDial(ctx, session.OriginalDial), known), network, address)
+		}
 		r.proxy = proxy.New(proxy.Options{Addr: "127.0.0.1:0", Auth: &proxy.Auth{Username: "system", Credential: password}, Context: r.life, SOCKSOnly: true,
-			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-				r.ownershipMu.RLock()
-				known := make([]netpolicy.Range, 0, len(r.known))
-				for network := range r.known {
-					known = append(known, network)
-				}
-				r.ownershipMu.RUnlock()
-				return r.dial(vpn.WithCapturedOwnership(vpn.WithOriginalDial(ctx, session.OriginalDial), known), network, address)
+			Dial: dial, DialDatagram: func(ctx context.Context, address string) (net.Conn, error) {
+				return dial(ctx, "udp4", address)
 			}})
 		if err := r.proxy.Start(); err != nil {
 			r.proxy = nil

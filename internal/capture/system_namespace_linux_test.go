@@ -56,6 +56,34 @@ func TestSystemHelperTCPAndRecoveryInNamespace(t *testing.T) {
 			client, peer := net.Pipe()
 			go func() { defer peer.Close(); _, _ = io.WriteString(peer, address) }()
 			return client, nil
+		}, DialDatagram: func(_ context.Context, address string) (net.Conn, error) {
+			switch address {
+			case a.Min + ":9000":
+			case b.Min + ":9000":
+				if bOffline.Load() {
+					return nil, fmt.Errorf("gateway B is offline")
+				}
+			default:
+				return nil, fmt.Errorf("unexpected UDP capture target: %s", address)
+			}
+			peer, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				return nil, err
+			}
+			client, err := net.DialUDP("udp4", nil, peer.LocalAddr().(*net.UDPAddr))
+			if err != nil {
+				peer.Close()
+				return nil, err
+			}
+			go func() {
+				defer peer.Close()
+				_ = peer.SetDeadline(time.Now().Add(3 * time.Second))
+				b := make([]byte, 100)
+				if n, from, err := peer.ReadFromUDP(b); err == nil {
+					_, _ = peer.WriteToUDP(append([]byte(address+"/"), b[:n]...), from)
+				}
+			}()
+			return client, nil
 		}})
 	if err := socks.Start(); err != nil {
 		t.Fatal(err)
@@ -140,8 +168,32 @@ func TestSystemHelperTCPAndRecoveryInNamespace(t *testing.T) {
 			t.Fatalf("resource %s, available %t: %v", address, available, err)
 		}
 	}
+	checkUDP := func(ip string, available bool) {
+		t.Helper()
+		address := ip + ":9000"
+		conn, err := (&net.Dialer{}).DialContext(ctx, "udp4", address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		wait := 3 * time.Second
+		if !available {
+			wait = 250 * time.Millisecond
+		}
+		_ = conn.SetDeadline(time.Now().Add(wait))
+		if _, err = conn.Write([]byte("probe")); err != nil {
+			t.Fatal(err)
+		}
+		data := make([]byte, 100)
+		n, err := conn.Read(data)
+		if (err == nil) != available || err == nil && string(data[:n]) != address+"/probe" {
+			t.Fatalf("UDP resource %s, available %t: %q, %v", address, available, data[:n], err)
+		}
+	}
 	checkTCP(a.Min, true)
 	checkTCP(b.Min, true)
+	checkUDP(a.Min, true)
+	checkUDP(b.Min, true)
 	bOffline.Store(true)
 	config.Resources[1].Guard = true
 	if _, err := lease.Sync(ctx, config); err != nil {
@@ -149,6 +201,8 @@ func TestSystemHelperTCPAndRecoveryInNamespace(t *testing.T) {
 	}
 	checkTCP(a.Min, true)
 	checkTCP(b.Min, false)
+	checkUDP(a.Min, true)
+	checkUDP(b.Min, false)
 	bOffline.Store(false)
 	config.Resources[1].Guard = false
 	config.Resources[1].ID = strings.Repeat("c", 32)
@@ -156,6 +210,7 @@ func TestSystemHelperTCPAndRecoveryInNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkTCP(b.Min, true)
+	checkUDP(b.Min, true)
 
 	// Losing the controller must release all routes and let the same GUI
 	// confirm cleanup over a fresh authenticated connection.

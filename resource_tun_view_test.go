@@ -21,10 +21,7 @@ func TestSystemTUNControlVisibleForEasyConnectAndSeparateFromLegacy(t *testing.T
 	a.resourceTUN = &resourceTUNController{configs: func() ([]localapps.CaptureConfig, error) { return nil, nil }, start: func(context.Context, []localapps.CaptureConfig) (localapps.SystemCapture, error) { return r, nil }, suspendProxy: func() (func() error, error) { return func() error { return nil }, nil }}
 	t.Cleanup(func() { a.resourceTUN.Close() })
 	tester := ui.NewTester(a.view, 1120, 800)
-	if !strings.Contains(strings.Join(tester.Texts(), "|"), "系统 TUN (TCP)") {
-		t.Fatal("EasyConnect system mode missing")
-	}
-	if err := tester.Click("系统 TUN (TCP)"); err != nil {
+	if err := tester.Click("系统 TUN"); err != nil {
 		t.Fatal(err)
 	}
 	waitController(t, a.resourceTUN, func(s resourceTUNStatus) bool { return s.Running })

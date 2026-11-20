@@ -3,6 +3,7 @@ package wincapture
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"strings"
@@ -104,6 +105,65 @@ func TestEngineSessionInstallFailureDoesNotChangeExistingGateway(t *testing.T) {
 	}
 }
 
+func TestUnusedWindowsDNSPoolsAreReclaimedAcrossReconnects(t *testing.T) {
+	e, counts := testSessionEngine(t)
+	active := strings.Repeat("a", 32)
+	activePool := netip.MustParsePrefix("198.19.0.0/20")
+	if err := e.registerPrepared(active, poolTestConfig("A"), activePool, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	reconnectPool := netip.MustParsePrefix("198.19.16.0/20")
+	for generation := 1; generation <= 32; generation++ {
+		id := fmt.Sprintf("%032x", generation)
+		if err := e.registerPrepared(id, poolTestConfig("B"), reconnectPool, nil, nil); err != nil {
+			t.Fatalf("register generation %d: %v", generation, err)
+		}
+		if err := e.unregister(id); err != nil {
+			t.Fatalf("retire generation %d: %v", generation, err)
+		}
+		if counts[reconnectPool] != 0 {
+			t.Fatalf("unused mapping route survived generation %d", generation)
+		}
+	}
+	if counts[activePool] != 1 || e.sessions[active].ctx.Err() != nil {
+		t.Fatal("reclaiming B affected A")
+	}
+}
+
+func TestRetiredWindowsDNSPoolWaitsForTTLAndConnection(t *testing.T) {
+	e, counts := testSessionEngine(t)
+	id := strings.Repeat("a", 32)
+	prefix := netip.MustParsePrefix("198.19.0.0/20")
+	if err := e.registerPrepared(id, poolTestConfig("A"), prefix, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	ip := prefix.Addr().Next()
+	if err := e.publish(id, []workeripc.DNSAlias{{Address: ip.String(), Original: "10.44.0.8", TTL: 60}}); err != nil {
+		t.Fatal(err)
+	}
+	release, err := e.holdAlias(ip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.unregister(id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.holdAlias(ip); err == nil {
+		t.Fatal("retired address admitted a new connection")
+	}
+	expiry := e.sessions[id].mappings[ip].expires
+	if err := e.reapRetiredPools(expiry); err != nil || counts[prefix] != 1 {
+		t.Fatal("active connection lost its pool", err)
+	}
+	release()
+	if err := e.reapRetiredPools(expiry.Add(-time.Second)); err != nil || counts[prefix] != 1 {
+		t.Fatal("cached answer lost its pool before expiry", err)
+	}
+	if err := e.reapRetiredPools(expiry); err != nil || counts[prefix] != 0 || e.sessions[id] != nil {
+		t.Fatal("expired pool was not reclaimed", err)
+	}
+}
+
 func testGatewayDNS(t *testing.T, calls *atomic.Int32) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -140,6 +200,9 @@ func TestRuntimeDNSSelectsOneGatewayAndOfflineDoesNotFallback(t *testing.T) {
 	}
 	if callsA.Load() != 0 || callsB.Load() != 1 {
 		t.Fatal("DNS queried wrong gateway")
+	}
+	if err := e.publish(b, []workeripc.DNSAlias{{Address: "198.19.16.1", Original: "10.44.0.8", TTL: 60}}); err != nil {
+		t.Fatal(err)
 	}
 	if err := e.unregister(b); err != nil {
 		t.Fatal(err)

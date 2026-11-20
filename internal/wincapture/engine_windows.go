@@ -35,17 +35,19 @@ type aliasEntry struct {
 }
 
 type captureSession struct {
-	system    *registration
-	config    Config
-	aliases   netip.Prefix
-	resources []netip.Prefix
-	gateways  []netip.Addr
-	mappings  map[netip.Addr]aliasEntry
-	issued    map[netip.Addr]netip.Addr
-	rules     ruleSet
-	retired   bool
-	ctx       context.Context
-	cancel    context.CancelFunc
+	system     *registration
+	config     Config
+	aliases    netip.Prefix
+	resources  []netip.Prefix
+	gateways   []netip.Addr
+	mappings   map[netip.Addr]aliasEntry
+	issued     map[netip.Addr]netip.Addr
+	rules      ruleSet
+	retired    bool
+	undoAlias  func() error
+	aliasFlows int
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 type engine struct {
@@ -61,7 +63,6 @@ type engine struct {
 	index          uint32
 	installRoute   func(netip.Prefix) (func() error, error)
 	reserveMapping func(string, string, time.Time) error
-	aliasUndo      []func() error
 	adapter        netip.Prefix
 	dnsAddress     netip.Addr
 	id             string
@@ -421,7 +422,7 @@ func (e *engine) originalTarget(destination netip.AddrPort) (string, error) {
 				continue
 			}
 			entry, ok := session.mappings[destination.Addr()]
-			if !ok || !time.Now().Before(entry.expires) {
+			if session.retired || !ok || !time.Now().Before(entry.expires) {
 				return "", errors.New("DNS 映射已过期，请重新解析域名")
 			}
 			destination = netip.AddrPortFrom(entry.original, destination.Port())
@@ -448,6 +449,13 @@ func (e *engine) NewConnection(ctx context.Context, conn net.Conn, metadata M.Me
 	}
 	if metadata.Destination.Addr == e.dnsAddress && metadata.Destination.Port == 53 {
 		return e.serveDNSTCP(ctx, conn)
+	}
+	releaseAlias, err := e.holdAlias(metadata.Destination.Addr)
+	if err != nil {
+		return err
+	}
+	if releaseAlias != nil {
+		defer releaseAlias()
 	}
 	owner, err := LookupTCP(ctx, Tuple{metadata.Source.AddrPort(), metadata.Destination.AddrPort()})
 	if err != nil {
@@ -505,6 +513,13 @@ func (e *engine) NewPacketConnection(ctx context.Context, conn N.PacketConn, met
 	}
 	if metadata.Destination.Addr == e.dnsAddress && metadata.Destination.Port == 53 {
 		return e.serveDNSUDP(ctx, conn, metadata.Destination)
+	}
+	releaseAlias, err := e.holdAlias(metadata.Destination.Addr)
+	if err != nil {
+		return err
+	}
+	if releaseAlias != nil {
+		defer releaseAlias()
 	}
 	owner, err := LookupUDP(ctx, metadata.Source.AddrPort())
 	if err != nil {
@@ -691,8 +706,8 @@ func (e *engine) Close() error {
 			delete(e.apps, id)
 		}
 		e.mu.Unlock()
-		for i := len(e.aliasUndo) - 1; i >= 0; i-- {
-			e.closeErr = errors.Join(e.closeErr, e.aliasUndo[i]())
+		for _, session := range e.sessions {
+			e.closeErr = errors.Join(e.closeErr, callUndo(session.undoAlias))
 		}
 		if e.tun != nil {
 			e.closeErr = errors.Join(e.closeErr, e.tun.Close())
@@ -759,6 +774,9 @@ func (e *engine) checkNetwork() error {
 				return fmt.Errorf("软件接管规则清理未完成：%w", err)
 			}
 		}
+	}
+	if err := e.reapRetiredPools(time.Now()); err != nil {
+		return fmt.Errorf("移除已退役的 DNS 映射池：%w", err)
 	}
 	if domains := e.dnsPolicy.domains("", nil); len(domains) > 0 && time.Since(e.lastDNSCheck) >= 30*time.Second {
 		if err := checkNRPTActive(e.ctx, e.id, domains, e.dnsAddress.String()); err != nil {

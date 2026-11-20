@@ -19,9 +19,9 @@ type controllerRuntime struct {
 	failure         error
 }
 
-func (r *controllerRuntime) Add(context.Context, localapps.CaptureConfig) error { return nil }
-func (r *controllerRuntime) Done() <-chan struct{}                              { return r.done }
-func (r *controllerRuntime) Err() error                                         { return r.failure }
+func (r *controllerRuntime) Reconcile(context.Context, []localapps.CaptureConfig) error { return nil }
+func (r *controllerRuntime) Done() <-chan struct{}                                      { return r.done }
+func (r *controllerRuntime) Err() error                                                 { return r.failure }
 func (r *controllerRuntime) Close() error {
 	r.closes.Add(1)
 	r.once.Do(func() { close(r.done) })

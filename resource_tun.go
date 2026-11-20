@@ -113,7 +113,7 @@ func (a *app) resourceCaptureConfigs() ([]localapps.CaptureConfig, error) {
 		if len(domains) == 0 && len(networks) == 0 {
 			continue
 		}
-		result = append(result, localapps.CaptureConfig{Key: connection.Key, Identity: connection.Identity, Gateway: point.Server, Domains: domains, Networks: networks,
+		result = append(result, localapps.CaptureConfig{Key: connection.Key, Identity: connection.Identity, Guard: !gateway.Online, Gateway: point.Server, Domains: domains, Networks: networks,
 			Exchange: connection.DNS, MappedDNS: connection.MappedDNS, SelectDNS: connection.SelectDNS, BeginPublication: connection.BeginPublication, ConfirmAliases: connection.ConfirmAliases,
 			ReservedPools: connection.ReservedPools, AliasNetworks: connection.AliasNetworks, Active: connection.Active})
 	}

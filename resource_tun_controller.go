@@ -104,7 +104,6 @@ func (c *resourceTUNController) begin(ctx context.Context) {
 func (c *resourceTUNController) monitor(ctx context.Context, run localapps.SystemCapture) {
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
-	failed := map[string]bool{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -124,22 +123,22 @@ func (c *resourceTUNController) monitor(ctx context.Context, run localapps.Syste
 		case <-tick.C:
 			configs, err := c.configs()
 			if err == nil {
-				for _, config := range configs {
-					if failed[config.Key] {
-						continue
-					}
-					if addErr := run.Add(ctx, config); addErr != nil {
-						failed[config.Key] = true
-						err = errors.Join(err, addErr)
-					}
-				}
+				err = run.Reconcile(ctx, configs)
 			}
+			if ctx.Err() != nil {
+				return
+			}
+			message := ""
 			if err != nil {
-				c.mu.Lock()
-				if c.current == run {
-					c.status.Error = "部分资源未接管：" + err.Error()
-				}
-				c.mu.Unlock()
+				message = "部分资源未接管：" + err.Error()
+			}
+			c.mu.Lock()
+			changed := c.current == run && c.status.Error != message
+			if changed {
+				c.status.Error = message
+			}
+			c.mu.Unlock()
+			if changed {
 				c.notify()
 			}
 		}

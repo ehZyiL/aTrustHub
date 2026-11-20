@@ -21,6 +21,7 @@ import (
 type CaptureConfig struct {
 	Key              string
 	Identity         dnsmapping.Identity
+	Guard            bool
 	SelectDNS        func([]byte) (string, func() bool, error)
 	sharedDNSAddress string
 	Gateway          string

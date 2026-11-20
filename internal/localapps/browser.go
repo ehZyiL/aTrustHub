@@ -109,7 +109,9 @@ func launchBrowser(ctx context.Context, p model.LocalApp, proxyAddress string) (
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, exe, BrowserSupervisorFlag)
+	// Cancellation bounds startup below. Once ready, the supervisor must
+	// outlive the manager so it can clean the profile after the browser exits.
+	cmd := exec.Command(exe, BrowserSupervisorFlag)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

@@ -325,6 +325,7 @@ func (m *Manager) Apply(cfg model.Config) {
 		}
 		oldCfg := ep.cfg
 		ep.cfg = p
+		ep.info.HealthTarget = p.HealthTarget
 		if ep.state != StateOffline && needsRestart(oldCfg, p) {
 			restarts = append(restarts, p.ID)
 			m.stopEndpointLocked(p.ID, &closes)
@@ -637,6 +638,9 @@ func (m *Manager) connect(id string, gen int) {
 	cur.state = StateOnline
 	cur.errMsg = ""
 	cur.info = cloneSessionInfo(sess.Info())
+	if cur.cfg.HealthTarget != "" {
+		cur.info.HealthTarget = cur.cfg.HealthTarget
+	}
 	cur.knownResources = rememberResources(cur.knownResources, cur.info.Resources)
 	cur.resourceVersion = resourceVersion(cur.info.Resources)
 	cur.tunnelState = ""

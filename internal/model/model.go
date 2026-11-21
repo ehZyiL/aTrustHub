@@ -132,6 +132,7 @@ type AccessPoint struct {
 	RemoteDNS         string   `json:"remoteDNS,omitempty"`
 	InternalDomains   []string `json:"internalDomains,omitempty"`
 	CertificateSHA256 string   `json:"certificateSHA256,omitempty"`
+	HealthTarget      string   `json:"healthTarget,omitempty"`
 
 	ID       string `json:"id"`
 	Name     string `json:"name"`
@@ -400,6 +401,7 @@ func (p *AccessPoint) Normalize() {
 		p.Protocol = ProtocolATrust
 	}
 	p.RemoteDNS = strings.TrimSpace(p.RemoteDNS)
+	p.HealthTarget = strings.TrimSpace(p.HealthTarget)
 	p.CertificateSHA256 = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(p.CertificateSHA256), ":", ""))
 	for i, domain := range p.InternalDomains {
 		p.InternalDomains[i] = strings.Trim(strings.ToLower(strings.TrimSpace(domain)), ".")

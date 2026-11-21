@@ -288,3 +288,46 @@ func TestLastSuccessfulTargetPreferredForProbe(t *testing.T) {
 		t.Fatalf("got %q, want 192.168.132.16:9011", target2)
 	}
 }
+
+func TestConfiguredHealthTargetOverridesAndFallsBack(t *testing.T) {
+	info := SessionInfo{
+		Resources: &workeripc.ResourceSnapshot{
+			IPRules: []workeripc.IPRule{
+				{Min: "10.240.32.225", Max: "10.240.32.225", PortMin: 443, PortMax: 443, Protocol: "tcp"},
+				{Min: "192.168.132.16", Max: "192.168.132.16", PortMin: 9011, PortMax: 9011, Protocol: "tcp"},
+			},
+		},
+	}
+
+	// 1. 未配置任何 HealthTarget 时：降级走原逻辑，优先取第一个合规规则
+	if got := healthTarget(info); got != "10.240.32.225:443" {
+		t.Fatalf("未配置降级失败：got %q, want 10.240.32.225:443", got)
+	}
+
+	// 2. 配置了具体的 host:port 时：优先返回配置的目标
+	infoWithHostPort := info
+	infoWithHostPort.HealthTarget = "192.168.132.16:9011"
+	if got := healthTarget(infoWithHostPort); got != "192.168.132.16:9011" {
+		t.Fatalf("配置 host:port 覆盖失败：got %q, want 192.168.132.16:9011", got)
+	}
+
+	// 3. 配置了完整 http/https URL 时：解析出 host:port 并优先返回
+	infoWithURL := info
+	infoWithURL.HealthTarget = "http://192.168.132.16:9011/api/health"
+	if got := healthTarget(infoWithURL); got != "192.168.132.16:9011" {
+		t.Fatalf("配置 HTTP URL 提取覆盖失败：got %q, want 192.168.132.16:9011", got)
+	}
+
+	// 4. 配置了带域名的 HTTPS URL
+	infoDomain := SessionInfo{
+		HealthTarget: "https://oa.test.com/login",
+		Resources: &workeripc.ResourceSnapshot{
+			DomainRules: []workeripc.DomainRule{
+				{Domain: "oa.test.com", PortMin: 443, PortMax: 443, Protocol: "tcp"},
+			},
+		},
+	}
+	if got := healthTarget(infoDomain); got != "oa.test.com:443" {
+		t.Fatalf("配置 HTTPS 域名覆盖失败：got %q, want oa.test.com:443", got)
+	}
+}

@@ -219,6 +219,7 @@ type app struct {
 
 type editorDraft struct {
 	protocol               string
+	healthTarget           string
 	remoteDNS              string
 	internalDomains        string
 	certificateSHA256      string

@@ -1745,8 +1745,11 @@ func (a *app) editorView(c *ui.Context) {
 							}
 						})
 						ui.Text(c, "短信、动态口令或图形验证码会在连接时弹出。无需保存动态口令密钥。").FontSize(11).TextColor(t.TextMuted).Wrap()
-						ui.Checkbox(c, &d.advanced, "高级：内网 DNS 与证书兼容")
+						ui.Checkbox(c, &d.advanced, "高级：内网 DNS、保活目标与证书兼容")
 						if d.advanced {
+							ui.Field(c, "保活探测目标（可选，URL 或 host:port）", func() {
+								ui.TextInput(c, &d.healthTarget).Placeholder("如 192.168.132.16:9011 或 http://oa:8080/，留空按原逻辑自动探测")
+							})
 							ui.Field(c, "VPN DNS（可选，IPv4）", func() { ui.TextInput(c, &d.remoteDNS).Placeholder("留空使用网关下发的 DNS") })
 							ui.Field(c, "内网域名后缀（可选，逗号分隔）", func() { ui.TextInput(c, &d.internalDomains).Placeholder("例如：corp.example.com") })
 							ui.Field(c, "网关证书 SHA256（可选）", func() {
@@ -2349,6 +2352,7 @@ func (a *app) openEditor(v vpn.View) {
 		open:                   true,
 		editingID:              p.ID,
 		protocol:               protocolLabel(p.Protocol),
+		healthTarget:           p.HealthTarget,
 		remoteDNS:              p.RemoteDNS,
 		internalDomains:        strings.Join(p.InternalDomains, ", "),
 		certificateSHA256:      p.CertificateSHA256,
@@ -2368,6 +2372,9 @@ func (a *app) openEditor(v vpn.View) {
 		detected:               nil,
 	}
 	a.editor.hasTOTP = a.hasTOTP(p.ID)
+	if p.RemoteDNS != "" || len(p.InternalDomains) > 0 || p.CertificateSHA256 != "" || p.HealthTarget != "" {
+		a.editor.advanced = true
+	}
 	// A point saved before the mode was a choice gets the mode the server
 	// actually offers, picked by detection instead of a "detect yourself"
 	// dropdown entry.
@@ -2435,6 +2442,7 @@ func (a *app) saveEditor() {
 	}
 	p := model.AccessPoint{
 		Protocol:          protocolFromLabel(d.protocol),
+		HealthTarget:      strings.TrimSpace(d.healthTarget),
 		RemoteDNS:         d.remoteDNS,
 		InternalDomains:   strings.FieldsFunc(d.internalDomains, func(r rune) bool { return r == ',' || r == '，' || r == '\n' }),
 		CertificateSHA256: d.certificateSHA256,

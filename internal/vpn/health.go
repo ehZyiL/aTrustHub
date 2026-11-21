@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,22 +29,55 @@ type DNSProber interface {
 	ProbeDNS(context.Context) error
 }
 
+// parseHealthTarget 解析用户填写的保活目标（支持 http(s):// URL 或 host:port 格式）。
+func parseHealthTarget(raw string) (host, port string, err error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", errors.New("目标为空")
+	}
+	if strings.Contains(raw, "://") {
+		if u, parseErr := url.Parse(raw); parseErr == nil {
+			h := u.Hostname()
+			p := u.Port()
+			if p == "" {
+				if strings.EqualFold(u.Scheme, "https") {
+					p = "443"
+				} else {
+					p = "80"
+				}
+			}
+			return h, p, nil
+		}
+	}
+	if h, p, splitErr := net.SplitHostPort(raw); splitErr == nil {
+		return h, p, nil
+	}
+	return "", "", fmt.Errorf("无效的目标格式：%s", raw)
+}
+
 func healthTarget(info SessionInfo, preferred ...string) string {
+	// 1. 用户显式配置的保活目标/URL 优先级最高
+	if info.HealthTarget != "" {
+		if h, p, err := parseHealthTarget(info.HealthTarget); err == nil {
+			if target := healthHostPort(h, p); target != "" {
+				if info.Resources == nil || authorizedHealthTarget(target, info.Resources) {
+					return target
+				}
+			}
+		}
+	}
+	// 2. 运行时最近一次成功通流的业务目标
 	for _, p := range preferred {
 		if p == "" {
 			continue
 		}
-		if host, port, err := net.SplitHostPort(p); err == nil {
-			if target := healthHostPort(host, port); target != "" && authorizedHealthTarget(target, info.Resources) {
+		if h, port, err := parseHealthTarget(p); err == nil {
+			if target := healthHostPort(h, port); target != "" && authorizedHealthTarget(target, info.Resources) {
 				return target
 			}
 		}
 	}
-	if host, port, err := net.SplitHostPort(info.HealthTarget); err == nil {
-		if target := healthHostPort(host, port); target != "" && authorizedHealthTarget(target, info.Resources) {
-			return target
-		}
-	}
+	// 3. 降级：未配置时按原逻辑从网关下发的资源规则中自动挑选
 	if info.Resources == nil {
 		return ""
 	}

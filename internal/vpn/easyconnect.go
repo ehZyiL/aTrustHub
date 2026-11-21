@@ -147,7 +147,7 @@ func NewEasyConnectConnector(path string) Connector {
 							}
 						}
 					}
-					s.info = SessionInfo{ClientIP: m.ClientIP, DNSServer: m.DNSServer, Resources: m.Resources, Apps: apps}
+					s.info = SessionInfo{ClientIP: m.ClientIP, DNSServer: m.DNSServer, Resources: m.Resources, Apps: apps, HealthTarget: point.HealthTarget}
 					if err := ctx.Err(); err != nil {
 						return nil, err
 					}

@@ -791,6 +791,16 @@ func (a *app) credentials(id string) (vpn.Credentials, error) {
 		}
 	}
 	creds := vpn.Credentials{Login: cred, TOTP: totp, ExternalLogin: external}
+	// 短信 / 动态口令 / RADIUS 验证码由 zju-connect 的 auth 包主动询问。
+	// 不接这里，它就去读标准输入；GUI 子系统进程（Windows 的
+	// -H windowsgui）根本没有 stdin，登录会永远卡在 read /dev/stdin。
+	codeName := id
+	if point != nil && point.Name != "" {
+		codeName = point.Name
+	}
+	creds.PromptCode = func(ctx context.Context, req vpn.CodeRequest) (string, error) {
+		return a.requestAuthentication(ctx, codeName, codeChallenge(req))
+	}
 	if point != nil && point.Protocol == model.ProtocolEasyConnect {
 		name := point.Name
 		creds.Challenge = func(ctx context.Context, ch vpn.Challenge) (string, error) {
@@ -798,6 +808,20 @@ func (a *app) credentials(id string) (vpn.Credentials, error) {
 		}
 	}
 	return creds, nil
+}
+
+// codeChallenge turns one login code request into the shape the app's
+// authentication dialog already draws: the same modal asks for EasyConnect
+// captchas and for aTrust SMS/TOTP/RADIUS codes.
+func codeChallenge(req vpn.CodeRequest) vpn.Challenge {
+	kind := "totp"
+	switch req.Kind {
+	case vpn.CodeSMS, vpn.CodeCustomSMS:
+		kind = "sms"
+	case vpn.CodeRADIUS:
+		kind = "radius"
+	}
+	return vpn.Challenge{Kind: kind, Tip: req.Tip}
 }
 
 func (a *app) hasPassword(id string) bool {

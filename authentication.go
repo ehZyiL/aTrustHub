@@ -94,6 +94,9 @@ func (a *app) authenticationView(c *ui.Context) {
 	ui.Modal(c, &d.open, func() {
 		ui.Column(c).Width(dialogNarrow).Gap(10).Children(func() {
 			dialogHeader(c, "完成认证", r.name+" · 验证码仅用于当前登录，不会保存")
+			if tip := strings.TrimSpace(r.challenge.Tip); tip != "" {
+				ui.Text(c, tip).FontSize(11).TextColor(c.Theme().TextMuted)
+			}
 			label := "动态口令"
 			switch r.challenge.Kind {
 			case "sms":

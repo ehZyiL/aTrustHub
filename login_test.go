@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qy/easyconnect/internal/model"
 	"github.com/qy/easyconnect/internal/vpn"
@@ -355,5 +357,39 @@ func TestCodeChallengeKinds(t *testing.T) {
 		if got.Tip != c.req.Tip {
 			t.Errorf("codeChallenge(%v).Tip = %q，想要 %q", c.req.Kind, got.Tip, c.req.Tip)
 		}
+	}
+}
+
+// 没人理验证码弹窗时必须按护栏超时收场：不能拖到连接的 5 分钟截止，
+// 也不能把弹窗留在界面上。
+func TestCodePromptGivesUpWhenUnanswered(t *testing.T) {
+	a := testApp(t)
+	a.openNewEditor()
+	a.editor.address = "https://vpn.example.edu.cn"
+	a.editor.authModeLabel = model.AuthModePassword.Label()
+	a.editor.username = "alice"
+	a.editor.cred = "pw-for-test"
+	a.saveEditor()
+	p := a.store.Config().Points[0]
+	creds, err := a.credentials(p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := loginCodeTimeout
+	loginCodeTimeout = 40 * time.Millisecond
+	defer func() { loginCodeTimeout = old }()
+
+	start := time.Now()
+	if _, err := creds.PromptCode(context.Background(), vpn.CodeRequest{Kind: vpn.CodeSMS}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("无人应答时应超时，得到 %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("护栏没有生效，等了 %v", elapsed)
+	}
+	a.authMu.Lock()
+	left := a.authRequest
+	a.authMu.Unlock()
+	if left != nil {
+		t.Fatal("超时后认证弹窗仍挂在界面上")
 	}
 }

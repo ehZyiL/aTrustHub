@@ -799,6 +799,10 @@ func (a *app) credentials(id string) (vpn.Credentials, error) {
 		codeName = point.Name
 	}
 	creds.PromptCode = func(ctx context.Context, req vpn.CodeRequest) (string, error) {
+		// 没人理这个弹窗时不要拖到连接的 5 分钟超时：那会把登录信号量
+		// 也一直占着，后面的重试只能干等。
+		ctx, cancel := context.WithTimeout(ctx, loginCodeTimeout)
+		defer cancel()
 		return a.requestAuthentication(ctx, codeName, codeChallenge(req))
 	}
 	if point != nil && point.Protocol == model.ProtocolEasyConnect {
@@ -809,6 +813,12 @@ func (a *app) credentials(id string) (vpn.Credentials, error) {
 	}
 	return creds, nil
 }
+
+// loginCodeTimeout bounds how long a code dialog may stay unanswered before
+// the login gives up. It is shorter than the 5-minute connect deadline on
+// purpose: one abandoned dialog must not hold the login slot for the whole
+// connection attempt. A variable so the guard is testable.
+var loginCodeTimeout = 3 * time.Minute
 
 // codeChallenge turns one login code request into the shape the app's
 // authentication dialog already draws: the same modal asks for EasyConnect

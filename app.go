@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -189,6 +190,13 @@ type app struct {
 	windowHidden atomic.Bool
 	// hiddenSince 记录这次隐藏的开始时间，工作集修剪要看它。
 	hiddenSince time.Time
+	// trafficMark/lastTrafficAt 记录流量刻度与最后一次流量的时间。
+	trafficMark   int64
+	lastTrafficAt time.Time
+	// trimmedThisHide 保证一次隐藏只修剪一次工作集。
+	trimmedThisHide bool
+	// trimMemoryFn 是测试注入点；生产走 runtime + 平台钩子。
+	trimMemoryFn func()
 
 	// redrawOnce 惰性建两档重绘调度器；测试里的 app 没走 newApp。
 	redrawOnce sync.Once
@@ -259,6 +267,9 @@ type settingsDraft struct {
 }
 
 func main() {
+	// 软内存上限：异常情况下不让进程把机器吃穿。GOGC 保持默认 100——
+	// 调低 GC 百分比换来的是更频繁的 GC，与「省 CPU」相悖。
+	debug.SetMemoryLimit(memoryLimitBytes)
 	if runCaptureLauncher() {
 		return
 	}
@@ -534,6 +545,10 @@ func (a *app) start() {
 			if time.Since(last) > 60*time.Second {
 				last = time.Now()
 				a.tunLogf("旧版 TUN 巡检：on=%v pending=%v 已建=%q 当前=%q", a.tunOn, a.tunPending, a.tunPoints, a.onlineSnapshot())
+				// 重绘统计：验证「隐藏时重绘 0 次」不用靠感觉。
+				fast, slow, draws, coalesced, gated := a.redrawCounts()
+				a.tunLogf("重绘统计：共 %d 帧（快 %d / 慢 %d），合并 %d 条，隐藏丢弃 %d 条",
+					draws, fast, slow, coalesced, gated)
 			}
 		}
 	}()

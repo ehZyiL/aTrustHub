@@ -24,6 +24,8 @@ func (a *app) startStateTicker() {
 func (a *app) maintainState() {
 	a.maybeResumeTUN()
 	a.maybeRefreshTUN()
+	a.noteTraffic()
+	a.maybeTrimMemory()
 }
 
 // hideToTray 是关闭按钮的默认行为：藏到托盘，启动门控与降占用。
@@ -35,6 +37,11 @@ func (a *app) hideToTray() {
 	a.updateDockVisibility(true)
 	a.windowHidden.Store(true)
 	a.hiddenSince = time.Now()
+	// 从隐藏这一刻起算「多久没流量」，并允许本轮再修剪一次。
+	if a.lastTrafficAt.IsZero() {
+		a.lastTrafficAt = a.hiddenSince
+	}
+	a.trimmedThisHide = false
 	a.onWindowHidden()
 }
 
@@ -43,6 +50,7 @@ func (a *app) hideToTray() {
 func (a *app) showFromTray() {
 	a.windowHidden.Store(false)
 	a.hiddenSince = time.Time{}
+	a.trimmedThisHide = false
 	if a.win == nil || a.win.IsDestroyed() {
 		return
 	}

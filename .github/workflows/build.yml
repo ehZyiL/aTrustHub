@@ -61,13 +61,16 @@ jobs:
           bash ./scripts/package-windows.sh
 
       - name: 安装 NSIS 打包工具
-        run: choco install nsis -y --no-progress
+        run: |
+          choco install nsis -y --no-progress
+          echo "C:\Program Files (x86)\NSIS" >> $env:GITHUB_PATH
 
       - name: 生成 Windows 安装包 (Setup.exe)
         shell: bash
         run: |
           cd connect-hub
           go run ./cmd/appicon -ico resources/icon.ico
+          export PATH="/c/Program Files (x86)/NSIS:$PATH"
           makensis packaging/windows/installer.nsi
 
       - name: 上传 Windows 产物 (便携包与安装程序)

@@ -9,7 +9,6 @@ package main
 //   3. 日志与诊断入口不能消失（失败列表和设置页的日志分区都还在）。
 
 import (
-	"slices"
 	"strings"
 	"testing"
 
@@ -45,6 +44,28 @@ func simpleApp(t *testing.T) *app {
 	return a
 }
 
+// twoPointApp 造一个两个接入点的应用：简单模式在这种配置下退回列表。
+// 两个点都带独立端口，用来盯「切模式不得改端口」这条不变式。
+func twoPointApp(t *testing.T) *app {
+	t.Helper()
+	a := testApp(t)
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Points = []model.AccessPoint{
+			{ID: "P1", Name: "公司主网关", Server: "atrust.corp.example", Port: 443,
+				Username: "a", AuthMode: string(model.AuthModePassword), SocksPort: 10001},
+			{ID: "P2", Name: "办公网线路", Server: "ec.corp.example", Port: 443,
+				Username: "b", AuthMode: string(model.AuthModePassword),
+				Protocol: model.ProtocolEasyConnect, SocksPort: 10002},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg = a.store.Config()
+	a.mgr.Apply(a.cfg)
+	return a
+}
+
 // frames 渲染一帧并返回所有可见文本。
 func frames(t *testing.T, a *app, w, h int) (string, *ui.Tester) {
 	t.Helper()
@@ -74,7 +95,8 @@ func TestSimpleModeDefaults(t *testing.T) {
 	}
 }
 
-// 简单模式的概念收敛：一个代理地址、没有独立端口，且可重复调用。
+// 简单模式的概念收敛：所有点都参与统一入口、统一入口保持开启；
+// 但不动每个接入点的独立端口（改它会让在线隧道重登）。
 func TestConvergeSimple(t *testing.T) {
 	cfg := model.Config{
 		Settings: model.Settings{
@@ -83,54 +105,58 @@ func TestConvergeSimple(t *testing.T) {
 		},
 		Points: []model.AccessPoint{
 			{ID: "A", Name: "A", SocksPort: 10001, InPool: false},
-			{ID: "B", Name: "B", SocksPort: 10002, InPool: true},
+			{ID: "B", Name: "B", SocksPort: 0, InPool: false},
 		},
 	}
 	cfg.ConvergeSimple()
 	for _, p := range cfg.Points {
-		if p.SocksPort != 0 {
-			t.Errorf("%s 的独立 SOCKS5 端口应当归零，实际 %d", p.Name, p.SocksPort)
-		}
 		if !p.InPool {
 			t.Errorf("%s 应当加入统一入口：简单模式下只有一个代理地址", p.Name)
 		}
 	}
+	// 端口必须原样留着：Manager.needsRestart 把它当成重建条件。
+	if got := cfg.Points[0].SocksPort; got != 10001 {
+		t.Errorf("收敛不该改独立端口（会触发隧道重登），实际 %d", got)
+	}
+	if got := cfg.Points[1].SocksPort; got != 0 {
+		t.Errorf("本来没有独立端口的点不该被分配端口，实际 %d", got)
+	}
 	if !cfg.Settings.AggregateEnabled {
 		t.Error("简单模式必须保留统一入口，它是唯一的代理地址")
 	}
-	again := cfg.Points[0].SocksPort
 	cfg.ConvergeSimple()
-	if cfg.Points[0].SocksPort != again {
+	if cfg.Points[0].SocksPort != 10001 {
 		t.Error("ConvergeSimple 应当可重复调用（幂等）")
 	}
-	// 退出简单模式：独立端口要补回来，否则等于悄悄吞掉用户的配置。
-	cfg.Settings.SimpleMode = false
-	cfg.RestorePorts()
-	if cfg.Points[0].SocksPort == 0 || cfg.Points[1].SocksPort == 0 {
-		t.Errorf("退出简单模式应当补回独立端口，实际 %d / %d",
-			cfg.Points[0].SocksPort, cfg.Points[1].SocksPort)
+}
+
+// 手写的配置只有 simpleMode: true 时，Normalize 的早退分支不能把整份设置重置掉。
+func TestSettingsNormalizeKeepsSimpleMode(t *testing.T) {
+	s := model.Settings{SimpleMode: true}
+	s.Normalize()
+	if !s.SimpleMode {
+		t.Error("Normalize 不该清掉简单模式")
 	}
-	if cfg.Points[0].SocksPort == cfg.Points[1].SocksPort {
-		t.Error("两个接入点不该分到同一个端口")
+	if s.ListenHost != "127.0.0.1" || s.AggregatePort != 1080 {
+		t.Errorf("其余字段应当补上默认值，实际 %+v", s)
 	}
 }
 
 // 顶栏在简单模式下只剩两段；逻辑 tab 仍是 0 和 3，不改 a.tab 的含义。
 func TestPageNavSimpleMode(t *testing.T) {
 	a := testApp(t)
-	if got := pageNavLabels(a); len(got) != 4 || got[0] != "接入点" {
-		t.Fatalf("完整模式的导航应当是四段，实际 %v", got)
-	}
-	if pages := a.pages(); len(pages) != 4 || pages[3].Tab != 3 {
-		t.Fatalf("完整模式的页面应当是 0..3，实际 %+v", pages)
+	pages := a.pages()
+	if len(pages) != 4 || pages[0].Label != "接入点" || pages[3].Tab != 3 {
+		t.Fatalf("完整模式应当是四段 0..3，实际 %+v", pages)
 	}
 	a.setSimpleMode(true)
-	if got, want := pageNavLabels(a), []string{"连接", "内网网站"}; !slices.Equal(got, want) {
-		t.Fatalf("简单模式的导航应当是 %v，实际 %v", want, got)
+	pages = a.pages()
+	if len(pages) != 2 {
+		t.Fatalf("简单模式的导航应当只剩两段，实际 %+v", pages)
 	}
-	pages := a.pages()
-	if len(pages) != 2 || pages[0].Tab != 0 || pages[1].Tab != 3 {
-		t.Fatalf("简单模式的页面应当是 0 与 3，实际 %+v", pages)
+	if pages[0].Tab != 0 || pages[0].Label != "连接" ||
+		pages[1].Tab != 3 || pages[1].Label != "内网网站" {
+		t.Fatalf("简单模式的页面应当是 {0,连接}{3,内网网站}，实际 %+v", pages)
 	}
 }
 
@@ -148,26 +174,15 @@ func TestSimpleHomeLayout(t *testing.T) {
 			t.Errorf("简单模式首屏不该出现 %q；texts = %s", no, texts)
 		}
 	}
-	// 护栏 3：统一入口地址还在首屏（系统代理这一档要用它）。
-	if !strings.Contains(texts, "统一入口") && !strings.Contains(texts, "入口未启动") {
+	// 护栏 3：统一入口状态还在首屏（系统代理这一档要用它）。
+	if !strings.Contains(texts, "入口未启动") {
 		t.Errorf("首屏应当仍然能看到入口状态；texts = %s", texts)
 	}
 }
 
 // 简单模式但不止一个接入点时退回列表：单卡只描述唯一那个，多个点会看不清。
 func TestSimpleHomeFallsBackToMulti(t *testing.T) {
-	a := testApp(t)
-	if _, err := a.store.Update(func(cfg *model.Config) error {
-		cfg.Points = []model.AccessPoint{
-			{ID: "P1", Name: "公司主网关", Server: "atrust.corp.example", Port: 443, Username: "a", AuthMode: string(model.AuthModePassword)},
-			{ID: "P2", Name: "办公网线路", Server: "ec.corp.example", Port: 443, Username: "b", AuthMode: string(model.AuthModePassword), Protocol: model.ProtocolEasyConnect},
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	a.cfg = a.store.Config()
-	a.mgr.Apply(a.cfg)
+	a := twoPointApp(t)
 	a.setSimpleMode(true)
 	texts, _ := frames(t, a, 1120, 780)
 	if !strings.Contains(texts, "公司主网关") || !strings.Contains(texts, "办公网线路") {
@@ -175,6 +190,10 @@ func TestSimpleHomeFallsBackToMulti(t *testing.T) {
 	}
 	if strings.Contains(texts, "打开内网网站") {
 		t.Errorf("多个接入点时不该用单卡；texts = %s", texts)
+	}
+	// 退回列表也不能再露出每点端口：简单模式只有一个代理地址。
+	if strings.Contains(texts, "SOCKS5") {
+		t.Errorf("简单模式的列表不该提独立端口；texts = %s", texts)
 	}
 }
 
@@ -317,6 +336,66 @@ func TestSimpleSitesPage(t *testing.T) {
 		if strings.Contains(texts, no) {
 			t.Errorf("简单模式的网站页不该出现 %q；texts = %s", no, texts)
 		}
+	}
+}
+
+// 切简单模式不能改任何接入点的独立端口：Manager 把它当重建条件，
+// 改了就会把在线隧道拆了重登（WeCom / SSO 用户会掉回扫码）。
+func TestSimpleModeKeepsSocksPorts(t *testing.T) {
+	a := twoPointApp(t)
+	want := make(map[string]int, len(a.cfg.Points))
+	for _, p := range a.cfg.Points {
+		want[p.ID] = p.SocksPort
+	}
+	for _, on := range []bool{true, false} {
+		a.setSimpleMode(on)
+		for _, p := range a.cfg.Points {
+			if p.SocksPort != want[p.ID] {
+				t.Errorf("简单模式=%v 时 %s 的端口变成了 %d（原本 %d）",
+					on, p.Name, p.SocksPort, want[p.ID])
+			}
+		}
+		if on && !a.cfg.Points[0].InPool {
+			t.Error("简单模式应当让接入点参与统一入口")
+		}
+	}
+}
+
+// 多接入点退回列表时，「查看访问日志」也不能跳到简单模式里不存在的 tab 2。
+func TestSimpleFallbackLogEntry(t *testing.T) {
+	a := twoPointApp(t)
+	a.setSimpleMode(true)
+	a.bus.Add(vpn.AccessFail, "生产报表数据库 127.0.0.1:3306 本地端口被占用")
+	texts, tt := frames(t, a, 1120, 780)
+	if !strings.Contains(texts, "查看访问日志") {
+		t.Fatalf("失败面板没有渲染；texts = %s", texts)
+	}
+	if err := tt.Click("查看访问日志"); err != nil {
+		t.Fatalf("点「查看访问日志」失败: %v", err)
+	}
+	tt.Frame()
+	if a.tab == 2 {
+		t.Error("简单模式没有「访问日志」页，不该跳到 tab 2")
+	}
+	if !a.settings.open || a.settings.section != settingLogs {
+		t.Errorf("日志入口应当落到设置页的日志分区，实际 open=%v section=%d",
+			a.settings.open, a.settings.section)
+	}
+}
+
+// 多接入点的「内网网站」页只能有一个地址输入框：一排绑同一变量的输入框
+// 会让人分不清自己填的地址会从哪条隧道出去。
+func TestSimpleSitesPageSingleInput(t *testing.T) {
+	a := twoPointApp(t)
+	a.setSimpleMode(true)
+	a.tab = 3
+	texts, _ := frames(t, a, 1120, 780)
+	if got := strings.Count(texts, "内网地址"); got != 1 {
+		t.Errorf("内网地址输入框应当只有 1 个，实际 %d；texts = %s", got, texts)
+	}
+	// 磁贴按接入点分组时要能看出归属。
+	if !strings.Contains(texts, "公司主网关") || !strings.Contains(texts, "办公网线路") {
+		t.Errorf("磁贴分组应当标出接入点名；texts = %s", texts)
 	}
 }
 

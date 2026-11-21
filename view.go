@@ -518,8 +518,12 @@ func (a *app) appDetailView(c *ui.Context) {
 }
 
 func (a *app) proxyFor(pointID string) string {
-	if p := a.cfg.Find(pointID); p != nil && p.SocksPort > 0 {
-		return displayAddr(net.JoinHostPort(a.cfg.Settings.ListenHost, strconv.Itoa(p.SocksPort)))
+	// 简单模式只有统一入口这一个代理地址：每点端口不再参与，但也不去改它
+	// （改 SocksPort 会让 Manager 重建在线的隧道）。
+	if !a.simpleMode() {
+		if p := a.cfg.Find(pointID); p != nil && p.SocksPort > 0 {
+			return displayAddr(net.JoinHostPort(a.cfg.Settings.ListenHost, strconv.Itoa(p.SocksPort)))
+		}
 	}
 	if agg := a.mgr.Aggregate(); agg.Running && agg.Addr != "" {
 		return displayAddr(agg.Addr)
@@ -1108,12 +1112,18 @@ func (a *app) statusBanner(c *ui.Context, views []vpn.View) {
 
 // recentFailures 把最近几条失败放到首屏卡片下面：首屏下半屏不再空着，
 // 需要处理的事一看就能去日志里查。
+//
+// 日志入口按模式走：简单模式没有「访问日志」页，落到设置页的日志分区，
+// 否则会跳到一个导航里不存在的页面。
 func (a *app) recentFailures(c *ui.Context) {
+	if a.simpleMode() {
+		a.recentFailuresFor(c, func() { a.openSettingsAt(settingLogs) })
+		return
+	}
 	a.recentFailuresFor(c, func() { a.tab = 2 })
 }
 
-// recentFailuresFor 是同一块面板的可换动作版本：简单模式没有「访问日志」页，
-// 那个入口落到设置页的日志分区。
+// recentFailuresFor 是同一块面板的可换动作版本。
 func (a *app) recentFailuresFor(c *ui.Context, onOpen func()) {
 	t := c.Theme()
 	var fails []vpn.LogEntry
@@ -1205,7 +1215,7 @@ func (a *app) pointCard(c *ui.Context, v vpn.View) {
 			})
 			a.stateBadge(c, v.State)
 		})
-		if sub := subtitleOf(v); sub != "" {
+		if sub := a.subtitleOf(v); sub != "" {
 			ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted).Ellipsis("…")
 		}
 
@@ -1213,7 +1223,7 @@ func (a *app) pointCard(c *ui.Context, v vpn.View) {
 			if v.ClientIP != "" {
 				meta(c, t, "隧道 IP", v.ClientIP)
 			}
-			if v.SocksPort > 0 {
+			if v.SocksPort > 0 && !a.simpleMode() {
 				addr := "127.0.0.1:" + strconv.Itoa(v.SocksPort)
 				socks := "socks5://" + addr
 				metaCopy(c, t, "HTTP / SOCKS5", addr, "复制独立 SOCKS5 地址",
@@ -1553,7 +1563,7 @@ func addrOf(v vpn.View) string {
 	return model.FormatAccessAddress(v.Server, v.Port)
 }
 
-func subtitleOf(v vpn.View) string {
+func (a *app) subtitleOf(v vpn.View) string {
 	parts := []string{}
 	switch model.AuthMode(v.AuthMode) {
 	case model.AuthModeAuto:
@@ -1571,10 +1581,13 @@ func subtitleOf(v vpn.View) string {
 			parts = append(parts, user)
 		}
 	}
-	if v.SocksPort > 0 {
-		parts = append(parts, "SOCKS5 :"+strconv.Itoa(v.SocksPort))
-	} else {
-		parts = append(parts, "仅统一入口")
+	// 简单模式只有一个代理地址，独立端口连提都不用提。
+	if !a.simpleMode() {
+		if v.SocksPort > 0 {
+			parts = append(parts, "SOCKS5 :"+strconv.Itoa(v.SocksPort))
+		} else {
+			parts = append(parts, "仅统一入口")
+		}
 	}
 	if v.AutoConnect {
 		parts = append(parts, "启动时自动登录")
@@ -1978,8 +1991,8 @@ func (a *app) simpleModeField(c *ui.Context) {
 			}
 		}
 	})
-	ui.Text(c, "简单模式只显示一个接入点、一个网址输入框；监听地址、端口、"+
-		"健康检查、分流这些项收起来，按默认值跑。").
+	ui.Text(c, "简单模式把首屏收成一张卡和一个网址输入框（接入点多于一个时仍列成清单）；"+
+		"监听地址、端口、健康检查、分流这些项收起来，按默认值跑。").
 		FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
 }
 

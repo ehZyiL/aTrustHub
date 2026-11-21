@@ -28,16 +28,6 @@ func (a *app) pages() []pageRef {
 	}
 }
 
-// pageNavLabels 是导航里出现的文案，顺序与 ⌘1–⌘n 一致。
-func pageNavLabels(a *app) []string {
-	refs := a.pages()
-	labels := make([]string, 0, len(refs))
-	for _, ref := range refs {
-		labels = append(labels, ref.Label)
-	}
-	return labels
-}
-
 // clampTab 把 a.tab 收敛到当前模式下存在的页面：切进简单模式时
 // 「访问日志」那一页会消失，留着它就会渲染一个导航里没有的页面。
 func (a *app) clampTab() {

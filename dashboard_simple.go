@@ -32,18 +32,16 @@ func (a *app) setSimpleMode(on bool) {
 			a.cfg.ConvergeSimple()
 		}
 		a.settings.simpleMode = on
+		a.settings.aggregate = a.cfg.Settings.AggregateEnabled
 		a.clampTab()
 		return
 	}
 	if _, err := a.store.Update(func(cfg *model.Config) error {
 		cfg.Settings.SimpleMode = on
 		if on {
-			// Normalize 里的 EnsurePorts 也会收敛，这里写明意图：
-			// 进简单模式就只剩一个代理地址。
+			// 只收敛「参与统一入口」与「开启统一入口」。改每点端口会让 Manager
+			// 重建在线的隧道（见 ConvergeSimple 的注释），退出时也不用还原。
 			cfg.ConvergeSimple()
-		} else {
-			// 退出时把独立端口补回来：完整模式下它们本来就有。
-			cfg.RestorePorts()
 		}
 		return nil
 	}); err != nil {
@@ -56,15 +54,10 @@ func (a *app) setSimpleMode(on bool) {
 		a.setToast("保存简单模式失败：" + err.Error())
 		return
 	}
-	// 收敛改了配置里的好几个字段：设置页的草稿要重新读一遍，
-	// 否则 dirty 比对会跟收敛结果顶牛，每帧都落一次盘。
-	if a.settings.open {
-		section := a.settings.section
-		a.openSettings()
-		a.settings.section = section
-	} else {
-		a.settings.simpleMode = on
-	}
+	// 收敛只动了 AggregateEnabled：同步草稿里这一项，别让 dirty 比对跟它顶牛。
+	// 其余草稿保持原样——整份重读会把用户刚看到的校验错误抹掉。
+	a.settings.simpleMode = on
+	a.settings.aggregate = a.cfg.Settings.AggregateEnabled
 	a.clampTab()
 	a.invalidate()
 }
@@ -115,8 +108,8 @@ func (a *app) simpleSiteTiles(v vpn.View) []siteTile {
 	return tiles
 }
 
-// openSiteInProxyBrowser 用这个接入点的代理打开地址：代理地址从 proxyFor 来，
-// 简单模式下它一律是统一入口（Config.ConvergeSimple 把独立端口清零了）。
+// openSiteInProxyBrowser 用这个接入点的代理打开地址。简单模式下 proxyFor 一律
+// 回统一入口（每点端口被忽略），所以用户只需要知道一个地址。
 func (a *app) openSiteInProxyBrowser(v vpn.View, url string) {
 	proxy := a.proxyFor(v.ID)
 	if proxy == "" {
@@ -141,8 +134,8 @@ func (a *app) simpleHome(c *ui.Context, v vpn.View) {
 			ui.Column(c).Gap(12).Children(func() {
 				a.simpleHero(c, v)
 				a.simpleSites(c, v)
-				// 护栏：失败在首屏就能看到，入口落到设置页的日志分区。
-				a.recentFailuresFor(c, func() { a.openSettingsAt(settingLogs) })
+				// 护栏：失败在首屏就能看到，日志入口跟着模式走。
+				a.recentFailures(c)
 			})
 		})
 	})
@@ -271,47 +264,68 @@ func (a *app) simpleCaptureRow(c *ui.Context) {
 	})
 }
 
-// simpleSites 是「打开内网网站」：一个地址输入框 + 现成的磁贴。
-func (a *app) simpleSites(c *ui.Context, v vpn.View) {
+// siteHeading 是「打开内网网站」的小标题；name 非空时补上接入点名，
+// 多接入点的「内网网站」页靠它区分磁贴属于谁。
+func siteHeading(c *ui.Context, name string) {
+	t := c.Theme()
+	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+		ui.Text(c, "打开内网网站").FontSize(13).Bold()
+		if name != "" {
+			ui.Text(c, name).FontSize(10).TextColor(t.TextMuted)
+		}
+		ui.Text(c, "填个网址，用代理浏览器打开").FontSize(10).TextColor(t.TextMuted)
+	})
+}
+
+// siteAddressField 是那个「填个网址」的输入框与按钮。它全程只有一份：
+// 输入框绑定 a.siteURL，多接入点时共用，不能每个接入点各画一个。
+func (a *app) siteAddressField(c *ui.Context, open func()) {
+	ui.Row(c).Gap(8).AlignItems(ui.End).Children(func() {
+		ui.Field(c, "内网地址", func() {
+			e := ui.TextInput(c, &a.siteURL).Placeholder("oa.corp.example").Width(300)
+			if e.Submitted() {
+				open()
+			}
+		})
+		if ui.PrimaryButton(c, "用代理浏览器打开").FontSize(11).Clicked() {
+			open()
+		}
+	})
+}
+
+// siteTiles 画这个接入点的磁贴；没有可打开地址时给一句说明。
+func (a *app) siteTiles(c *ui.Context, v vpn.View) {
 	t := c.Theme()
 	tiles := a.simpleSiteTiles(v)
-	ui.Column(c).Gap(8).Children(func() {
-		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-			ui.Text(c, "打开内网网站").FontSize(13).Bold()
-			ui.Text(c, "填个网址，用代理浏览器打开").FontSize(10).TextColor(t.TextMuted)
-		})
-		ui.Row(c).Gap(8).AlignItems(ui.End).Children(func() {
-			ui.Field(c, "内网地址", func() {
-				e := ui.TextInput(c, &a.siteURL).Placeholder("oa.corp.example").Width(300)
-				if e.Submitted() {
-					a.openTypedSite(v)
-				}
+	if len(tiles) == 0 {
+		ui.Text(c, "登录之后，网关上能直接打开的地址会出现在这里。").FontSize(11).
+			TextColor(t.TextMuted)
+		return
+	}
+	ui.Row(c).Gap(8).Wrap().Children(func() {
+		for _, tile := range tiles {
+			it := tile
+			card := ui.Column(c).Width(220).Padding(10, 12).Radius(12).Gap(3).
+				Background(t.Surface).Border(1, t.Border)
+			card.OnClick(func() {
+				a.openSiteInProxyBrowser(v, it.URL)
+				a.invalidate()
 			})
-			if ui.PrimaryButton(c, "用代理浏览器打开").FontSize(11).Clicked() {
-				a.openTypedSite(v)
-			}
-		})
-		if len(tiles) == 0 {
-			ui.Text(c, "登录之后，网关上能直接打开的地址会出现在这里。").FontSize(11).
-				TextColor(t.TextMuted)
-			return
+			card.Children(func() {
+				ui.Text(c, it.Name).FontSize(13).Bold().Ellipsis("…")
+				ui.Text(c, it.URL).Font("monospace").FontSize(10).
+					TextColor(t.TextMuted).Ellipsis("…")
+			})
 		}
-		ui.Row(c).Gap(8).Wrap().Children(func() {
-			for _, tile := range tiles {
-				it := tile
-				card := ui.Column(c).Width(220).Padding(10, 12).Radius(12).Gap(3).
-					Background(t.Surface).Border(1, t.Border)
-				card.OnClick(func() {
-					a.openSiteInProxyBrowser(v, it.URL)
-					a.invalidate()
-				})
-				card.Children(func() {
-					ui.Text(c, it.Name).FontSize(13).Bold().Ellipsis("…")
-					ui.Text(c, it.URL).Font("monospace").FontSize(10).
-						TextColor(t.TextMuted).Ellipsis("…")
-				})
-			}
-		})
+	})
+}
+
+// simpleSites 是简单模式首屏的「打开内网网站」：一个输入框 + 这个接入点的磁贴。
+func (a *app) simpleSites(c *ui.Context, v vpn.View) {
+	ui.Column(c).Gap(8).Children(func() {
+		siteHeading(c, "")
+		a.siteAddressField(c, func() { a.openTypedSite(v) })
+		a.siteTiles(c, v)
 	})
 }
 
@@ -325,7 +339,7 @@ func (a *app) openTypedSite(v vpn.View) {
 	a.openSiteInProxyBrowser(v, target)
 }
 
-// sitesPage 是简单模式下的「内网网站」页：同样的输入框与磁贴，按接入点铺开。
+// sitesPage 是简单模式下的「内网网站」页：输入框只有一份，磁贴按接入点分组。
 func (a *app) sitesPage(c *ui.Context) {
 	t := c.Theme()
 	views := a.mgr.Views()
@@ -342,8 +356,18 @@ func (a *app) sitesPage(c *ui.Context) {
 						TextColor(t.TextMuted)
 					return
 				}
-				for _, v := range views {
-					a.simpleSites(c, v)
+				// 输入框按「优先在线的接入点」打开：用户填的地址总得挑一条隧道走。
+				a.siteAddressField(c, func() { a.openTypedSite(primaryView(views)) })
+				if len(views) == 1 {
+					a.siteTiles(c, views[0])
+				} else {
+					for _, v := range views {
+						point := v
+						ui.Column(c).Gap(6).Children(func() {
+							siteHeading(c, point.Name)
+							a.siteTiles(c, point)
+						})
+					}
 				}
 				ui.Text(c, "需要端口转发或接管某个软件？在设置里关掉简单模式，"+
 					"「本机软件」页就回来了。").FontSize(11).TextColor(t.TextMuted).
@@ -351,4 +375,18 @@ func (a *app) sitesPage(c *ui.Context) {
 			})
 		})
 	})
+}
+
+// primaryView 挑一个默认用它打开网址的接入点：在线优先，其次第一个。
+// 空切片时返回零值，proxyFor 会回统一入口，拿不到就给「先登录」的提示。
+func primaryView(views []vpn.View) vpn.View {
+	for _, v := range views {
+		if v.State == vpn.StateOnline {
+			return v
+		}
+	}
+	if len(views) > 0 {
+		return views[0]
+	}
+	return vpn.View{}
 }

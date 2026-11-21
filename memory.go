@@ -133,13 +133,22 @@ func (a *app) maybeTrimMemory() {
 }
 
 // trimMemory 是真正的修剪：先让 Go 回收，再让系统把工作集换出去。
+// 日志里带上修剪前后的常驻内存，因为“省了多少”是用户真正关心的事，
+// 而 Linux 上 trimWorkingSet 是空实现（靠 FreeOSMemory 自己归运）。
 func (a *app) trimMemory() {
 	if a.trimMemoryFn != nil {
 		a.trimMemoryFn()
 		return
 	}
+	before := residentBytes()
 	runtime.GC()
 	debug.FreeOSMemory()
 	trimWorkingSet()
+	after := residentBytes()
+	if before > 0 && after > 0 {
+		a.tunLogf("窗口不在前台 %s 且无流量，已修剪工作集：常驻 %.1f MB → %.1f MB",
+			trimHiddenFor, float64(before)/(1<<20), float64(after)/(1<<20))
+		return
+	}
 	a.tunLogf("窗口不在前台 %s 且无流量，已修剪工作集", trimHiddenFor)
 }

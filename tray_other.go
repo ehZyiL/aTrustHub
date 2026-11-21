@@ -1,4 +1,4 @@
-//go:build !windows && !darwin
+//go:build !windows && !darwin && !linux
 
 package main
 
@@ -8,7 +8,7 @@ func (a *app) setupTray() {}
 // supportsDockToggle reports whether the Dock icon can be hidden here.
 func supportsDockToggle() bool { return false }
 
-// startupTray does nothing outside Windows.
+// startupTray does nothing outside Windows and Linux.
 func (a *app) startupTray() {}
 
 // updateDockVisibility does nothing outside macOS.

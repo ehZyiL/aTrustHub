@@ -194,9 +194,8 @@ type app struct {
 	// 只由 OnClose / showWindow 两处置位，view() 在主线程上用框架的
 	// IsVisible() 校正一次，避免两边说法不一致。
 	windowHidden atomic.Bool
-	// minimized 是第二个门控信号：窗口最小化（Linux 上就是后台常驻的
-	// 手段，因为没有托盘）。它与 windowHidden 区分开，
-	// 因为最小化的窗口 IsVisible() 仍为 true，不能用它来校正。
+	// minimized 是第二个门控信号：窗口最小化到任务栏也算不可见。
+	// 它与 windowHidden 区分开，因为最小化的窗口 IsVisible() 仍为 true。
 	minimized atomic.Bool
 	// hiddenSince 等字段收在 idleState 里：它被 UI 线程与 1 秒 ticker 同时访问，
 	// 自带锁，外部不直接碰字段。
@@ -601,7 +600,7 @@ func (a *app) createWindow() {
 	// Closing the window hides it instead of quitting: tunnels, TUN and the
 	// tray/menu bar icon stay alive. Only 退出 really quits.
 	// 窗口生命周期与重绘门控绑在一起：藏进托盘或最小化都停止重绘，
-	// 回到前台/还原时补一帧。Linux 没有托盘，最小化就是那里的后台常驻。
+	// 回到前台/还原时补一帧。
 	a.win.OnMinimize(a.onWindowMinimized)
 	a.win.OnRestore(a.onWindowRestored)
 	a.win.OnClose(func(e *mygo.CloseEvent) {
@@ -609,8 +608,15 @@ func (a *app) createWindow() {
 		if a.quitRequested {
 			return
 		}
-		// 三种习惯（Linux 退出 / macOS 隐藏 / Windows 可配）统一在这里决定。
-		switch closeActionFor(runtime.GOOS, a.cfg.Settings.QuitOnClose, a.hasActiveWork()) {
+		// 托盘可能在上次启动时没建起来（图标缺失、扩展刚装上），关窗前
+		// 在 Linux 上再试一次；建不起来就按「关窗即退出」处理。
+		// macOS 不走这条路：它的菜单栏图标只在隐藏 Dock 图标时才建，
+		// 由 hideToTray → updateDockVisibility 自己决定。
+		if runtime.GOOS == "linux" {
+			a.setupTray()
+		}
+		// 三种习惯（Linux/Windows 可配 / macOS 隐藏）统一在这里决定。
+		switch closeActionFor(runtime.GOOS, a.cfg.Settings.QuitOnClose, a.hasActiveWork(), a.tray != nil) {
 		case closeQuit:
 			a.quitRequested = true
 			a.shutdown()

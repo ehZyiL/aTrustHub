@@ -1978,10 +1978,10 @@ func (a *app) generalSection(c *ui.Context) {
 				a.applySettingsIfChanged()
 			}
 		}
-		// 「关闭窗口时退出程序」只在 Windows 有，并进同一个勾选区。
+		// 「关闭窗口时退出程序」只在 Linux/Windows 有，并进同一个勾选区。
 		a.quitOnCloseSwitch(c)
 	})
-	if supportsQuitOnClose() {
+	if a.quitOnCloseSupported() {
 		ui.Text(c, quitOnCloseHint()).FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
 	}
 	ui.Text(c, "监听 127.0.0.1 只有本机能用；要让局域网里的设备用，"+

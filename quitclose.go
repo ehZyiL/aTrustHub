@@ -4,7 +4,9 @@ import "github.com/egoist/mygo/ui"
 
 // 「关闭窗口」这件事在三套习惯里不一样，这里把决策提成纯函数，
 // 免得平台分支散落在窗口回调里：
-//   - Linux：关闭即退出（一直是这个语义，不做变更）；
+//   - Linux：藏进系统托盘（和 Windows 一样，后台继续跑）；只有真的没
+//     托盘——缺 libayatana-appindicator3，或面板没有 StatusNotifierWatcher
+//     ——才退回「关闭即退出」，免得留下找不到界面的进程；
 //   - macOS：关闭即隐藏，Dock 图标还在（平台习惯）；
 //   - Windows：默认隐藏到托盘，用户勾了「关闭主窗口时退出程序」才退出；
 //     此时若还有在线连接 / TUN / 系统代理 / 运行中的本机项目，先确认一次。
@@ -19,11 +21,20 @@ const (
 	closeConfirm
 )
 
-// closeActionFor 是纯决策：给平台、设置与「是否有活动」就能得出动作。
-func closeActionFor(goos string, quitOnClose, hasActive bool) closeAction {
+// closeActionFor 是纯决策：给平台、设置、是否有活动、有没有托盘就能得出动作。
+func closeActionFor(goos string, quitOnClose, hasActive, trayOK bool) closeAction {
 	switch goos {
 	case "linux":
-		// 保持原有语义：Linux 上关窗就是退出。
+		if !trayOK {
+			// 没有回收入口：关窗就是退出，不留后台。
+			return closeQuit
+		}
+		if !quitOnClose {
+			return closeHide
+		}
+		if hasActive {
+			return closeConfirm
+		}
 		return closeQuit
 	case "windows":
 		if !quitOnClose {
@@ -39,9 +50,15 @@ func closeActionFor(goos string, quitOnClose, hasActive bool) closeAction {
 	}
 }
 
-// supportsQuitOnClose 决定设置里是否显示这个开关：只有 Windows 有意义。
+// supportsQuitOnClose 决定这个设置项在平台上是否说得通。
 func supportsQuitOnClose() bool {
 	return supportsQuitOnClosePlatform()
+}
+
+// quitOnCloseSupported 还要求真的能藏进托盘：Linux 上没有托盘就只能退出，
+// 此时不该给用户一个说着「隐藏到托盘」的开关。
+func (a *app) quitOnCloseSupported() bool {
+	return supportsQuitOnClose() && a.tray != nil
 }
 
 // quitOnCloseHint 是设置项下面的那句说明。
@@ -69,7 +86,7 @@ func (a *app) hasActiveWork() bool {
 
 // quitOnCloseSwitch 把开关并进通用面板现有的勾选区。
 func (a *app) quitOnCloseSwitch(c *ui.Context) {
-	if !supportsQuitOnClose() {
+	if !a.quitOnCloseSupported() {
 		return
 	}
 	d := &a.settings

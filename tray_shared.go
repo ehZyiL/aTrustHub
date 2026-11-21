@@ -42,7 +42,11 @@ func loadAppIconPNG() []byte {
 	}
 	var paths []string
 	if dir, err := mygo.App.Path(mygo.PathResources); err == nil && dir != "" {
-		paths = append(paths, filepath.Join(dir, "icon.png"))
+		// PathResources 在 Linux 上就是可执行文件所在目录，而打包把图标放在
+		// 其下的 resources/，两个位置都试。
+		paths = append(paths,
+			filepath.Join(dir, "icon.png"),
+			filepath.Join(dir, "resources", "icon.png"))
 	}
 	paths = append(paths, filepath.Join("resources", "icon.png"))
 	for _, path := range paths {

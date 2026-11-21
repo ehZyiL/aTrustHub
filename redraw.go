@@ -174,8 +174,7 @@ func (a *app) invalidateLogSlow() {
 }
 
 // windowVisible 是门控信号：藏进托盘、或最小化到任务栏，都算不可见。
-// 最小化在 Linux 上是唯一的「后台常驻」手段——那里没有托盘，
-// 关窗只能退出，所以把挂起渲染绑定到最小化。
+// 两条路都通：有托盘时可以关窗常驻，最小化则是不想离开窗口管理器时的做法。
 func (a *app) windowVisible() bool {
 	return !a.windowHidden.Load() && !a.minimized.Load()
 }

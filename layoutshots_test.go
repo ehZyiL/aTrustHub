@@ -76,6 +76,12 @@ func TestLayoutShots(t *testing.T) {
 	shot("20-settings-about", 0, false, 1120, 780)
 	a.settings.open = false
 
+	// 接管胶囊展开的样子：就地切换不进设置页，也留一条进设置的深链接。
+	a.captureMenuOpen = true
+	shot("21-capture-menu", 0, false, 1120, 780)
+	shot("22-capture-menu-dark", 0, true, 1120, 780)
+	a.captureMenuOpen = false
+
 	if apps := a.allApps(); len(apps) > 0 {
 		a.openAppDetail(apps[0])
 		shot("13-dialog-app-detail", 1, false, 1120, 780)

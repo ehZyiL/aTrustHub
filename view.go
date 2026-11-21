@@ -691,9 +691,8 @@ var gearIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stro
 
 // toolbar 是窗口顶部唯一的操作栏：品牌、页面导航、网络状态、设置与主操作全在一行。
 // 全局 TUN / 系统代理这类开关不再堆在这里，而是放进设置页的「网络」分组，
-// 顶栏只保留一个能看出当前接管方式的状态入口。
+// 顶栏只保留一个能看出当前接管方式、又能就地切换的入口。
 func (a *app) toolbar(c *ui.Context) {
-	t := c.Theme()
 	ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
 		if a.icon != nil {
 			ui.Image(c, a.icon).Size(24, 24)
@@ -701,36 +700,12 @@ func (a *app) toolbar(c *ui.Context) {
 		ui.Text(c, appName).FontSize(15).Bold()
 		ui.Row(c).Grow(1)
 		a.pageNav(c)
-		chip := ui.Row(c).Padding(4, 10).Radius(8).Background(t.Surface).
-			Border(1, t.Border).AlignItems(ui.Center).Gap(6).
-			OnClick(func() { a.openSettingsAt(settingNetwork) }).
-			Tooltip("网络与接管设置")
-		chip.Children(func() {
-			colour := t.TextMuted
-			if online, _, _ := a.mgr.Counts(); online > 0 {
-				colour = t.Success
-			}
-			ui.Row(c).Size(6, 6).Radius(3).Background(colour)
-			ui.Text(c, a.networkSummary()).FontSize(11).TextColor(t.TextMuted)
-		})
+		a.captureChip(c)
 		iconButton(c, gearIcon, "设置", func() { a.openSettingsAt(a.settings.section) })
 		if ui.PrimaryButton(c, "＋ 接入点").Label("＋ 添加接入点").FontSize(11).Clicked() {
 			a.openNewEditor()
 		}
 	})
-}
-
-// networkSummary 是顶栏那个状态入口上的一句话：先报接管方式，再报在线数。
-func (a *app) networkSummary() string {
-	switch {
-	case a.resourceTUNActive():
-		return "系统接管"
-	case a.tunOn:
-		return "全局 TUN"
-	case a.sysProxyOn:
-		return "系统代理"
-	}
-	return a.describeProgress()
 }
 
 // 接管方式的四个档位。系统代理、全局 TUN 与应用接管互斥，所以做成一个下拉。

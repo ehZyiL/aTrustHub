@@ -55,6 +55,8 @@ type app struct {
 	localDelete  string
 	// localQuery filters the project list by name, target or access point.
 	localQuery string
+	// captureMenuOpen 是顶栏接管胶囊的下拉是否展开。
+	captureMenuOpen bool
 	// localCollapsed remembers which access points' project groups are folded
 	// (true = folded). A group starts out open.
 	localCollapsed map[string]bool

@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || windows
 
 package main
 
@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// /proc/self/statm 读得到，常驻内存才算得出来；读不到只能退回不带数字的日志。
-func TestResidentBytesReadsProc(t *testing.T) {
+// Linux 读取 /proc/self/statm，Windows 调用 GetProcessMemoryInfo；读得到，常驻内存才算得出来。
+func TestResidentBytesReturnsPositive(t *testing.T) {
 	if got := residentBytes(); got <= 0 {
 		t.Fatalf("residentBytes() = %d，应当读到本进程的常驻内存", got)
 	}

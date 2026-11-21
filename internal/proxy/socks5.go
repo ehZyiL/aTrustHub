@@ -471,6 +471,13 @@ func (s *Server) reply(conn net.Conn, code byte) error {
 // A write half-close preserves response bytes after the request reaches EOF.
 func Relay(a, b net.Conn) { pipe(a, b) }
 
+var copyBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 16*1024)
+		return &b
+	},
+}
+
 // pipe copies both ways until both directions finish. A write half-close
 // lets the peer see the end of the request or the response without cutting
 // the other direction short.
@@ -479,12 +486,16 @@ func pipe(a, b net.Conn) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(b, a)
+		buf := copyBufPool.Get().(*[]byte)
+		defer copyBufPool.Put(buf)
+		_, _ = io.CopyBuffer(b, a, *buf)
 		closeWrite(b)
 	}()
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(a, b)
+		buf := copyBufPool.Get().(*[]byte)
+		defer copyBufPool.Put(buf)
+		_, _ = io.CopyBuffer(a, b, *buf)
 		closeWrite(a)
 	}()
 	wg.Wait()

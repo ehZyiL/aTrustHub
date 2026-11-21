@@ -16,7 +16,7 @@ import (
 // 下次唤醒要重新缺页读回来；隐藏一两秒就做，等于给自己制造卡顿。
 const (
 	// memoryLimitBytes 是 Go runtime 的软内存上限。
-	memoryLimitBytes = 384 << 20
+	memoryLimitBytes = 128 << 20
 	// trimHiddenFor 是「藏得够久」的阈值。
 	trimHiddenFor = 30 * time.Second
 	// trimIdleFor 是「没有流量」的阈值。
@@ -144,6 +144,9 @@ func (a *app) trimMemory() {
 	runtime.GC()
 	debug.FreeOSMemory()
 	trimWorkingSet()
+	if a.mgr != nil {
+		a.mgr.TrimSessions()
+	}
 	after := residentBytes()
 	if before > 0 && after > 0 {
 		a.tunLogf("窗口不在前台 %s 且无流量，已修剪工作集：常驻 %.1f MB → %.1f MB",

@@ -58,13 +58,25 @@ func (s *Stack) Start() error {
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol, icmp.NewProtocol4},
 	})
-	s.link = channel.New(1024, MTU, "")
+	s.link = channel.New(256, MTU, "")
 	if err := s.stack.CreateNIC(1, s.link); err != nil {
 		s.stack.Close()
 		s.link.Close()
 		return errors.New(err.String())
 	}
 	s.stack.SetRouteTable([]tcpip.Route{{Destination: header.IPv4EmptySubnet, NIC: 1}})
+	rcvOpt := tcpip.TCPReceiveBufferSizeRangeOption{
+		Min:     4096,
+		Default: 32768,
+		Max:     262144,
+	}
+	s.stack.SetTransportProtocolOption(tcp.ProtocolNumber, &rcvOpt)
+	sndOpt := tcpip.TCPSendBufferSizeRangeOption{
+		Min:     4096,
+		Default: 32768,
+		Max:     262144,
+	}
+	s.stack.SetTransportProtocolOption(tcp.ProtocolNumber, &sndOpt)
 	if err := s.stack.SetSpoofing(1, true); err != nil {
 		s.stack.Close()
 		s.link.Close()

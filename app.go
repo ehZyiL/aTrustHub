@@ -283,9 +283,9 @@ type settingsDraft struct {
 }
 
 func main() {
-	// 软内存上限：异常情况下不让进程把机器吃穿。GOGC 保持默认 100——
-	// 调低 GC 百分比换来的是更频繁的 GC，与「省 CPU」相悖。
+	// 软内存上限：将异常膨胀线设为 128MB，GOGC 适度设为 80，兼顾 CPU 调度与堆常驻规模。
 	debug.SetMemoryLimit(memoryLimitBytes)
+	debug.SetGCPercent(80)
 	if runCaptureLauncher() {
 		return
 	}

@@ -1921,3 +1921,23 @@ func (m *Manager) TestDialTimeout(id, network, addr string, timeout time.Duratio
 	_ = conn.Close()
 	return time.Since(start), nil
 }
+
+// TrimSessions asks all active worker sessions to trim their working set and run GC.
+func (m *Manager) TrimSessions() {
+	m.mu.RLock()
+	var sessions []Session
+	for _, ep := range m.points {
+		if ep != nil && ep.sess != nil {
+			sessions = append(sessions, ep.sess)
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, s := range sessions {
+		if trimmer, ok := s.(interface{ TrimMemory() error }); ok {
+			go func(t interface{ TrimMemory() error }) {
+				_ = t.TrimMemory()
+			}(trimmer)
+		}
+	}
+}

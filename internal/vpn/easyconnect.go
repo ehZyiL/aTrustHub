@@ -409,6 +409,13 @@ func (s *processSession) SupportsStrictUDP() bool {
 	f := s.flows.Load()
 	return f != nil && f.strictUDP
 }
+
+func (s *processSession) TrimMemory() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return s.send(ctx, workeripc.Message{Type: "trim_memory"})
+}
+
 func (s *processSession) Close() error {
 	s.closeOnce.Do(func() {
 		close(s.stopping)

@@ -11,9 +11,7 @@ type platformCaptureSetup struct{ controller *capture.HelperSetup }
 func (a *app) captureSetupView(c *ui.Context) {
 	if a.captureUI.controller == nil {
 		a.captureUI.controller = capture.NewHelperSetup(func() {
-			if a.win != nil {
-				a.win.Invalidate()
-			}
+			a.invalidateCoalesced()
 		})
 		a.captureUI.controller.Check()
 	}

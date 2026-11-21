@@ -183,6 +183,18 @@ type app struct {
 	// loginSem holds the one WeCom login window; see externalLogin.
 	loginSem chan struct{}
 
+	// windowHidden 是重绘门控信号：窗口藏在托盘时为 true。
+	// 只由 OnClose / showWindow 两处置位，view() 在主线程上用框架的
+	// IsVisible() 校正一次，避免两边说法不一致。
+	windowHidden atomic.Bool
+	// hiddenSince 记录这次隐藏的开始时间，工作集修剪要看它。
+	hiddenSince time.Time
+
+	// redrawOnce 惰性建两档重绘调度器；测试里的 app 没走 newApp。
+	redrawOnce sync.Once
+	redrawFast *redrawScheduler
+	redrawSlow *redrawScheduler
+
 	shutdownOnce sync.Once
 }
 
@@ -345,9 +357,9 @@ func newApp() (*app, error) {
 	}
 	a.cfg = st.Config()
 	a.local = localapps.NewManager(func() {
-		if a.win != nil {
-			a.win.Invalidate()
-		}
+		// 本机项目的流量通知最多 250ms 一次，属事件源：合并后再画，
+		// 且要经门控——不能让托盘里的窗口因流量重建整树。
+		a.invalidateCoalesced()
 	}, a.logLocalAccess)
 	a.local.SetErrorHandler(a.logLocalAppError)
 	a.sysProxyOn = systemProxyOwned(a.systemProxyAddress())
@@ -360,7 +372,8 @@ func newApp() (*app, error) {
 		}),
 		a.credentials,
 		a.bus,
-		a.invalidate,
+		// 接入点状态变化也是事件源：合并到 33ms 一帧，交互路径另走即时。
+		a.invalidateCoalesced,
 	)
 	a.mgr.Apply(a.cfg)
 	a.setupResourceTUN()
@@ -481,6 +494,10 @@ func (a *app) start() {
 		}
 	}
 
+	// 状态机独立于重绘：每秒推进一次 TUN / 代理保活与流量计时，
+	// 窗口藏在托盘时也照跑，只是不画。
+	go a.startStateTicker()
+
 	// A slow tick makes TUN follow the online set even when no log line or
 	// click happens to trigger a repaint.
 	go func() {
@@ -568,8 +585,7 @@ func (a *app) createWindow() {
 			return
 		}
 		e.PreventDefault()
-		a.win.Hide()
-		a.updateDockVisibility(true)
+		a.hideToTray()
 	})
 	// A window on screen means a Dock icon, whatever the closing behaviour is.
 	a.updateDockVisibility(false)
@@ -610,13 +626,8 @@ func (a *app) shutdown() {
 	})
 }
 
-func (a *app) invalidate() {
-	if a.win != nil {
-		a.win.Invalidate()
-	}
-	a.maybeResumeTUN()
-	a.maybeRefreshTUN()
-}
+// 状态机由后台 ticker 驱动（见 startStateTicker），重绘走 redraw.go：
+// invalidate 只负责「画」，不再推进任何业务状态。
 
 // maybeResumeTUN re-opens global TUN whenever the remembered switch position
 // is "on" and an access point is online again. The position is recorded when

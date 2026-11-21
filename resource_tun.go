@@ -64,9 +64,8 @@ func (a *app) setupResourceTUN() {
 			if changed && a.bus != nil {
 				a.bus.Add("app", message)
 			}
-			if a.win != nil {
-				a.win.Invalidate()
-			}
+			// 控制器每 2 秒会通知一次：走合并入口，隐藏时被门控拦住。
+			a.invalidateCoalesced()
 		}}
 }
 

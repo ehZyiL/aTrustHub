@@ -22,8 +22,6 @@ func (a *app) releaseLostSystemProxy() bool {
 	if a.bus != nil {
 		a.bus.Add("app", "系统代理已由其他软件修改或关闭，本应用已停止管理该设置")
 	}
-	if a.win != nil {
-		a.win.Invalidate()
-	}
+	a.invalidateCoalesced()
 	return true
 }

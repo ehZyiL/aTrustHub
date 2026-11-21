@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/egoist/mygo"
 )
@@ -15,19 +14,7 @@ func (a *app) showWindow() {
 		a.tunLogf("showWindow: 重建主窗口")
 		a.createWindow()
 	}
-	a.updateDockVisibility(false)
-	a.win.Show()
-	a.win.Focus()
-	// A window that was hidden needs a fresh frame: the clickable regions of
-	// an immediate-mode UI come from the last frame, and hiding may leave them
-	// empty, which makes every click look ignored.
-	a.win.Invalidate()
-	go func() {
-		time.Sleep(120 * time.Millisecond)
-		if a.win != nil {
-			a.win.Invalidate()
-		}
-	}()
+	a.showFromTray()
 }
 
 // quitFromTray quits for real, instead of hiding the window.

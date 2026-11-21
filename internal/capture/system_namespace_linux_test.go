@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qy/easyconnect/internal/netpolicy"
-	"github.com/qy/easyconnect/internal/proxy"
+	"github.com/ehZyiL/connect-hub/internal/netpolicy"
+	"github.com/ehZyiL/connect-hub/internal/proxy"
 )
 
 func TestSystemHelperTCPAndRecoveryInNamespace(t *testing.T) {

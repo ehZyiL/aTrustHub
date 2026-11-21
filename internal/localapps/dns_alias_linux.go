@@ -3,9 +3,9 @@ package localapps
 import (
 	"context"
 
-	"github.com/qy/easyconnect/internal/capture"
-	"github.com/qy/easyconnect/internal/resolved"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/capture"
+	"github.com/ehZyiL/connect-hub/internal/resolved"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 type mappedDNS struct {

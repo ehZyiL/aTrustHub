@@ -6,12 +6,12 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/qy/easyconnect/internal/dnsmapping"
+	"github.com/ehZyiL/connect-hub/internal/dnsmapping"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
-const mappingRecoveryRoot = `SOFTWARE\EasyConnectHub\MappingRetirement`
+const mappingRecoveryRoot = `SOFTWARE\ConnectHub\MappingRetirement`
 
 type mappingReservation struct {
 	Prefix  string

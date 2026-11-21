@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/qy/easyconnect/internal/vpn"
+	"github.com/ehZyiL/connect-hub/internal/vpn"
 )
 
 func TestLayoutShots(t *testing.T) {

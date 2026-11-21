@@ -4,7 +4,7 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/qy/easyconnect/internal/netpolicy"
+	"github.com/ehZyiL/connect-hub/internal/netpolicy"
 )
 
 func TestOriginalRoutePreservesTailscale(t *testing.T) {

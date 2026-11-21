@@ -17,7 +17,7 @@ func TestNRPTCompareScript(t *testing.T) {
 		t.Skip("PowerShell 7 is required for the script fixture")
 	}
 	id := strings.Repeat("a", 32)
-	const owned = "$script:rules = @((Rule 'EasyConnectHub:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' @('corp.test','.corp.test') '198.18.0.2'))\n"
+	const owned = "$script:rules = @((Rule 'ConnectHub:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' @('corp.test','.corp.test') '198.18.0.2'))\n"
 	for _, tc := range []struct {
 		name, setup, mode string
 		before, after     []string

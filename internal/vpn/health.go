@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qy/easyconnect/internal/routing"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/routing"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 // ProbeResult describes one actual check in the current session. An empty

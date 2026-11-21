@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qy/easyconnect/internal/routing"
+	"github.com/ehZyiL/connect-hub/internal/routing"
 )
 
 // BenchmarkRouteLogging isolates the access log from network and GUI work.

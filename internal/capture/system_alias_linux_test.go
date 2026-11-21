@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qy/easyconnect/internal/resolved"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/resolved"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 func TestSystemSharedAliasRequiresLiveUnusedCapability(t *testing.T) {

@@ -3,8 +3,8 @@ package localapps
 import (
 	"context"
 	"github.com/miekg/dns"
-	"github.com/qy/easyconnect/internal/model"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 	"net"
 	"reflect"
 	"testing"

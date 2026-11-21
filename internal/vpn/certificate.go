@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qy/easyconnect/internal/model"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 // ProbeGatewayCertificate observes a certificate without logging in. It shares

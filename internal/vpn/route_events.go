@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/qy/easyconnect/internal/routing"
+	"github.com/ehZyiL/connect-hub/internal/routing"
 	"net"
 	"strings"
 	"time"

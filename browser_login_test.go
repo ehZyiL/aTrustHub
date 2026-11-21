@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qy/easyconnect/internal/cdp"
+	"github.com/ehZyiL/connect-hub/internal/cdp"
 )
 
 // TestLaunchBrowserOpensDevToolsPort checks the part that broke in practice:

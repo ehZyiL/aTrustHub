@@ -13,11 +13,11 @@ import (
 // helpers could both inspect the same free alias subnet before either adds
 // its route. The lease itself is not locked: each owns its specific resources.
 func networkTransaction(ctx context.Context) (func(), error) {
-	return namedNetworkLock(ctx, `Global\EasyConnectHub-NetworkTransaction`)
+	return namedNetworkLock(ctx, `Global\ConnectHub-NetworkTransaction`)
 }
 
 func runtimeOwnership(ctx context.Context) (func(), error) {
-	return namedNetworkLock(ctx, `Global\EasyConnectHub-NetworkOwner`)
+	return namedNetworkLock(ctx, `Global\ConnectHub-NetworkOwner`)
 }
 
 func namedNetworkLock(ctx context.Context, lockName string) (func(), error) {

@@ -157,7 +157,7 @@ type watchdog struct{ handle windows.Handle }
 func (w *watchdog) Close() { _ = windows.CloseHandle(w.handle) }
 
 func startWatchdog(ctx context.Context, id string) (*watchdog, error) {
-	name, _ := windows.UTF16PtrFromString(`Local\EasyConnectHub-Recovery-` + id)
+	name, _ := windows.UTF16PtrFromString(`Local\ConnectHub-Recovery-` + id)
 	sd, err := windows.SecurityDescriptorFromString("D:P(A;;GA;;;SY)(A;;GA;;;BA)")
 	if err != nil {
 		return nil, err
@@ -236,7 +236,7 @@ func RunWatchdog(ctx context.Context, id string, expected Identity) error {
 	if err = verifyExecutable(parent, exe); err != nil {
 		return err
 	}
-	name, _ := windows.UTF16PtrFromString(`Local\EasyConnectHub-Recovery-` + id)
+	name, _ := windows.UTF16PtrFromString(`Local\ConnectHub-Recovery-` + id)
 	event, err := windows.OpenEvent(windows.EVENT_MODIFY_STATE, false, name)
 	if err != nil {
 		return err

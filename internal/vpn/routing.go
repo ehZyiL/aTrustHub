@@ -7,9 +7,9 @@ import (
 	"net"
 	"time"
 
-	"github.com/qy/easyconnect/internal/model"
-	"github.com/qy/easyconnect/internal/routing"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/routing"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 func resourceVersion(s *workeripc.ResourceSnapshot) string { return routing.Version(s) }

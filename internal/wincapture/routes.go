@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/netip"
 
-	"github.com/qy/easyconnect/internal/dnsmapping"
-	"github.com/qy/easyconnect/internal/netpolicy"
+	"github.com/ehZyiL/connect-hub/internal/dnsmapping"
+	"github.com/ehZyiL/connect-hub/internal/netpolicy"
 )
 
 type Route struct {

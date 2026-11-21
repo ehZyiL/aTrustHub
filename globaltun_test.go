@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/qy/easyconnect/internal/model"
-	"github.com/qy/easyconnect/internal/vpn"
+	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/vpn"
 	"os"
 	"path/filepath"
 	"testing"

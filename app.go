@@ -24,16 +24,16 @@ import (
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
-	"github.com/qy/easyconnect/internal/localapps"
-	"github.com/qy/easyconnect/internal/model"
-	"github.com/qy/easyconnect/internal/store"
-	"github.com/qy/easyconnect/internal/vpn"
+	"github.com/ehZyiL/connect-hub/internal/localapps"
+	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/store"
+	"github.com/ehZyiL/connect-hub/internal/vpn"
 )
 
 // version is the app's version.
 const version = "0.1.0"
 
-const appName = "EasyConnect Hub"
+const appName = "Connect Hub"
 
 // app is everything the window shows and the manager that does the work.
 // appBuild is shown in the footer and the startup log so an old running
@@ -308,7 +308,7 @@ func main() {
 
 	a, err := newApp()
 	if err != nil {
-		log.Fatalf("EasyConnect Hub: %v", err)
+		log.Fatalf("Connect Hub: %v", err)
 	}
 	// Clicking the Dock icon with the window hidden reopens it.
 	mygo.App.OnActivate(func(hasVisibleWindows bool) {
@@ -397,7 +397,7 @@ func newApp() (*app, error) {
 	a.local.SetErrorHandler(a.logLocalAppError)
 	a.sysProxyOn = systemProxyOwned(a.systemProxyAddress())
 	a.tunWanted = a.cfg.Settings.TunEnabled
-	a.bus.Add("app", fmt.Sprintf("EasyConnect Hub %s 启动，数据目录 %s", appBuild, dir))
+	a.bus.Add("app", fmt.Sprintf("Connect Hub %s 启动，数据目录 %s", appBuild, dir))
 	a.mgr = vpn.NewManager(
 		vpn.NewProtocolConnector(vpn.ZJUOptions{
 			DataDir: dir,
@@ -439,18 +439,29 @@ func loadAppIcon() ui.ImageSource {
 }
 
 func resolveDataDir() (string, error) {
-	if dir := strings.TrimSpace(os.Getenv("EASYCONNECT_HOME")); dir != "" {
+	if dir := strings.TrimSpace(os.Getenv("CONNECT_HUB_HOME")); dir != "" {
 		return dir, os.MkdirAll(dir, 0o700)
 	}
-	if dir, err := mygo.App.Path(mygo.PathUserData); err == nil && dir != "" {
+	if dir := strings.TrimSpace(os.Getenv("EASYCONNECT_HOME")); dir != "" {
 		return dir, os.MkdirAll(dir, 0o700)
 	}
 	base, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(base, "EasyConnectHub")
-	return dir, os.MkdirAll(dir, 0o700)
+	targetDir := filepath.Join(base, "connect-hub")
+	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
+		// 自动检查并迁移所有可能存在的历史旧目录（带空格或老名字）
+		for _, oldName := range []string{"EasyConnectHub", "EasyConnect Hub", "Connect Hub"} {
+			oldDir := filepath.Join(base, oldName)
+			if fi, err := os.Stat(oldDir); err == nil && fi.IsDir() {
+				if renameErr := os.Rename(oldDir, targetDir); renameErr == nil {
+					break
+				}
+			}
+		}
+	}
+	return targetDir, os.MkdirAll(targetDir, 0o700)
 }
 
 // setupMenu installs the app menu. It keeps the usual App/Edit/Window menus
@@ -508,7 +519,7 @@ func (a *app) start() {
 	// app's own log panel, with the time the bus adds, not two timestamps.
 	log.SetFlags(0)
 	a.bus.SetSink(a.logFile)
-	a.bus.Add("app", fmt.Sprintf("EasyConnect Hub %s 启动（窗口就绪），数据目录 %s", appBuild, a.dir))
+	a.bus.Add("app", fmt.Sprintf("Connect Hub %s 启动（窗口就绪），数据目录 %s", appBuild, a.dir))
 	log.SetOutput(a.bus.Writer("zju"))
 	a.bus.SetNotify(a.onLogEvent)
 	go a.tailAccessLog()

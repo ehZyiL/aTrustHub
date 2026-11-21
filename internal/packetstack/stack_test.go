@@ -19,7 +19,7 @@ import (
 	"github.com/metacubex/gvisor/pkg/tcpip/stack"
 	"github.com/metacubex/gvisor/pkg/tcpip/transport/tcp"
 	"github.com/metacubex/gvisor/pkg/tcpip/transport/udp"
-	"github.com/qy/easyconnect/internal/proxy"
+	"github.com/ehZyiL/connect-hub/internal/proxy"
 	"github.com/sagernet/sing/common/buf"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"

@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qy/easyconnect/internal/cdp"
-	"github.com/qy/easyconnect/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/cdp"
+	"github.com/ehZyiL/connect-hub/internal/model"
 )
 
 // 单点登录用真正的浏览器完成，再把「授权码」交给客户端自己去登录。

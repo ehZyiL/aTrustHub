@@ -8,10 +8,10 @@ import (
 	"net"
 	"sync"
 
-	"github.com/qy/easyconnect/internal/model"
-	"github.com/qy/easyconnect/internal/proxy"
-	"github.com/qy/easyconnect/internal/vpn"
-	"github.com/qy/easyconnect/internal/wincapture"
+	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/proxy"
+	"github.com/ehZyiL/connect-hub/internal/vpn"
+	"github.com/ehZyiL/connect-hub/internal/wincapture"
 )
 
 type captureProcess struct {

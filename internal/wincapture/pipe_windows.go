@@ -18,7 +18,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const pipePrefix = `\\.\pipe\EasyConnectHub-Capture-`
+const pipePrefix = `\\.\pipe\ConnectHub-Capture-`
 
 var consentPrompt = elevationPrompt{busy: make(chan struct{}, 1)}
 
@@ -52,7 +52,7 @@ func startHelper(ctx context.Context) (*helperTransport, error) {
 	if err != nil {
 		return nil, windowsError("定位主程序", err)
 	}
-	helper := filepath.Join(filepath.Dir(exe), "easyconnect-hub-capture.exe")
+	helper := filepath.Join(filepath.Dir(exe), "connect-hub-capture.exe")
 	if info, err := os.Stat(helper); err != nil || !info.Mode().IsRegular() {
 		return nil, errors.New("缺少 Windows 网络助手，请解压完整测试包")
 	}
@@ -212,7 +212,7 @@ func connectDesktop(ctx context.Context, id string, expected Identity) (*os.File
 	if err != nil {
 		return nil, 0, err
 	}
-	if err = verifyExecutable(parent, filepath.Join(filepath.Dir(exe), "easyconnect-hub.exe")); err != nil {
+	if err = verifyExecutable(parent, filepath.Join(filepath.Dir(exe), "connect-hub.exe")); err != nil {
 		return nil, 0, err
 	}
 	name := pipePrefix + id

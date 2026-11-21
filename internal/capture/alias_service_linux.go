@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qy/easyconnect/internal/dnsmapping"
-	"github.com/qy/easyconnect/internal/netpolicy"
-	"github.com/qy/easyconnect/internal/resolved"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/dnsmapping"
+	"github.com/ehZyiL/connect-hub/internal/netpolicy"
+	"github.com/ehZyiL/connect-hub/internal/resolved"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 type sharedAliases struct {

@@ -14,12 +14,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qy/easyconnect/internal/capture"
-	"github.com/qy/easyconnect/internal/netpolicy"
-	"github.com/qy/easyconnect/internal/proxy"
-	"github.com/qy/easyconnect/internal/splitdns"
-	"github.com/qy/easyconnect/internal/vpn"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/capture"
+	"github.com/ehZyiL/connect-hub/internal/netpolicy"
+	"github.com/ehZyiL/connect-hub/internal/proxy"
+	"github.com/ehZyiL/connect-hub/internal/splitdns"
+	"github.com/ehZyiL/connect-hub/internal/vpn"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 	xproxy "golang.org/x/net/proxy"
 )
 

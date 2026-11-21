@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/qy/easyconnect/internal/model"
-	hubproxy "github.com/qy/easyconnect/internal/proxy"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/model"
+	hubproxy "github.com/ehZyiL/connect-hub/internal/proxy"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 	"golang.org/x/net/proxy"
 )
 

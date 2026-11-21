@@ -3,8 +3,8 @@ package vpn
 import (
 	"context"
 	"errors"
-	"github.com/qy/easyconnect/internal/model"
-	"github.com/qy/easyconnect/internal/routing"
+	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/routing"
 	"net"
 	"strings"
 	"testing"

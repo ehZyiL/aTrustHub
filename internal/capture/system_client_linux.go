@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/qy/easyconnect/internal/dnsmapping"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/dnsmapping"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 // SystemLease owns a single helper connection and all its system routes.

@@ -5,7 +5,7 @@ import (
 
 	"github.com/egoist/mygo"
 
-	"github.com/qy/easyconnect/internal/store"
+	"github.com/ehZyiL/connect-hub/internal/store"
 )
 
 // keychainSecrets keeps the access points' creds in the system credential

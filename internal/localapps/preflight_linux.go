@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/qy/easyconnect/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/model"
 	"golang.org/x/sys/unix"
 )
 

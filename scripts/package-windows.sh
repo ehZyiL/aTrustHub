@@ -14,7 +14,7 @@ if [[ -n "$(git -C "$app_root" status --porcelain --untracked-files=no 2>/dev/nu
 fi
 app_build=$(sed -n 's/^const appBuild = "\(.*\)"$/\1/p' "$app_root/app.go" | head -n1)
 printf 'Packaging %s@%s%s (appBuild %s)\n' "$repo_branch" "$repo_commit" "$repo_dirty" "${app_build:-unknown}"
-diff -u --strip-trailing-cr <(sed 's/^package desktop$/package workeripc/' "$worker_root/internal/desktop/protocol.go") "$app_root/internal/workeripc/protocol.go"
+diff -u --strip-trailing-cr <(sed -e 's/\r$//' -e 's/^package desktop$/package workeripc/' "$worker_root/internal/desktop/protocol.go") <(sed 's/\r$//' "$app_root/internal/workeripc/protocol.go")
 go_tool=${GO:-go}
 target_arch=${GOARCH:-amd64}
 if [[ "$target_arch" != "amd64" ]]; then
@@ -25,8 +25,8 @@ fi
 # 供验收在普通用户 Windows 上跑。
 bundle_profile=${EASYCONNECT_BUNDLE_PROFILE:-release}
 case "$bundle_profile" in
-  release) default_bundle_name="easyconnect-hub-windows-$target_arch" ;;
-  test) default_bundle_name="easyconnect-hub-windows-$target_arch-capture" ;;
+  release) default_bundle_name="connect-hub-windows-$target_arch" ;;
+  test) default_bundle_name="connect-hub-windows-$target_arch-capture" ;;
   *)
     printf 'Invalid bundle profile: %s (use release or test)\n' "$bundle_profile" >&2
     exit 1
@@ -43,9 +43,9 @@ trap 'rm -rf -- "$bundle"' EXIT
 mkdir -p "$bundle/resources" "$bundle/LICENSES"
 
 cd "$app_root"
-env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-hub.exe" .
-env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-hub-capture.exe" ./cmd/app-helper
-helper_protocol=$("$bundle/easyconnect-hub-capture.exe" --protocol-version)
+env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/connect-hub.exe" .
+env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/connect-hub-capture.exe" ./cmd/app-helper
+helper_protocol=$("$bundle/connect-hub-capture.exe" --protocol-version)
 if [[ "$helper_protocol" != 7 ]]; then
   printf 'Windows capture helper protocol mismatch: expected 7, got %s\n' "$helper_protocol" >&2
   exit 1
@@ -75,7 +75,7 @@ install -m 0644 "$app_root/packaging/windows/Wintun-LICENSE.txt" "$bundle/LICENS
 install -m 0644 "$app_root/WINDOWS-QUICKSTART.md" "$bundle/README.md"
 install -m 0644 "$app_root/scripts/measure-tun-performance.py" "$bundle/measure-tun-performance.py"
 cat > "$bundle/COMPONENTS.txt" <<EOF
-EasyConnect Hub Windows bundle
+Connect Hub Windows bundle
 Bundle profile: $bundle_profile
 Architecture: $target_arch
 Worker IPC protocol: 6
@@ -94,8 +94,14 @@ fi
 cd "$bundle"
 find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
 python_bin=python3
-if ! command -v python3 >/dev/null 2>&1 || ! python3 -c "" 2>/dev/null; then
+if command -v python3 >/dev/null 2>&1 && python3 -c "" 2>/dev/null; then
+  python_bin=python3
+elif command -v python >/dev/null 2>&1 && python -c "" 2>/dev/null; then
   python_bin=python
+elif command -v python.exe >/dev/null 2>&1; then
+  python_bin=python.exe
+elif command -v py.exe >/dev/null 2>&1; then
+  python_bin=py.exe
 fi
 cd "$app_root/build"
 final_bundle="$app_root/build/$bundle_name"
@@ -105,17 +111,36 @@ fi
 mv -- "$bundle" "$final_bundle"
 trap - EXIT
 bundle="$final_bundle"
+powershell_cmd=pwsh
+if ! command -v "$powershell_cmd" >/dev/null 2>&1; then
+  if command -v pwsh.exe >/dev/null 2>&1; then
+    powershell_cmd=pwsh.exe
+  elif command -v powershell.exe >/dev/null 2>&1; then
+    powershell_cmd=powershell.exe
+  elif command -v powershell >/dev/null 2>&1; then
+    powershell_cmd=powershell
+  fi
+fi
+
+to_win_path() {
+  if command -v wslpath >/dev/null 2>&1; then
+    wslpath -w "$1"
+  else
+    echo "$1"
+  fi
+}
+
 # PowerShell/worker execution can hold directory handles on Windows. Run the
 # process check after the directory rename, before replacing the archive.
 # release 包里不放自测脚本，直接用打包目录中的那份跑同一个检查。
 if [[ "$bundle_profile" == test ]]; then
-  pwsh -NoProfile -ExecutionPolicy Bypass -File "$bundle/test-worker.ps1"
+  "$powershell_cmd" -NoProfile -ExecutionPolicy Bypass -File "$(to_win_path "$bundle/test-worker.ps1")"
 else
-  pwsh -NoProfile -ExecutionPolicy Bypass -File "$app_root/packaging/windows/test-worker.ps1" -WorkerPath "$bundle/easyconnect-worker.exe"
+  "$powershell_cmd" -NoProfile -ExecutionPolicy Bypass -File "$(to_win_path "$app_root/packaging/windows/test-worker.ps1")" -WorkerPath "$(to_win_path "$bundle/easyconnect-worker.exe")"
 fi
 archive_tmp="$app_root/build/.${bundle_name}.zip.tmp.$$"
 trap 'rm -f -- "$archive_tmp"' EXIT
-"$python_bin" - "$bundle" "$archive_tmp" <<'PY'
+"$python_bin" - "$(to_win_path "$bundle")" "$(to_win_path "$archive_tmp")" <<'PY'
 import pathlib, sys, zipfile
 bundle = pathlib.Path(sys.argv[1])
 with zipfile.ZipFile(sys.argv[2], 'w', zipfile.ZIP_DEFLATED) as output:

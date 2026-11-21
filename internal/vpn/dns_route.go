@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/miekg/dns"
-	"github.com/qy/easyconnect/internal/routing"
-	"github.com/qy/easyconnect/internal/splitdns"
+	"github.com/ehZyiL/connect-hub/internal/routing"
+	"github.com/ehZyiL/connect-hub/internal/splitdns"
 	"time"
 )
 

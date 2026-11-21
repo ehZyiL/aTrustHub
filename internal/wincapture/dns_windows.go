@@ -153,7 +153,7 @@ function ExpandDomains($domains) {
 }
 $before = @(ExpandDomains $state.Before)
 $after = @(ExpandDomains $state.After)
-$comment = 'EasyConnectHub:'+$state.ID
+$comment = 'ConnectHub:'+$state.ID
 $localRules = @(Get-DnsClientNrptRule)
 $owned = @($localRules | Where-Object { $_.Comment -ceq $comment })
 if ($owned.Count -gt 1) { throw 'Duplicate ownership tag' }
@@ -191,7 +191,7 @@ if (!$alreadyAfter) {
   if ($after.Count -eq 0) {
     Remove-DnsClientNrptRule -Name $owned[0].Name -Force
   } elseif ($owned.Count -eq 0) {
-    Add-DnsClientNrptRule -Namespace $after -NameServers $state.Address -Comment $comment -DisplayName 'EasyConnect Hub managed capture' | Out-Null
+    Add-DnsClientNrptRule -Namespace $after -NameServers $state.Address -Comment $comment -DisplayName 'Connect Hub managed capture' | Out-Null
   } else {
     Set-DnsClientNrptRule -Name $owned[0].Name -Namespace $after -NameServers $state.Address -Comment $comment | Out-Null
   }

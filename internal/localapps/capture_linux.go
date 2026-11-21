@@ -6,10 +6,10 @@ import (
 	"encoding/hex"
 	"sync"
 
-	"github.com/qy/easyconnect/internal/capture"
-	"github.com/qy/easyconnect/internal/model"
-	"github.com/qy/easyconnect/internal/proxy"
-	"github.com/qy/easyconnect/internal/resolved"
+	"github.com/ehZyiL/connect-hub/internal/capture"
+	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/proxy"
+	"github.com/ehZyiL/connect-hub/internal/resolved"
 )
 
 type captureProcess struct {

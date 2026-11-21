@@ -5,7 +5,7 @@ package localapps
 import (
 	"context"
 	"errors"
-	"github.com/qy/easyconnect/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/model"
 )
 
 func startCapture(context.Context, model.LocalApp, DialFunc) (managedCapture, error) {

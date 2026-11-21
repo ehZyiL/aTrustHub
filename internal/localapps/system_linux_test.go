@@ -10,10 +10,10 @@ import (
 	"testing"
 
 	"github.com/miekg/dns"
-	"github.com/qy/easyconnect/internal/capture"
-	"github.com/qy/easyconnect/internal/dnsmapping"
-	"github.com/qy/easyconnect/internal/netpolicy"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/capture"
+	"github.com/ehZyiL/connect-hub/internal/dnsmapping"
+	"github.com/ehZyiL/connect-hub/internal/netpolicy"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 type fakeSystemLease struct {

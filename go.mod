@@ -1,4 +1,4 @@
-module github.com/qy/easyconnect
+module github.com/ehZyiL/connect-hub
 
 go 1.27.3
 

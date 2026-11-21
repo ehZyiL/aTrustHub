@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/qy/easyconnect/internal/store"
+	"github.com/ehZyiL/connect-hub/internal/store"
 )
 
 // 三套色系 × 深浅两版都要真的不同：强调色、底色、选中底色逐一对上预期。

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/qy/easyconnect/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/model"
 )
 
 // withATrustPoint 给测试配置加一个 aTrust 接入点：旧全局 TUN 只认 aTrust 会话。

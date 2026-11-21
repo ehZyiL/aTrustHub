@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qy/easyconnect/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/model"
 )
 
 func TestStoreRoundTrip(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/qy/easyconnect/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/model"
 )
 
 // appEnabled reports whether one application's addresses may enter the tunnel.

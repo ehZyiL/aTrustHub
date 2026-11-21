@@ -2,7 +2,18 @@
 set -euo pipefail
 
 app_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-worker_root=$(cd -- "$app_root/../zju-connect" && pwd)
+# 工作树里没有 zju-connect 兄弟目录，允许用环境变量指过去；
+# 默认仍是同级的 ../zju-connect。
+worker_root=${ZJU_CONNECT_ROOT:-$(cd -- "$app_root/../zju-connect" && pwd)}
+# 把来源写进包里：否则"这个包是哪份代码打的"只能靠猜。
+repo_branch=$(git -C "$app_root" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+repo_commit=$(git -C "$app_root" rev-parse --short HEAD 2>/dev/null || echo unknown)
+repo_dirty=""
+if [[ -n "$(git -C "$app_root" status --porcelain --untracked-files=no 2>/dev/null || true)" ]]; then
+  repo_dirty=" (dirty)"
+fi
+app_build=$(sed -n 's/^const appBuild = "\(.*\)"$/\1/p' "$app_root/app.go" | head -n1)
+printf 'Packaging %s@%s%s (appBuild %s)\n' "$repo_branch" "$repo_commit" "$repo_dirty" "${app_build:-unknown}"
 diff -u --strip-trailing-cr <(sed 's/^package desktop$/package workeripc/' "$worker_root/internal/desktop/protocol.go") "$app_root/internal/workeripc/protocol.go"
 go_tool=${GO:-go}
 target_arch=${GOARCH:-amd64}
@@ -53,6 +64,9 @@ EasyConnect Hub Windows bundle
 Architecture: $target_arch
 Worker IPC protocol: 6
 Windows capture helper protocol: $helper_protocol
+Source branch: $repo_branch
+Source commit: $repo_commit$repo_dirty
+App build: ${app_build:-unknown}
 Scope: IPv4 TCP and DNS. System IPv4 UDP for eligible L3 sessions is experimental; IPv6 is unsupported.
 GUI, worker and helper are a matched build from this bundle; do not mix files from other bundles.
 EOF

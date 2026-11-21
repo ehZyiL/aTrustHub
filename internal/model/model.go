@@ -241,6 +241,9 @@ type Settings struct {
 	// Theme is the colour family: "blue" (default), "green", or "purple".
 	// Each family ships a light and a dark version.
 	Theme string `json:"theme,omitempty"`
+	// QuitOnClose 为 true 时，点窗口关闭按钮彻底退出（仅 Windows 可见）；
+	// 否则关闭只是隐藏到托盘。
+	QuitOnClose bool `json:"quitOnClose,omitempty"`
 	// SecretStore is where access point passwords are kept: "file" for the
 	// local 0600 secrets.json, or "keychain" for the macOS Keychain. It is
 	// read at startup, so a change takes effect after a restart.

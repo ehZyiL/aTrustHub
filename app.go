@@ -253,7 +253,9 @@ type settingsDraft struct {
 	// appearance 是颜色模式下拉的草稿值（跟随系统 / 浅色 / 深色）。
 	appearance string
 	// theme 是主题色系的草稿值（blue / green / purple）。
-	theme         string
+	theme string
+	// quitOnClose 是「关闭主窗口时退出程序」的草稿值（仅 Windows）。
+	quitOnClose   bool
 	host          string
 	port          string
 	interval      string
@@ -593,14 +595,20 @@ func (a *app) createWindow() {
 		if a.quitRequested {
 			return
 		}
-		if runtime.GOOS == "linux" {
+		// 三种习惯（Linux 退出 / macOS 隐藏 / Windows 可配）统一在这里决定。
+		switch closeActionFor(runtime.GOOS, a.cfg.Settings.QuitOnClose, a.hasActiveWork()) {
+		case closeQuit:
 			a.quitRequested = true
 			a.shutdown()
 			mygo.App.Quit()
-			return
+		case closeConfirm:
+			// 还有连接在跑：先弹确认，取消时窗口会重新回到前台。
+			e.PreventDefault()
+			a.askQuit()
+		default:
+			e.PreventDefault()
+			a.hideToTray()
 		}
-		e.PreventDefault()
-		a.hideToTray()
 	})
 	// A window on screen means a Dock icon, whatever the closing behaviour is.
 	a.updateDockVisibility(false)

@@ -1774,7 +1774,12 @@ func (a *app) generalSection(c *ui.Context) {
 				a.applySettingsIfChanged()
 			}
 		}
+		// 「关闭窗口时退出程序」只在 Windows 有，并进同一个勾选区。
+		a.quitOnCloseSwitch(c)
 	})
+	if supportsQuitOnClose() {
+		ui.Text(c, quitOnCloseHint()).FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
+	}
 	ui.Text(c, "监听 127.0.0.1 只有本机能用；要让局域网里的设备用，"+
 		"改成 0.0.0.0，但 SOCKS5 没有认证，请只在自己信任的网络里这样做。").
 		FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
@@ -2429,6 +2434,7 @@ func (a *app) openSettings() {
 		section:       a.settings.section,
 		appearance:    appearanceLabel(a.savedAppearance()),
 		theme:         a.savedTheme(),
+		quitOnClose:   s.QuitOnClose,
 		host:          s.ListenHost,
 		port:          strconv.Itoa(s.AggregatePort),
 		interval:      strconv.Itoa(s.HealthIntervalSec),
@@ -2480,6 +2486,7 @@ func (a *app) saveSettings() {
 		cfg.Settings.HideDock = d.hideDock
 		cfg.Settings.Appearance = appearanceFromLabel(d.appearance)
 		cfg.Settings.Theme = d.theme
+		cfg.Settings.QuitOnClose = d.quitOnClose
 		cfg.Settings.SecretStore = secretStoreFromLabel(d.secretStore)
 		return cfg.Settings.Validate()
 	})
@@ -2513,6 +2520,7 @@ func (a *app) settingsDirty() bool {
 		strings.TrimSpace(d.interval) != strconv.Itoa(s.HealthIntervalSec) ||
 		appearanceFromLabel(d.appearance) != a.savedAppearance() ||
 		d.theme != a.savedTheme() ||
+		d.quitOnClose != s.QuitOnClose ||
 		routingFromLabel(d.routing) != s.Routing ||
 		d.aggregate != s.AggregateEnabled ||
 		d.autoReconnect != s.AutoReconnect ||

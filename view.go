@@ -55,6 +55,8 @@ var logIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" strok
 var pageShortcuts = []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4}
 
 func (a *app) view(c *ui.Context) {
+	// 主线程上用框架的可见性校正门控标记：藏在托盘时不再重建整树。
+	a.syncWindowVisible()
 	// 原型是暗色启动台，但颜色模式由设置里的偏好决定：
 	// 跟随系统时听系统的，浅色 / 深色则把外观固定下来。
 	c.SetTheme(a.appearanceTheme(c.Theme().Dark))

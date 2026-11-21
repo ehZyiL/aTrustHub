@@ -8,6 +8,10 @@ import (
 
 var systemProxyOwnedFn = systemProxyOwned
 
+// systemProxyForeignFn is the seam tests use: unit tests must never read the
+// machine's real proxy settings.
+var systemProxyForeignFn = systemProxyForeign
+
 func (a *app) systemProxyAddress() string {
 	return net.JoinHostPort("127.0.0.1", strconv.Itoa(a.cfg.Settings.AggregatePort))
 }

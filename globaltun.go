@@ -168,8 +168,12 @@ func (a *app) tunConfigFor() (tunConfigFile, error) {
 }
 
 func (a *app) startGlobalTUN(id string) {
-	if !a.canUseGlobalTUN() {
-		a.toast = "当前平台尚未支持透明接管，请使用软件代理"
+	if a.resourceTUNActive() {
+		a.captureRefuse(captureGlobalTUN, "应用接管正在运行，先关掉它再开全局 TUN")
+		return
+	}
+	if ok, reason := a.captureSupported(captureGlobalTUN); !ok {
+		a.captureRefuse(captureGlobalTUN, reason)
 		return
 	}
 	if a.win == nil {
@@ -333,6 +337,8 @@ func (a *app) startGlobalTUN(id string) {
 	a.mgr.SetTunServed(served)
 	a.tunLogf("TUN 已接管 %d 个接入点，应用侧代理改走系统路由", len(served))
 	a.persistTunState(true, id)
+	// TUN 真的起来了才记住；启动失败时设置里不会留下一个从没生效的档位。
+	a.rememberCaptureMode(captureGlobalTUN)
 }
 
 // onlineSnapshot is the set of access points the TUN helper was built for. It
@@ -652,14 +658,15 @@ func (a *app) probeTunnel(pointName, addr string, wait time.Duration) (bool, int
 
 // pickResumePoint chooses which access point the remembered TUN should use:
 // the remembered one when it is online, otherwise the first online point.
+// 旧 TUN 只认 aTrust 会话：在线的 EasyConnect 点不能被选中。
 func pickResumePoint(preferred string, views []vpn.View) string {
 	for _, v := range views {
-		if v.ID == preferred && v.State == vpn.StateOnline {
+		if v.ID == preferred && v.State == vpn.StateOnline && v.Protocol == model.ProtocolATrust {
 			return v.ID
 		}
 	}
 	for _, v := range views {
-		if v.State == vpn.StateOnline {
+		if v.State == vpn.StateOnline && v.Protocol == model.ProtocolATrust {
 			return v.ID
 		}
 	}
@@ -749,7 +756,8 @@ func buildAQuery(name string) []byte {
 // the DNS port. A leftover root process keeps the system pointed at a resolver
 // nobody serves, which looks exactly like "登录成功但什么都连不上".
 func (a *app) cleanupStaleHelper() {
-	if !a.canUseGlobalTUN() {
+	// 只看平台：残留的 root 进程占着 53 端口，跟当前选了哪种接管方式无关。
+	if !supportsElevatedTUN() {
 		return
 	}
 	pidPath := filepath.Join(a.dir, "tun.pid")
@@ -771,18 +779,13 @@ func (a *app) cleanupStaleHelper() {
 	}
 }
 
-// The inherited TUN helper only understands aTrust saved sessions.
+// canUseGlobalTUN 回答「启动或恢复旧全局 TUN 有没有意义」。它读 aTrust 保存的
+// 会话文件，且不能和应用接管同时跑；EasyConnect 接入点对它无效，但也不该把
+// 整个开关废掉——只要配置里有 aTrust 点就能用。
 func (a *app) canUseGlobalTUN() bool {
 	if a.resourceTUNActive() {
 		return false
 	}
-	if !supportsElevatedTUN() {
-		return false
-	}
-	for _, p := range a.cfg.Points {
-		if p.Protocol == model.ProtocolEasyConnect {
-			return false
-		}
-	}
-	return true
+	ok, _ := a.captureSupported(captureGlobalTUN)
+	return ok
 }

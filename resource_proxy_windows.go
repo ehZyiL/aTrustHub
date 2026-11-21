@@ -81,6 +81,17 @@ func systemProxyOwned(address string) bool {
 	return err == nil && ownsProxy(snapshot, address)
 }
 
+// systemProxyForeign 报告系统代理被别的程序开着（不是我们写的那个入口）。
+// 只看手动代理：自动检测/PAC 在很多机器上默认就开着，它不阻碍手动代理生效，
+// 把它当成“被占用”会让默认接管永远开不起来。
+func systemProxyForeign(address string) bool {
+	snapshot, err := captureProxyRegistryOps().read()
+	if err != nil {
+		return true // 读不到就别动：宁可不开，也不覆盖别人的设置
+	}
+	return snapshot.Enabled != 0 && !ownsProxy(snapshot, address)
+}
+
 func recoverResourceProxy(dir, address string) error {
 	path := filepath.Join(dir, "system-tun-proxy-recovery.json")
 	data, err := os.ReadFile(path)

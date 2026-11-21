@@ -15,6 +15,11 @@ func supportsSystemProxy() bool { return true }
 // supportsElevatedTUN reports whether TUN can be started.
 func supportsElevatedTUN() bool { return true }
 
+// supportsAutoSystemProxy reports whether the app may turn the system proxy on
+// by itself at startup. The registry needs no elevation, and a manual proxy set
+// by another program can be detected before touching it.
+func supportsAutoSystemProxy() bool { return true }
+
 // tunTaskName is the scheduled task that runs the helper elevated, so later
 // starts need no UAC prompt.
 const tunTaskName = "aTrustHubTUN"

@@ -9,3 +9,6 @@ func suspendProxyForResourceTUN(string, string, func(string)) (func() error, err
 }
 func recoverResourceProxy(string, string) error { return nil }
 func systemProxyOwned(string) bool              { return systemProxyEnabled() }
+
+// systemProxyForeign 在本平台无法判断是否有第三方代理，交由调用方按平台受限。
+func systemProxyForeign(string) bool { return false }

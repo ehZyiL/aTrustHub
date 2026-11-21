@@ -255,6 +255,9 @@ type Settings struct {
 	// HideDock keeps the app out of the Dock (macOS), with a menu bar icon
 	// instead, so closing the window leaves it running.
 	HideDock bool `json:"hideDock"`
+	// CaptureMode 是记住的接管方式（见 CaptureMode* 常量）：启动后按它恢复。
+	// 首次运行默认为系统代理；用 id 而不是界面文案，改文案不会让设置失效。
+	CaptureMode string `json:"captureMode,omitempty"`
 	// AutoLoginOptIn records that the user has been offered the auto-login
 	// default. Access points do not log in at startup unless they ask for it.
 	AutoLoginOptIn bool `json:"autoLoginOptIn"`
@@ -264,6 +267,15 @@ type Settings struct {
 const (
 	SecretStoreFile     = "file"
 	SecretStoreKeychain = "keychain"
+)
+
+// CaptureMode values are the remembered 接管方式. They are persisted, so they
+// never carry UI copy: the labels may change without resetting the setting.
+const (
+	CaptureModeOff    = "off"
+	CaptureModeSystem = "system"
+	CaptureModeTUN    = "tun"
+	CaptureModeApp    = "app"
 )
 
 // Config is the file the app keeps its configuration in.
@@ -289,6 +301,7 @@ func DefaultSettings() Settings {
 		HealthIntervalSec: 60,
 		AutoReconnect:     true,
 		SecretStore:       SecretStoreKeychain,
+		CaptureMode:       CaptureModeSystem,
 	}
 }
 
@@ -334,7 +347,7 @@ func (c *Config) Normalize() {
 // Normalize fills the default settings.
 func (s *Settings) Normalize() {
 	if s.ListenHost == "" && s.AggregatePort == 0 && s.Routing == "" &&
-		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && len(s.DNSBindings) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 {
+		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && len(s.DNSBindings) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 && s.CaptureMode == "" {
 		*s = DefaultSettings()
 		return
 	}
@@ -368,6 +381,13 @@ func (s *Settings) Normalize() {
 	case "blue", "green", "purple":
 	default:
 		s.Theme = "blue"
+	}
+	// 接管方式只认四种 id；空值与脏值归到默认的系统代理，
+	// 否则一个手改坏的字段会静默把接管关掉。
+	switch s.CaptureMode {
+	case CaptureModeOff, CaptureModeSystem, CaptureModeTUN, CaptureModeApp:
+	default:
+		s.CaptureMode = d.CaptureMode
 	}
 }
 

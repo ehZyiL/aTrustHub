@@ -52,10 +52,10 @@ func (a *app) setupResourceTUN() {
 			view := a.resourceTUN.View()
 			message := view.Error
 			if message == "" && view.Running {
-				message = "系统 TUN 已就绪：IPv4 TCP + DNS，复用在线 VPN 会话"
+				message = "应用接管（系统 TUN）已就绪：IPv4 TCP + DNS，复用在线 VPN 会话"
 			}
 			if message == "" && !view.Busy {
-				message = "系统 TUN 已停止"
+				message = "应用接管（系统 TUN）已停止"
 			}
 			notifyMu.Lock()
 			changed := message != "" && message != lastMessage
@@ -63,6 +63,19 @@ func (a *app) setupResourceTUN() {
 			notifyMu.Unlock()
 			if changed && a.bus != nil {
 				a.bus.Add("app", message)
+			}
+			if changed && view.Error != "" {
+				// 启动或接管失败要主动告知，不能只躺在设置页的状态行里。
+				a.setToast(view.Error)
+			}
+			// 接管真的跑起来才记住；失败时不留假的目标，记成「不使用」。
+			switch {
+			case view.Running:
+				a.rememberCaptureMode(captureAppCapture)
+			case view.Busy || view.CleanupPending:
+				// 还在切换或清理：等下一次通知再说。
+			case view.Error != "":
+				a.rememberCaptureMode(captureOff)
 			}
 			// 控制器每 2 秒会通知一次：走合并入口，隐藏时被门控拦住。
 			a.invalidateCoalesced()
@@ -155,6 +168,11 @@ func (a *app) captureStatus(c *ui.Context) {
 			Tooltip(status.Error)
 	default:
 		ui.Text(c, "应用接管：未启用").FontSize(13).TextColor(t.TextMuted)
+		// 没开始接管时直接把「还差什么」写在这里：EasyConnect 没有全局 TUN，
+		// 这一档就是它唯一的透明入口，不能只在下拉里默默少一项。
+		if reason := a.captureBlocker(captureAppCapture); reason != "" {
+			ui.Text(c, reason).FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
+		}
 	}
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 		if status.Error != "" && ui.Button(c, "查看失败原因").FontSize(11).Clicked() {

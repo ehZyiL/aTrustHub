@@ -81,6 +81,9 @@ type app struct {
 	updateRetried atomic.Bool
 	// sysProxyOn is whether the app turned the macOS system proxy on.
 	sysProxyOn bool
+	// captureRestored 表示启动后已经试过按记住的接管方式恢复；重试由 3 秒 tick 驱动，
+	// 入口一旦监听就不再重复写系统设置。
+	captureRestored bool
 	// tray is the notification-area icon that keeps the app alive when the
 	// window is closed (Windows), and quitRequested says a quit is intended.
 	tray          *mygo.Tray
@@ -95,6 +98,9 @@ type app struct {
 	// resumed for this point once it logs in, so the switch reflects intent.
 	tunWanted      bool
 	tunResumeTried bool
+	// captureHiddenLog 记录上一次写进运行日志的「被隐藏档位 + 原因」，
+	// 用于去重：同一组原因不重复刷日志。
+	captureHiddenLog string
 	// tunResumeAt throttles restoring the remembered switch position, so a
 	// helper that cannot start is not retried on every tick.
 	tunResumeAt time.Time
@@ -525,6 +531,7 @@ func (a *app) start() {
 			a.maybeRefreshTUN()
 			a.checkTunnels()
 			a.guardSystemProxy()
+			a.maybeRestoreCaptureMode()
 			// TUN 把系统 DNS 指向自己；它一旦不应答，整台机器就上不了网。
 			// 连续两次检查失败就主动关掉 TUN，把网络还给系统。
 			if a.tunOn && time.Since(lastDNSCheck) > 20*time.Second {
@@ -857,9 +864,81 @@ func (a *app) guardSystemProxy() {
 	_ = applySystemProxyFn("127.0.0.1:0", false)
 	a.sysProxyOn = false
 	a.sysProxySwitch = false
+	// 这是本应用自己关的（入口死了），不是用户放弃接管：入口回来后
+	// maybeRestoreCaptureMode 要能把它接回来。用户手动关代理走的是
+	// releaseLostSystemProxy，不会走到这里，所以不会被反复抢回去。
+	a.captureRestored = false
 	a.tunLogf("统一入口已停止监听，已自动关闭系统代理以恢复网络")
 	a.toast = "统一入口已停止，已自动关闭系统代理"
 	a.invalidate()
+}
+
+// maybeRestoreCaptureMode 在启动后按记住的接管方式接管一次。默认（也是首次运行）
+// 是系统代理：统一入口一开始监听就把它指过去。只自动恢复系统代理——全局 TUN 有
+// 自己的 tunEnabled 恢复路径，应用接管要先装好网络助手，交给用户手动开。
+func (a *app) maybeRestoreCaptureMode() {
+	if a.captureRestored {
+		return
+	}
+	// 记着 TUN 意图时让路：TUN 自带 30 秒/3 次的限流重试，别让系统代理抢在它
+	// 前面接管。这里也不标记已处理——TUN 因为环境原因放弃后，后续还能再判断。
+	if a.cfg.Settings.TunEnabled {
+		return
+	}
+	// macOS 写系统代理要一次管理员授权，每次启动弹密码不可接受；Linux 没有这一档。
+	if !supportsAutoSystemProxy() || a.cfg.Settings.CaptureMode != model.CaptureModeSystem {
+		a.captureRestored = true
+		return
+	}
+	// 已经有别的接管方式在负责流量，或者系统代理本来就指着本应用：不用再动。
+	if a.tunOn || a.tunPending || a.resourceTUNActive() || a.sysProxyOn {
+		a.captureRestored = true
+		return
+	}
+	agg := a.mgr.Aggregate()
+	if !a.cfg.Settings.AggregateEnabled {
+		a.captureRestored = true
+		a.tunLogf("未自动开启系统代理：统一入口已在设置里关闭")
+		return
+	}
+	if agg.Error != "" {
+		a.captureRestored = true
+		a.tunLogf("未自动开启系统代理：统一入口不可用（%s）", agg.Error)
+		return
+	}
+	if !agg.Running || agg.Addr == "" {
+		return // 入口还没监听，下一轮再看
+	}
+	// 指到一个没人听的端口会让整台机器断网：先确认它真的在听。
+	conn, err := net.DialTimeout("tcp", agg.Addr, 2*time.Second)
+	if err != nil {
+		return
+	}
+	_ = conn.Close()
+	_, port, err := net.SplitHostPort(agg.Addr)
+	if err != nil {
+		a.captureRestored = true
+		a.tunLogf("未自动开启系统代理：入口地址无法解析（%s）", agg.Addr)
+		return
+	}
+	a.captureRestored = true
+	a.enableSystemProxyByDefault(net.JoinHostPort("127.0.0.1", port))
+}
+
+// enableSystemProxyByDefault 打开系统代理，但不覆盖别人已经设好的代理：系统代理
+// 全机只有一份，抢过来等于替用户改掉了他自己的分流。
+func (a *app) enableSystemProxyByDefault(target string) {
+	if systemProxyForeignFn(target) {
+		a.tunLogf("系统代理已被其他软件设置（或无法读取），未自动开启；要接管请在下拉里选「系统代理」")
+		return
+	}
+	if err := applySystemProxyFn(target, true); err != nil {
+		a.tunLogf("自动开启系统代理失败：%v", err)
+		return
+	}
+	a.sysProxyOn = true
+	a.tunLogf("网络接管：已按默认设置开启系统代理 %s", target)
+	a.invalidateCoalesced()
 }
 
 // firstPointID returns the first id of a comma-joined snapshot.

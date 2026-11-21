@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/qy/easyconnect/internal/model"
 	"github.com/qy/easyconnect/internal/vpn"
 	"os"
 	"path/filepath"
@@ -45,16 +46,21 @@ func TestMultitunPathReportsTried(t *testing.T) {
 }
 
 // 记住的开关位置要落在正确的接入点上：优先上次那个，不在线才用第一个在线的。
+// 旧 TUN 只认 aTrust 会话，在线的 EasyConnect 点即使排在前面也不能被选中。
 func TestPickResumePoint(t *testing.T) {
 	views := []vpn.View{
-		{ID: "a", State: vpn.StateOnline},
-		{ID: "b", State: vpn.StateOffline},
+		{ID: "ec", State: vpn.StateOnline, Protocol: model.ProtocolEasyConnect},
+		{ID: "a", State: vpn.StateOnline, Protocol: model.ProtocolATrust},
+		{ID: "b", State: vpn.StateOffline, Protocol: model.ProtocolATrust},
 	}
 	if got := pickResumePoint("a", views); got != "a" {
 		t.Errorf("首选在线项：got %q", got)
 	}
 	if got := pickResumePoint("b", views); got != "a" {
 		t.Errorf("记住的不在线时用第一个在线项：got %q", got)
+	}
+	if got := pickResumePoint("ec", views); got != "a" {
+		t.Errorf("在线的 EasyConnect 点不能给旧 TUN 用：got %q", got)
 	}
 	if got := pickResumePoint("", nil); got != "" {
 		t.Errorf("没有在线项应返回空：got %q", got)

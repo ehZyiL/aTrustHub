@@ -21,6 +21,10 @@ func supportsSystemProxy() bool { return true }
 // supportsElevatedTUN reports whether TUN can be started with one prompt.
 func supportsElevatedTUN() bool { return true }
 
+// supportsAutoSystemProxy 返回 false：macOS 写系统代理要一次管理员授权，
+// 每次启动弹密码不可接受，这一档交给用户手动选。
+func supportsAutoSystemProxy() bool { return false }
+
 // startHelper runs the TUN helper as root. The sudoers rule installed by
 // ensureHelperPrivilege makes this password-free after the first time.
 func startHelper(helper string, args []string, launchLog string) error {

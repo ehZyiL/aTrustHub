@@ -720,13 +720,207 @@ const (
 	captureAppCapture = "应用接管"
 )
 
-// captureModes 是下拉里可选的值；应用接管只在支持的平台上出现。
-func captureModes() []string {
-	modes := []string{captureOff, captureSystem, captureGlobalTUN}
-	if supportsResourceTUN() {
-		modes = append(modes, captureAppCapture)
+// allCaptureModes 是四个档位的固定顺序：下拉、隐藏原因都按它排。
+var allCaptureModes = []string{captureOff, captureSystem, captureGlobalTUN, captureAppCapture}
+
+// captureSupported 回答「当前平台和配置能不能提供这一档」。不可用的档位不出现在
+// 下拉里，原因写进运行日志。它不看运行时状态：选项列表要稳定，不能因为统一入口
+// 还没监听就每帧闪一次。
+func (a *app) captureSupported(mode string) (bool, string) {
+	switch mode {
+	case captureOff:
+		return true, ""
+	case captureSystem:
+		if !supportsSystemProxy() {
+			return false, "当前平台不支持系统代理，请手动把软件指向 SOCKS/HTTP 入口"
+		}
+		return true, ""
+	case captureGlobalTUN:
+		if !supportsElevatedTUN() {
+			return false, "当前平台没有提权 TUN 组件，全局 TUN 依赖 zju-connect-multitun"
+		}
+		if !a.hasPointWithProtocol(model.ProtocolATrust) {
+			if a.hasPointWithProtocol(model.ProtocolEasyConnect) {
+				return false, "全局 TUN 只认 aTrust 会话，配置里只有 EasyConnect 接入点；" +
+					"EasyConnect 的透明接管请用「应用接管」"
+			}
+			return false, "还没有 aTrust 接入点，全局 TUN 需要 aTrust 会话"
+		}
+		return true, ""
+	case captureAppCapture:
+		if !supportsResourceTUN() {
+			return false, "当前平台不支持应用接管，请手动把软件指向 SOCKS/HTTP 入口"
+		}
+		return true, ""
+	}
+	return false, "未知的接管方式：" + mode
+}
+
+// captureReady 是运行时前置：统一入口要已经在听、要有在线的 aTrust 会话、要至少
+// 登录一个网关。它和 captureSupported 一起决定下拉里出现哪些档位。
+func (a *app) captureReady(mode string) (bool, string) {
+	switch mode {
+	case captureSystem:
+		if agg := a.mgr.Aggregate(); !agg.Running || agg.Addr == "" {
+			return false, "统一入口还没监听，等它启动后再切系统代理"
+		}
+		return true, ""
+	case captureGlobalTUN:
+		if a.firstOnlineATrustPoint() == "" {
+			return false, "没有在线的 aTrust 接入点，全局 TUN 需要 aTrust 会话"
+		}
+		return true, ""
+	case captureAppCapture:
+		if a.resourceTUNActive() {
+			return true, ""
+		}
+		if online, _, _ := a.mgr.Counts(); online == 0 {
+			return false, "没有在线接入点，先登录再开应用接管"
+		}
+		return true, ""
+	}
+	return true, ""
+}
+
+// captureBlocker 回答「这一档现在为什么不能用」，空字符串表示能用。它用于切换前
+// 预检：前置不满足时只提示，不动当前正在生效的档位。
+func (a *app) captureBlocker(mode string) string {
+	if ok, reason := a.captureSupported(mode); !ok {
+		return reason
+	}
+	if ok, reason := a.captureReady(mode); !ok {
+		return reason
+	}
+	return ""
+}
+
+// captureModes 是下拉里真正出现的档位：平台/配置做不到的直接隐藏（原因进日志）；
+// 做得到但此刻还没条件的仍然列出来，用户点它时给出具体原因。当前生效的那一档
+// 一定保留，否则下拉里看不出自己正处在哪一档。
+func (a *app) captureModes() []string {
+	active := a.captureMode()
+	modes := make([]string, 0, len(allCaptureModes))
+	for _, mode := range allCaptureModes {
+		if mode == active {
+			modes = append(modes, mode)
+			continue
+		}
+		if ok, _ := a.captureSupported(mode); ok {
+			modes = append(modes, mode)
+		}
 	}
 	return modes
+}
+
+// hasPointWithProtocol 看配置里有没有这个协议的接入点，不看是否在线。
+func (a *app) hasPointWithProtocol(protocol string) bool {
+	for _, p := range a.cfg.Points {
+		if p.Protocol == protocol {
+			return true
+		}
+	}
+	return false
+}
+
+// captureRefuse 拒绝一次接管切换（或开启）：提示用户，并把原因写进运行日志。
+func (a *app) captureRefuse(mode, reason string) {
+	a.setToast(reason)
+	a.tunLogf("「%s」未生效：%s（当前仍为「%s」）", mode, reason, a.captureMode())
+}
+
+// captureModeID 把界面上的档位翻成持久化的 id：设置里存 id，改文案不会让用户
+// 记住的接管方式失效。
+func captureModeID(mode string) string {
+	switch mode {
+	case captureSystem:
+		return model.CaptureModeSystem
+	case captureGlobalTUN:
+		return model.CaptureModeTUN
+	case captureAppCapture:
+		return model.CaptureModeApp
+	}
+	return model.CaptureModeOff
+}
+
+// persistCaptureMode 把「实际生效」的接管方式写进设置，下次启动按它恢复。
+// 全局 TUN 另有一套 tunEnabled 开关位置：非 TUN 档位必须把它清掉，否则重启
+// 后 TUN 会抢在系统代理前面复活。
+func (a *app) persistCaptureMode(mode string) error {
+	id := captureModeID(mode)
+	apply := func(cfg *model.Config) {
+		cfg.Settings.CaptureMode = id
+		if mode != captureGlobalTUN {
+			cfg.Settings.TunEnabled = false
+		}
+	}
+	if a.store == nil {
+		apply(&a.cfg)
+		return nil
+	}
+	if _, err := a.store.Update(func(cfg *model.Config) error { apply(cfg); return nil }); err != nil {
+		return err
+	}
+	return a.saveConfig()
+}
+
+// rememberCaptureMode 记住「已经真的生效」的接管方式。只在接管成功启动或已经
+// 停下之后调用：存的是结果，不是意图——失败的模式不写进设置，免得下次启动去
+// 恢复一个从没跑起来的东西；两边都停了就记成「不使用」。
+// 退出过程不记：退出本来就会关代理、停 TUN，记下来会把用户的默认接管清掉。
+func (a *app) rememberCaptureMode(mode string) {
+	if a.quitRequested || a.cfg.Settings.CaptureMode == captureModeID(mode) {
+		return
+	}
+	if err := a.persistCaptureMode(mode); err != nil {
+		// 记不住不影响当前接管，只记一笔日志。
+		a.tunLogf("记住接管方式失败：%v", err)
+	}
+}
+
+// rememberTunIntent 在用户选中「全局 TUN」时立刻记下意图，不等启动成功：
+// TUN 的恢复路径自带限流（30 秒一次、最多 3 次，重建或重登会清零），所以启动
+// 失败也值得下次再试。这是唯一一档记「意图」而不是「结果」的：系统代理失败是
+// 即时可见的，应用接管在启动时没法自动开。
+func (a *app) rememberTunIntent(id string) {
+	if a.quitRequested || id == "" {
+		return
+	}
+	a.persistTunState(true, id)
+}
+
+// setToast 是后台 goroutine 的提示入口：界面提示只能在 UI 线程写，
+// 没有窗口（单测、退出后）时直接写字段。
+func (a *app) setToast(message string) {
+	if message == "" {
+		return
+	}
+	if a.win == nil || a.win.IsDestroyed() {
+		a.toast = message
+		return
+	}
+	a.win.Update(func() { a.toast = message })
+}
+
+// logHiddenCaptureModes 写下哪些档位被隐藏、为什么。只看「平台/配置做不到」这一层：
+// 做得到但此刻还没条件的不算隐藏，用户点它时会得到提示。只在原因集合变化时记
+// 一次，避免每次打开下拉都刷重复日志。
+func (a *app) logHiddenCaptureModes() {
+	hidden := make([]string, 0, len(allCaptureModes))
+	for _, mode := range allCaptureModes {
+		if ok, reason := a.captureSupported(mode); !ok {
+			hidden = append(hidden, mode+"："+reason)
+		}
+	}
+	sig := strings.Join(hidden, "；")
+	if sig == a.captureHiddenLog {
+		return
+	}
+	a.captureHiddenLog = sig
+	if sig == "" {
+		a.tunLogf("接管方式：四项都可用")
+		return
+	}
+	a.tunLogf("接管方式里被隐藏：%s", sig)
 }
 
 // captureMode 是当前真正生效的接管方式：先看应用接管，再看全局 TUN，最后系统代理。
@@ -749,6 +943,13 @@ func (a *app) applyCaptureMode(mode string) {
 	if from == mode {
 		return
 	}
+	// 先在不碰现有模式的前提下判断目标能不能开：先拆再开会让一次失败的
+	// 选择把正在用的接管弄丢。
+	if reason := a.captureBlocker(mode); reason != "" {
+		a.captureRefuse(mode, reason)
+		a.invalidate()
+		return
+	}
 	// 先停掉不在目标里的接管方式。
 	if from == captureAppCapture && a.resourceTUN != nil {
 		a.resourceTUN.Stop()
@@ -757,30 +958,31 @@ func (a *app) applyCaptureMode(mode string) {
 		go a.stopTUNSerialized()
 	}
 	if from == captureSystem && supportsSystemProxy() {
-		a.toggleSystemProxy()
+		_ = a.toggleSystemProxy()
 	}
 	switch mode {
+	case captureOff:
+		// 用户明确选择「不使用」：这是唯一由界面直接写下的关闭状态。
+		a.rememberCaptureMode(captureOff)
 	case captureSystem:
-		if supportsSystemProxy() {
-			a.toggleSystemProxy()
+		if supportsSystemProxy() && !a.toggleSystemProxy() {
+			// 没切过去（例如 TUN 还在停、入口没在听）：不留一个假的目标，
+			// 记成「不使用」——下次启动不会去恢复一个从没生效的档位。
+			a.rememberCaptureMode(captureOff)
 		}
 	case captureGlobalTUN:
-		if pid := a.firstOnlinePoint(); pid != "" {
+		// 只能交给 aTrust 点：旧 TUN 组件只读 aTrust 保存的会话。
+		if pid := a.firstOnlineATrustPoint(); pid != "" {
 			a.tunWanted = true
+			// 选中即记意图：TUN 自己会按限流重试，不依赖这一次能不能起来。
+			a.rememberTunIntent(pid)
 			go a.startTUNSerialized(pid)
 		} else {
-			a.toast = "没有在线接入点，先登录再开 TUN"
+			a.captureRefuse(mode, "没有在线的 aTrust 接入点，全局 TUN 需要 aTrust 会话")
 		}
 	case captureAppCapture:
 		a.setupResourceTUN()
 		if a.resourceTUN != nil {
-			if a.store != nil {
-				if _, err := a.store.Update(func(cfg *model.Config) error { cfg.Settings.TunEnabled = false; return nil }); err != nil {
-					a.toast = "保存接管模式失败：" + err.Error()
-					return
-				}
-				_ = a.saveConfig()
-			}
 			a.resourceTUN.Start()
 		}
 	}
@@ -1794,7 +1996,7 @@ func (a *app) captureSection(c *ui.Context) {
 	// 下拉反映真实状态；用户改选时由 applyCaptureMode 负责先关掉其他方式。
 	d.mode = a.captureMode()
 	ui.Field(c, "接管方式", func() {
-		sel := ui.Select(c, &d.mode, captureModes()).Width(180)
+		sel := ui.Select(c, &d.mode, a.captureModes()).Width(180)
 		if sel.Changed() {
 			a.applyCaptureMode(d.mode)
 		}
@@ -1813,8 +2015,10 @@ func (a *app) captureSection(c *ui.Context) {
 			ui.Text(c, "统一入口未监听").FontSize(11).TextColor(t.TextMuted)
 		}
 	})
-	ui.Text(c, "系统代理只改浏览器等应用的代理设置；全局 TUN 接管整机 IPv4 TCP；"+
-		"应用接管只针对选中的应用。三者互斥，同一时间只能开一个。").
+	ui.Text(c, "系统代理只写系统代理设置，认它的软件才走代理；"+
+		"全局 TUN 用 aTrust 会话在网络层接管整机 IPv4 TCP，只支持 aTrust 接入点；"+
+		"应用接管用在线会话在网络层接管各接入点授权的 IP 网段与域名（IPv4 TCP，UDP 试验），"+
+		"公网默认路由不动。三者互斥，同一时间只能开一个；选择会记住，首次运行默认开启系统代理。").
 		FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(620)
 	ui.Divider(c)
 	a.captureStatus(c)
@@ -1842,7 +2046,7 @@ func (a *app) logsSection(c *ui.Context) {
 	}
 	ui.Divider(c)
 	ui.Text(c, "TUN 与接管日志").FontSize(13).Bold()
-	ui.Text(c, "系统 TUN 与应用接管的详细日志单独存放，排查接管问题时先看这里。").
+	ui.Text(c, "应用接管（系统 TUN）的详细日志单独存放，排查接管问题时先看这里。").
 		FontSize(11).TextColor(t.TextMuted)
 	if ui.Button(c, "打开 TUN 日志").FontSize(11).Clicked() {
 		a.openTUNLog()
@@ -2353,9 +2557,6 @@ func (a *app) detectEditor() {
 	}()
 }
 
-// toggleSystemProxy points the macOS system proxy at the unified entry, or
-// clears it, so browsers need no manual proxy setup.
-// firstOnlinePoint returns the ID of the first online access point.
 func (a *app) openTUNLog() {
 	path := filepath.Join(a.dir, "tun.log")
 	if _, err := os.Stat(path); err != nil {
@@ -2367,40 +2568,45 @@ func (a *app) openTUNLog() {
 	}
 }
 
-func (a *app) firstOnlinePoint() string {
+// firstOnlineATrustPoint 返回第一个在线的 aTrust 接入点：旧 TUN 组件只认
+// aTrust 保存的会话，选错协议的点它读不到会话文件。
+func (a *app) firstOnlineATrustPoint() string {
 	for _, v := range a.mgr.Views() {
-		if v.State == vpn.StateOnline {
+		if v.State == vpn.StateOnline && v.Protocol == model.ProtocolATrust {
 			return v.ID
 		}
 	}
 	return ""
 }
 
-func (a *app) toggleSystemProxy() {
+// toggleSystemProxy 把系统代理指到统一入口，或清掉，浏览器因此不必手填代理。
+// 返回 true 表示已经发起了写入（异步完成）；false 表示压根没动手，调用方据此
+// 决定要不要把接管方式降回「不使用」。
+func (a *app) toggleSystemProxy() bool {
 	if a.resourceTUNActive() {
 		a.toast = "请先关闭系统 TUN 再切换系统代理"
-		return
+		return false
 	}
 	if a.releaseLostSystemProxy() {
 		a.toast = "系统代理已由其他软件修改，已更新开关状态并保留当前配置"
-		return
+		return false
 	}
 	if a.tunOn && !a.sysProxyOn {
 		a.toast = "全局 TUN 已经接管流量，先关掉 TUN 再用系统代理"
 		a.sysProxySwitch = a.sysProxyOn
-		return
+		return false
 	}
 	agg := a.mgr.Aggregate()
 	if !agg.Running || agg.Addr == "" {
 		a.toast = "统一入口还没启动"
 		a.sysProxySwitch = a.sysProxyOn
-		return
+		return false
 	}
 	// 先确认代理端口真的在监听：指到一个没人听的端口会让整台机器断网。
 	if conn, err := net.DialTimeout("tcp", agg.Addr, 2*time.Second); err != nil {
 		a.toast = "统一入口没有在监听，先别开系统代理"
 		a.sysProxySwitch = a.sysProxyOn
-		return
+		return false
 	} else {
 		_ = conn.Close()
 	}
@@ -2426,6 +2632,13 @@ func (a *app) toggleSystemProxy() {
 				a.toast = "已取消系统代理"
 			}
 		})
+		if err != nil {
+			return
+		}
+		// 开启成功之后才记住：记住的是结果，不是意图。
+		if on {
+			a.rememberCaptureMode(captureSystem)
+		}
 	}()
 }
 
@@ -2452,6 +2665,11 @@ func (a *app) openSettings() {
 func (a *app) openSettingsAt(section int) {
 	a.openSettings()
 	a.settings.section = section
+	if section == settingNetwork {
+		// 打开「网络与接管」时把被隐藏的档位和原因写进运行日志：选项不出现，
+		// 但用户要能查到为什么没有了。
+		a.logHiddenCaptureModes()
+	}
 	a.invalidate()
 }
 

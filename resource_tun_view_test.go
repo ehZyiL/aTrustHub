@@ -24,16 +24,25 @@ func TestSystemTUNControlVisibleForEasyConnectAndSeparateFromLegacy(t *testing.T
 	a.openSettingsAt(settingNetwork)
 	tester := ui.NewTester(a.view, 1120, 800)
 	texts := strings.Join(tester.Texts(), "|")
-	for _, want := range []string{"接管方式", "应用接管：未启用", "当前接管："} {
+	for _, want := range []string{"接管方式", "应用接管：未启用", "没有在线接入点", "当前接管："} {
 		if !strings.Contains(texts, want) {
 			t.Fatalf("设置页缺少 %q；texts = %s", want, texts)
 		}
 	}
+	// 没有在线网关时切换会被拒绝：不拆当前模式，也不能打开旧 TUN 移交。
 	a.applyCaptureMode(captureAppCapture)
-	waitController(t, a.resourceTUN, func(s resourceTUNStatus) bool { return s.Running })
 	if a.tunOn || a.tunWanted {
 		t.Fatal("new capture enabled legacy handoff")
 	}
+	if !strings.Contains(a.toast, "没有在线接入点") {
+		t.Fatalf("无在线网关时应当说明原因，实际 toast=%q", a.toast)
+	}
+	if a.resourceTUN.View().Running {
+		t.Fatal("被拒绝的切换不应启动接管")
+	}
+	// 直接驱动控制器验证「已接管」状态与设置页文案。
+	a.resourceTUN.Start()
+	waitController(t, a.resourceTUN, func(s resourceTUNStatus) bool { return s.Running })
 	tester.Frame()
 	if !strings.Contains(strings.Join(tester.Texts(), "|"), "应用接管：已接管") {
 		t.Fatal("ready state missing")

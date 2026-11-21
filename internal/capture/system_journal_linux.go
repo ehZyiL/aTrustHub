@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ehZyiL/connect-hub/internal/dnsmapping"
-	"github.com/ehZyiL/connect-hub/internal/resolved"
+	"github.com/ehzyil/connect-hub/internal/dnsmapping"
+	"github.com/ehzyil/connect-hub/internal/resolved"
 )
 
 type systemJournal struct {

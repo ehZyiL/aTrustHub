@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/ehZyiL/connect-hub/internal/model"
-	"github.com/ehZyiL/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/vpn"
 )
 
 // 点真实卡片上的开关，磁盘上的配置必须跟着变；这正对应用户的

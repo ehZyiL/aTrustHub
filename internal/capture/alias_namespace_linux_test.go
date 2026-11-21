@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/ehZyiL/connect-hub/internal/netpolicy"
-	"github.com/ehZyiL/connect-hub/internal/splitdns"
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/netpolicy"
+	"github.com/ehzyil/connect-hub/internal/splitdns"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 // This proof spans both reference modules and the actual kernel. It exercises

@@ -16,10 +16,10 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/ehZyiL/connect-hub/internal/netpolicy"
-	"github.com/ehZyiL/connect-hub/internal/proxy"
-	"github.com/ehZyiL/connect-hub/internal/resolved"
-	"github.com/ehZyiL/connect-hub/internal/splitdns"
+	"github.com/ehzyil/connect-hub/internal/netpolicy"
+	"github.com/ehzyil/connect-hub/internal/proxy"
+	"github.com/ehzyil/connect-hub/internal/resolved"
+	"github.com/ehzyil/connect-hub/internal/splitdns"
 )
 
 func TestManagedLaunchBarrier(t *testing.T) {

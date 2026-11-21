@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/localapps"
+	"github.com/ehzyil/connect-hub/internal/localapps"
 )
 
 type controllerRuntime struct {

@@ -3,7 +3,7 @@ package localapps
 import (
 	"context"
 
-	"github.com/ehZyiL/connect-hub/internal/wincapture"
+	"github.com/ehzyil/connect-hub/internal/wincapture"
 )
 
 type mappedDNS struct {

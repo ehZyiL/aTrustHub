@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ehZyiL/connect-hub/internal/wincapture"
+	"github.com/ehzyil/connect-hub/internal/wincapture"
 	"golang.org/x/sys/windows"
 )
 

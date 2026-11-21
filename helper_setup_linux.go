@@ -2,8 +2,8 @@ package main
 
 import (
 	"github.com/egoist/mygo/ui"
-	"github.com/ehZyiL/connect-hub/internal/capture"
-	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/capture"
+	"github.com/ehzyil/connect-hub/internal/model"
 )
 
 type platformCaptureSetup struct{ controller *capture.HelperSetup }

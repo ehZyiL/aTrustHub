@@ -16,9 +16,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/model"
-	localproxy "github.com/ehZyiL/connect-hub/internal/proxy"
-	"github.com/ehZyiL/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/model"
+	localproxy "github.com/ehzyil/connect-hub/internal/proxy"
+	"github.com/ehzyil/connect-hub/internal/vpn"
 	"golang.org/x/net/proxy"
 )
 

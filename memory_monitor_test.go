@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	hubproxy "github.com/ehZyiL/connect-hub/internal/proxy"
+	hubproxy "github.com/ehzyil/connect-hub/internal/proxy"
 )
 
 // TestMemoryMonitoringSimulation 模拟端到端并发数据转发并对内存指标进行全生命周期监测。

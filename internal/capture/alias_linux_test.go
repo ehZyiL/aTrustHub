@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 func TestAliasPublisherRefusesUnsafeTargetsWithoutCommands(t *testing.T) {

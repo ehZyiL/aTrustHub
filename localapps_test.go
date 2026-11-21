@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/localapps"
-	"github.com/ehZyiL/connect-hub/internal/model"
-	"github.com/ehZyiL/connect-hub/internal/store"
-	"github.com/ehZyiL/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/localapps"
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/store"
+	"github.com/ehzyil/connect-hub/internal/vpn"
 )
 
 type localAppSession struct {

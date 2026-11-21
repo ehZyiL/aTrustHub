@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/model"
 )
 
 // 本机软件页按接入点分组：分组头写清楚“哪个网关 / 什么状态 / 几个项目”，

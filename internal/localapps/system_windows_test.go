@@ -9,11 +9,11 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/ehZyiL/connect-hub/internal/dnsmapping"
-	"github.com/ehZyiL/connect-hub/internal/netpolicy"
-	"github.com/ehZyiL/connect-hub/internal/proxy"
-	"github.com/ehZyiL/connect-hub/internal/vpn"
-	"github.com/ehZyiL/connect-hub/internal/wincapture"
+	"github.com/ehzyil/connect-hub/internal/dnsmapping"
+	"github.com/ehzyil/connect-hub/internal/netpolicy"
+	"github.com/ehzyil/connect-hub/internal/proxy"
+	"github.com/ehzyil/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/wincapture"
 	proxy2 "golang.org/x/net/proxy"
 )
 

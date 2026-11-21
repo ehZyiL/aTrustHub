@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/capture"
+	"github.com/ehzyil/connect-hub/internal/capture"
 )
 
 func run() error {

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 type cleanupTestTransport struct {

@@ -2,7 +2,7 @@ package model
 
 import (
 	"encoding/json"
-	"github.com/ehZyiL/connect-hub/internal/routing"
+	"github.com/ehzyil/connect-hub/internal/routing"
 	"testing"
 )
 

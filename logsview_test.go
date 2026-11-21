@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/ehZyiL/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/vpn"
 )
 
 // 渲染只取最近 60 行，复制仍然拿 200 行。

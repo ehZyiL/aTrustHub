@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/model"
-	"github.com/ehZyiL/connect-hub/internal/proxy"
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/proxy"
 )
 
 type View struct {

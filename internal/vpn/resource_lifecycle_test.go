@@ -10,9 +10,9 @@ import (
 	"time"
 
 	zcclient "github.com/mythologyli/zju-connect/client"
-	"github.com/ehZyiL/connect-hub/internal/model"
-	"github.com/ehZyiL/connect-hub/internal/routing"
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/routing"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 func routeTestManager(t *testing.T, settings model.Settings, sessions ...Session) *Manager {

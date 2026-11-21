@@ -9,9 +9,9 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/ehZyiL/connect-hub/internal/dnsmapping"
-	"github.com/ehZyiL/connect-hub/internal/netpolicy"
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/dnsmapping"
+	"github.com/ehzyil/connect-hub/internal/netpolicy"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 const ProtocolVersion = 7

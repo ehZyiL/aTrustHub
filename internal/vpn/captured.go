@@ -7,9 +7,9 @@ import (
 	"net"
 	"net/netip"
 
-	"github.com/ehZyiL/connect-hub/internal/netpolicy"
-	"github.com/ehZyiL/connect-hub/internal/routing"
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/netpolicy"
+	"github.com/ehzyil/connect-hub/internal/routing"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 type OriginalDialFunc = func(context.Context, string, string) (net.Conn, error)

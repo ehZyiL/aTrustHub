@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/ehZyiL/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/vpn"
 )
 
 func healthProbeText(kind string, result vpn.ProbeResult) string {

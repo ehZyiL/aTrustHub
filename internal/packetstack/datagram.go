@@ -4,7 +4,7 @@ import (
 	"context"
 	"net"
 
-	"github.com/ehZyiL/connect-hub/internal/proxy"
+	"github.com/ehzyil/connect-hub/internal/proxy"
 	"github.com/sagernet/sing/common/buf"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"

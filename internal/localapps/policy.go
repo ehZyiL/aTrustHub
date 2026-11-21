@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/netip"
 
-	"github.com/ehZyiL/connect-hub/internal/netpolicy"
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/netpolicy"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 // CaptureNetworks identifies known internal addresses, for rejecting protocols

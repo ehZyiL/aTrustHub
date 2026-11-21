@@ -3,8 +3,8 @@ package vpn
 import (
 	"context"
 	"errors"
-	"github.com/ehZyiL/connect-hub/internal/model"
-	"github.com/ehZyiL/connect-hub/internal/routing"
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/routing"
 	"net"
 	"strings"
 	"testing"

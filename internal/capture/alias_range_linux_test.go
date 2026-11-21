@@ -4,7 +4,7 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/ehZyiL/connect-hub/internal/netpolicy"
+	"github.com/ehzyil/connect-hub/internal/netpolicy"
 )
 
 func TestAliasAllocationPreservesExistingPoolsAndVPNResources(t *testing.T) {

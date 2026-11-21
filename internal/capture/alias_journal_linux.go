@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 	"golang.org/x/sys/unix"
 )
 

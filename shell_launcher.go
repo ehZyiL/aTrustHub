@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/ehZyiL/connect-hub/internal/model"
-	"github.com/ehZyiL/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/vpn"
 )
 
 // 这一版对应原型 C「场景启动台」，按评审意见再收一遍：

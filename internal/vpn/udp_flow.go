@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 	"github.com/things-go/go-socks5/statute"
 	"golang.org/x/net/proxy"
 )

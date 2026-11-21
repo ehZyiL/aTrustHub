@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/model"
-	localproxy "github.com/ehZyiL/connect-hub/internal/proxy"
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/model"
+	localproxy "github.com/ehzyil/connect-hub/internal/proxy"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 	socksproxy "golang.org/x/net/proxy"
 )
 

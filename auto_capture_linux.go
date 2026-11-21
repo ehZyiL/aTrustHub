@@ -5,7 +5,7 @@ package main
 import (
 	"context"
 
-	"github.com/ehZyiL/connect-hub/internal/capture"
+	"github.com/ehzyil/connect-hub/internal/capture"
 )
 
 // Linux has a persistent helper service, so restoring app capture does not

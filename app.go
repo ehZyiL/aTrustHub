@@ -24,10 +24,10 @@ import (
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
-	"github.com/ehZyiL/connect-hub/internal/localapps"
-	"github.com/ehZyiL/connect-hub/internal/model"
-	"github.com/ehZyiL/connect-hub/internal/store"
-	"github.com/ehZyiL/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/localapps"
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/store"
+	"github.com/ehzyil/connect-hub/internal/vpn"
 )
 
 // version is the app's version.

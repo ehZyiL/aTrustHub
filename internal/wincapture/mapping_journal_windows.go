@@ -6,7 +6,7 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/dnsmapping"
+	"github.com/ehzyil/connect-hub/internal/dnsmapping"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )

@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 // aliasRoute is the Linux destination-restoration primitive. The service must

@@ -2,7 +2,7 @@ package vpn
 
 import (
 	"context"
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 	"io"
 	"net"
 	"testing"

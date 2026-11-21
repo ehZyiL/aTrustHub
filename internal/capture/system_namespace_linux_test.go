@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/netpolicy"
-	"github.com/ehZyiL/connect-hub/internal/proxy"
+	"github.com/ehzyil/connect-hub/internal/netpolicy"
+	"github.com/ehzyil/connect-hub/internal/proxy"
 )
 
 func TestSystemHelperTCPAndRecoveryInNamespace(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ehZyiL/connect-hub/internal/routing"
+	"github.com/ehzyil/connect-hub/internal/routing"
 	"net"
 	"strings"
 	"time"

@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/ehZyiL/connect-hub/internal/splitdns"
+	"github.com/ehzyil/connect-hub/internal/splitdns"
 )
 
 func TestDomainConfigValidation(t *testing.T) {

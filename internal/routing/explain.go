@@ -2,7 +2,7 @@ package routing
 
 import (
 	"fmt"
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 type Match struct {

@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/ehZyiL/connect-hub/internal/model"
-	"github.com/ehZyiL/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/vpn"
 )
 
 // siteTileLimit 限制磁贴数量：单接入点用户要的是「最近在用的几个」，

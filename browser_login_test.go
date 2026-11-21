@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/cdp"
+	"github.com/ehzyil/connect-hub/internal/cdp"
 )
 
 // TestLaunchBrowserOpensDevToolsPort checks the part that broke in practice:

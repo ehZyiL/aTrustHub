@@ -7,8 +7,8 @@ import (
 	"os"
 	"unsafe"
 
-	"github.com/ehZyiL/connect-hub/internal/model"
-	"github.com/ehZyiL/connect-hub/internal/wincapture"
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/wincapture"
 	"golang.org/x/sys/windows"
 )
 

@@ -22,12 +22,12 @@ import (
 	atrustclient "github.com/mythologyli/zju-connect/client/atrust"
 	"github.com/mythologyli/zju-connect/client/atrust/auth"
 
-	"github.com/ehZyiL/connect-hub/internal/dnsmapping"
-	"github.com/ehZyiL/connect-hub/internal/model"
-	"github.com/ehZyiL/connect-hub/internal/proxy"
-	"github.com/ehZyiL/connect-hub/internal/routing"
-	"github.com/ehZyiL/connect-hub/internal/splitdns"
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/dnsmapping"
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/proxy"
+	"github.com/ehzyil/connect-hub/internal/routing"
+	"github.com/ehzyil/connect-hub/internal/splitdns"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 // State is where an access point is in its login life.

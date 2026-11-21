@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/ehZyiL/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/vpn"
 )
 
 type authenticationAnswer struct {

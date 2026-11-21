@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/model"
 )
 
 func TestMain(m *testing.M) {

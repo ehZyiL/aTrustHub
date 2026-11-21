@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ehZyiL/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/vpn"
 )
 
 func TestAppOpenURL(t *testing.T) {

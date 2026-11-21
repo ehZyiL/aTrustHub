@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 func TestStrictEntryRequiresNegotiatedCapabilities(t *testing.T) {

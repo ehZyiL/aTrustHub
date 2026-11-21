@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ehZyiL/connect-hub/internal/model"
-	"github.com/ehZyiL/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/vpn"
 )
 
 // 首次运行（以及旧配置里没有这个字段）默认是系统代理；用户显式关掉要留住。

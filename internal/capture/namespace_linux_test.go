@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/proxy"
+	"github.com/ehzyil/connect-hub/internal/proxy"
 )
 
 type probeRequest struct {

@@ -6,10 +6,10 @@ import (
 	"encoding/hex"
 	"sync"
 
-	"github.com/ehZyiL/connect-hub/internal/capture"
-	"github.com/ehZyiL/connect-hub/internal/model"
-	"github.com/ehZyiL/connect-hub/internal/proxy"
-	"github.com/ehZyiL/connect-hub/internal/resolved"
+	"github.com/ehzyil/connect-hub/internal/capture"
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/proxy"
+	"github.com/ehzyil/connect-hub/internal/resolved"
 )
 
 type captureProcess struct {

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/proxy"
+	"github.com/ehzyil/connect-hub/internal/proxy"
 	proxy2 "golang.org/x/net/proxy"
 )
 

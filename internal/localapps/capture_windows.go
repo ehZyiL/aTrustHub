@@ -8,10 +8,10 @@ import (
 	"net"
 	"sync"
 
-	"github.com/ehZyiL/connect-hub/internal/model"
-	"github.com/ehZyiL/connect-hub/internal/proxy"
-	"github.com/ehZyiL/connect-hub/internal/vpn"
-	"github.com/ehZyiL/connect-hub/internal/wincapture"
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/proxy"
+	"github.com/ehzyil/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/wincapture"
 )
 
 type captureProcess struct {

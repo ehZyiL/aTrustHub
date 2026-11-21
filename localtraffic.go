@@ -6,8 +6,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/ehZyiL/connect-hub/internal/localapps"
-	"github.com/ehZyiL/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/localapps"
+	"github.com/ehzyil/connect-hub/internal/vpn"
 )
 
 func trafficBytes(n uint64) string {

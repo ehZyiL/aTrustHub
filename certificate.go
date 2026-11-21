@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/ehZyiL/connect-hub/internal/model"
-	"github.com/ehZyiL/connect-hub/internal/vpn"
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 type certificateProbeReply struct {

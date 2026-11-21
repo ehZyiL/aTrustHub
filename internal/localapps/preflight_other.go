@@ -5,7 +5,7 @@ package localapps
 import (
 	"context"
 
-	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/model"
 )
 
 // The platform launcher reports unsupported capture on these platforms.

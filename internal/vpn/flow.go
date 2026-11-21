@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	hubproxy "github.com/ehZyiL/connect-hub/internal/proxy"
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	hubproxy "github.com/ehzyil/connect-hub/internal/proxy"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 	"golang.org/x/net/proxy"
 )
 

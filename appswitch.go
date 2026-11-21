@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/model"
 )
 
 // appEnabled reports whether one application's addresses may enter the tunnel.

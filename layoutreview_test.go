@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/model"
 )
 
 // layoutApp 造一个带两个接入点和三个本机项目的应用，供布局检查使用。

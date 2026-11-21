@@ -1,4 +1,4 @@
-module github.com/ehZyiL/connect-hub
+module github.com/ehzyil/connect-hub
 
 go 1.27.3
 

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 	"github.com/things-go/go-socks5"
 	"github.com/things-go/go-socks5/statute"
 )

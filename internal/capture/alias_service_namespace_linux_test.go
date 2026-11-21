@@ -17,10 +17,10 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/ehZyiL/connect-hub/internal/netpolicy"
-	"github.com/ehZyiL/connect-hub/internal/resolved"
-	"github.com/ehZyiL/connect-hub/internal/splitdns"
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/netpolicy"
+	"github.com/ehzyil/connect-hub/internal/resolved"
+	"github.com/ehzyil/connect-hub/internal/splitdns"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 // This uses the same helper control/launch APIs as the GUI. Only the remote

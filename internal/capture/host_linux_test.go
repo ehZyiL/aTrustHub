@@ -16,10 +16,10 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/ehZyiL/connect-hub/internal/proxy"
-	"github.com/ehZyiL/connect-hub/internal/resolved"
-	"github.com/ehZyiL/connect-hub/internal/splitdns"
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/proxy"
+	"github.com/ehzyil/connect-hub/internal/resolved"
+	"github.com/ehzyil/connect-hub/internal/splitdns"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 // This opt-in test uses the installed system helper, never sudo. Only its own

@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ehZyiL/connect-hub/internal/localapps"
-	"github.com/ehZyiL/connect-hub/internal/vpn"
-	"github.com/ehZyiL/connect-hub/internal/workeripc"
+	"github.com/ehzyil/connect-hub/internal/localapps"
+	"github.com/ehzyil/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 func TestLocalAccessLogDoesNotInferVPNOrExposeURLCredentials(t *testing.T) {

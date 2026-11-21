@@ -14,8 +14,8 @@ import (
 
 	"github.com/egoist/mygo"
 
-	"github.com/ehZyiL/connect-hub/internal/model"
-	"github.com/ehZyiL/connect-hub/internal/vpn"
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/vpn"
 )
 
 // multitunPath is the bundled multi-point TUN helper. It is looked up in a

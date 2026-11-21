@@ -2,9 +2,51 @@ package main
 
 import "github.com/egoist/mygo/ui"
 
-// 导航里的四个页面：顺序与 ⌘1–⌘4 一致。
+// pageRef 是顶栏导航里的一段：Tab 是 a.tab 的逻辑页号，Label 是显示文案。
+// 简单模式只换掉「出现哪几段」，不改 a.tab 的含义——其余代码照旧按逻辑页号
+// 分发，不必到处判断模式。
+type pageRef struct {
+	Tab   int
+	Label string
+}
+
+// pages 是当前模式下顶栏的段。简单模式只留「连接」和「内网网站」：
+// 网关资源、访问日志这些页面在单接入点的场景里只是噪音，真正的入口
+// （接管方式、日志）在「连接」页和设置页里。
+func (a *app) pages() []pageRef {
+	if a.simpleMode() {
+		return []pageRef{
+			{Tab: 0, Label: "连接"},
+			{Tab: 3, Label: "内网网站"},
+		}
+	}
+	return []pageRef{
+		{Tab: 0, Label: "接入点"},
+		{Tab: 1, Label: appTabLabel(a.appCount())},
+		{Tab: 2, Label: accessTabLabel()},
+		{Tab: 3, Label: "本机软件"},
+	}
+}
+
+// pageNavLabels 是导航里出现的文案，顺序与 ⌘1–⌘n 一致。
 func pageNavLabels(a *app) []string {
-	return []string{"接入点", appTabLabel(a.appCount()), accessTabLabel(), "本机软件"}
+	refs := a.pages()
+	labels := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		labels = append(labels, ref.Label)
+	}
+	return labels
+}
+
+// clampTab 把 a.tab 收敛到当前模式下存在的页面：切进简单模式时
+// 「访问日志」那一页会消失，留着它就会渲染一个导航里没有的页面。
+func (a *app) clampTab() {
+	for _, ref := range a.pages() {
+		if ref.Tab == a.tab {
+			return
+		}
+	}
+	a.tab = 0
 }
 
 // goTab 切页并离开设置页。设置是页面级的东西：切页就该回到页面本身，
@@ -22,8 +64,9 @@ func (a *app) pageNav(c *ui.Context) {
 	track := ui.Row(c).Padding(3).Radius(999).Background(t.SurfaceHover).
 		Border(1, t.Border).Gap(2)
 	track.Children(func() {
-		for i, label := range pageNavLabels(a) {
-			page := i
+		for _, ref := range a.pages() {
+			page := ref.Tab
+			label := ref.Label
 			active := !a.settings.open && a.tab == page
 			seg := ui.Row(c).Padding(5, 12).Radius(999).OnClick(func() { a.goTab(page) })
 			if active {

@@ -258,6 +258,9 @@ type Settings struct {
 	// CaptureMode 是记住的接管方式（见 CaptureMode* 常量）：启动后按它恢复。
 	// 首次运行默认为系统代理；用 id 而不是界面文案，改文案不会让设置失效。
 	CaptureMode string `json:"captureMode,omitempty"`
+	// SimpleMode 把界面收敛成「一个接入点 + 一个网址输入框」，专业设置收进设置页。
+	// 它只影响展示与默认值（见 ConvergeSimple），不改变任何业务逻辑。
+	SimpleMode bool `json:"simpleMode,omitempty"`
 	// AutoLoginOptIn records that the user has been offered the auto-login
 	// default. Access points do not log in at startup unless they ask for it.
 	AutoLoginOptIn bool `json:"autoLoginOptIn"`
@@ -347,7 +350,7 @@ func (c *Config) Normalize() {
 // Normalize fills the default settings.
 func (s *Settings) Normalize() {
 	if s.ListenHost == "" && s.AggregatePort == 0 && s.Routing == "" &&
-		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && len(s.DNSBindings) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 && s.CaptureMode == "" {
+		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && len(s.DNSBindings) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 && s.CaptureMode == "" && !s.SimpleMode {
 		*s = DefaultSettings()
 		return
 	}
@@ -650,9 +653,39 @@ func (p *AccessPoint) Validate() error {
 	return nil
 }
 
+// ConvergeSimple 把配置收敛成简单模式要的样子：只有一个代理地址，
+// 没有「每个接入点一个端口」这回事。它只动这几个展示层开关，不碰路由、
+// 接管、会话等业务字段，所以随时开关都不会把已有配置搞坏。
+func (c *Config) ConvergeSimple() {
+	for i := range c.Points {
+		c.Points[i].SocksPort = 0
+		c.Points[i].InPool = true
+	}
+	// 统一入口是简单模式唯一的代理地址，关掉它这一档就没意义了。
+	c.Settings.AggregateEnabled = true
+}
+
+// RestorePorts 给还没有独立端口的接入点各分一个，退出简单模式时用：
+// 那一档在完整模式里本来就有，留着 0 等于悄悄吞掉用户的配置。
+// 调用前先把 Settings.SimpleMode 置 false，否则 EnsurePorts 会把端口又收敛掉。
+func (c *Config) RestorePorts() {
+	for i := range c.Points {
+		if c.Points[i].SocksPort == 0 {
+			c.Points[i].SocksPort = c.NextSocksPort()
+		}
+	}
+	c.EnsurePorts()
+}
+
 // EnsurePorts gives every access point a SOCKS5 port of its own that does
-// not collide with another one or with the aggregate proxy.
+// not collide with another one or with the aggregate proxy. 简单模式没有
+// 「每个接入点一个端口」这回事，所以直接收敛到单一入口。
 func (c *Config) EnsurePorts() {
+	if c.Settings.SimpleMode {
+		// 简单模式不分配独立端口：Add / Normalize 都不该把概念又补回来。
+		c.ConvergeSimple()
+		return
+	}
 	used := map[int]bool{c.Settings.AggregatePort: true}
 	next := 1081
 	for i := range c.Points {

@@ -252,9 +252,26 @@ func (a *app) launcherBody(c *ui.Context) {
 	case 2:
 		a.accessSection(c)
 	case 3:
+		if a.simpleMode() {
+			// 简单模式下「本机软件」收成「内网网站」：一个地址输入框加几个磁贴。
+			a.sitesPage(c)
+			return
+		}
 		a.localAppsSection(c)
 	default:
 		views := a.mgr.Views()
+		// 简单模式：一个接入点时首屏就是一张卡，还没有点时只有添加引导；
+		// 多个点时单卡描述不了复数，退回下面的列表。
+		if a.simpleMode() {
+			switch len(views) {
+			case 0:
+				a.simpleEmpty(c)
+				return
+			case 1:
+				a.simpleHome(c, views[0])
+				return
+			}
+		}
 		ui.Column(c).Grow(1).MinHeight(0).Gap(12).Children(func() {
 			pageBar(c, "接入点", fmt.Sprintf("%d 个", len(views)), func() {
 				if len(views) > 0 {

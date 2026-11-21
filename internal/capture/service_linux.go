@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qy/easyconnect/internal/netpolicy"
-	"github.com/qy/easyconnect/internal/proxy"
-	"github.com/qy/easyconnect/internal/resolved"
+	"github.com/ehZyiL/connect-hub/internal/netpolicy"
+	"github.com/ehZyiL/connect-hub/internal/proxy"
+	"github.com/ehZyiL/connect-hub/internal/resolved"
 	xproxy "golang.org/x/net/proxy"
 	"golang.org/x/sys/unix"
 	"net/netip"

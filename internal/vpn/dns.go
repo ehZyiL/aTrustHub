@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 // DNSExchanger is optional; aTrust sessions retain their existing behavior.

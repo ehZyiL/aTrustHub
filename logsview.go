@@ -1,6 +1,6 @@
 package main
 
-import "github.com/qy/easyconnect/internal/vpn"
+import "github.com/ehZyiL/connect-hub/internal/vpn"
 
 // 日志是最便宜也最吵的事件源：跑流量时每建一条连接都会写一行。
 // 这里决定「什么时候值得为一条日志重绘」，以及渲染多少行。

@@ -14,7 +14,7 @@ import (
 	atrustclient "github.com/mythologyli/zju-connect/client/atrust"
 	"github.com/mythologyli/zju-connect/client/atrust/auth"
 
-	"github.com/qy/easyconnect/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/model"
 )
 
 // zjuLoginMethod builds what ZJU-Connect's Setup needs for this access

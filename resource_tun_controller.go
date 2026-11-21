@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qy/easyconnect/internal/localapps"
+	"github.com/ehZyiL/connect-hub/internal/localapps"
 )
 
 type resourceTUNStatus struct {

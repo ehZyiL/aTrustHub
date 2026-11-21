@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/qy/easyconnect/internal/store"
+	"github.com/ehZyiL/connect-hub/internal/store"
 )
 
 // 设置页选的颜色模式要真的落盘，重开配置还是那一档。

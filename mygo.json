@@ -1,8 +1,8 @@
 {
-  "name": "EasyConnectHub",
-  "identifier": "app.easyconnect.hub",
+  "name": "ConnectHub",
+  "identifier": "app.connect.hub",
   "version": "0.1.0",
-  "copyright": "Based on aTrustHub and ZJU-Connect",
+  "copyright": "Connect Hub",
   "out": "build",
   "macos": {
     "infoPlist": {

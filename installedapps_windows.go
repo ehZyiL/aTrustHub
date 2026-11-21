@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/qy/easyconnect/internal/localapps"
-	"github.com/qy/easyconnect/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/localapps"
+	"github.com/ehZyiL/connect-hub/internal/model"
 )
 
 func readInstalledProgram(path string) (model.LocalApp, error) {

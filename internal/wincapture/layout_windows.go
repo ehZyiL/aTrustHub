@@ -30,8 +30,8 @@ func bundleRoot(exe string) string {
 func helperPath(exe string) (string, bool) {
 	dir := filepath.Dir(exe)
 	for _, candidate := range []string{
-		filepath.Join(dir, coreDir, "easyconnect-hub-capture.exe"),
-		filepath.Join(dir, "easyconnect-hub-capture.exe"),
+		filepath.Join(dir, coreDir, "connect-hub-capture.exe"),
+		filepath.Join(dir, "connect-hub-capture.exe"),
 	} {
 		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
 			return candidate, true

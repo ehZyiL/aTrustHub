@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/qy/easyconnect/internal/proxy"
+	"github.com/ehZyiL/connect-hub/internal/proxy"
 	"github.com/sagernet/sing/common/control"
 	"golang.org/x/sys/unix"
 )

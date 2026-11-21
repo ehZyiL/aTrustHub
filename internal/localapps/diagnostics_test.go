@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/miekg/dns"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 	"sync/atomic"
 	"testing"
 )

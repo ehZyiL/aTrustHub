@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/qy/easyconnect/internal/model"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 func copyProbeProgram(t *testing.T, dir string) string {

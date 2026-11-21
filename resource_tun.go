@@ -9,10 +9,10 @@ import (
 	"sync"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/qy/easyconnect/internal/dnsmapping"
-	"github.com/qy/easyconnect/internal/localapps"
-	"github.com/qy/easyconnect/internal/vpn"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/dnsmapping"
+	"github.com/ehZyiL/connect-hub/internal/localapps"
+	"github.com/ehZyiL/connect-hub/internal/vpn"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 func (a *app) resourceTUNActive() bool {

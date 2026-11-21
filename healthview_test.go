@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qy/easyconnect/internal/vpn"
+	"github.com/ehZyiL/connect-hub/internal/vpn"
 )
 
 func TestHealthLabelsDoNotClaimUnverifiedBusinessSuccess(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 func TestPublishShorterRefreshKeepsLongerExpiration(t *testing.T) {

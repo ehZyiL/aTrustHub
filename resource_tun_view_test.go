@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/qy/easyconnect/internal/localapps"
-	"github.com/qy/easyconnect/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/localapps"
+	"github.com/ehZyiL/connect-hub/internal/model"
 )
 
 func TestSystemTUNControlVisibleForEasyConnectAndSeparateFromLegacy(t *testing.T) {

@@ -8,8 +8,8 @@ import (
 
 	"github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
-	"github.com/qy/easyconnect/internal/model"
-	"github.com/qy/easyconnect/internal/wincapture"
+	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/wincapture"
 	"golang.org/x/sys/windows"
 )
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	zcclient "github.com/mythologyli/zju-connect/client"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 func cloneResources(in *workeripc.ResourceSnapshot) *workeripc.ResourceSnapshot {

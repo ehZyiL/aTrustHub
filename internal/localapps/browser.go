@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qy/easyconnect/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/model"
 )
 
 // BrowserSupervisorFlag starts a lightweight mode of the same executable.

@@ -11,9 +11,9 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
-	"github.com/qy/easyconnect/internal/model"
-	"github.com/qy/easyconnect/internal/store"
-	"github.com/qy/easyconnect/internal/vpn"
+	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/store"
+	"github.com/ehZyiL/connect-hub/internal/vpn"
 )
 
 type stubSession struct {

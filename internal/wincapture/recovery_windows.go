@@ -10,7 +10,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-const recoveryRoot = `SOFTWARE\EasyConnectHub\CaptureRecovery`
+const recoveryRoot = `SOFTWARE\ConnectHub\CaptureRecovery`
 
 func journalDNS(id string, state dnsRecovery) error {
 	if err := state.validate(); err != nil {

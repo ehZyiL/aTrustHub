@@ -13,7 +13,7 @@ import (
 
 	"github.com/mythologyli/zju-connect/client/atrust/auth"
 
-	"github.com/qy/easyconnect/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/model"
 )
 
 func TestClientDataRoundTrip(t *testing.T) {

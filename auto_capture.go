@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qy/easyconnect/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/model"
 )
 
 // autoCapturePhase is the state of the "restore app capture after startup or

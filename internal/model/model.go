@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qy/easyconnect/internal/routing"
+	"github.com/ehZyiL/connect-hub/internal/routing"
 )
 
 // Routing is how the aggregate proxy picks the access point a new

@@ -8,7 +8,7 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/qy/easyconnect/internal/dnsmapping"
+	"github.com/ehZyiL/connect-hub/internal/dnsmapping"
 )
 
 type pooledSession struct {

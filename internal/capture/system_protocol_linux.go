@@ -5,9 +5,9 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/qy/easyconnect/internal/dnsmapping"
-	"github.com/qy/easyconnect/internal/netpolicy"
-	"github.com/qy/easyconnect/internal/resolved"
+	"github.com/ehZyiL/connect-hub/internal/dnsmapping"
+	"github.com/ehZyiL/connect-hub/internal/netpolicy"
+	"github.com/ehZyiL/connect-hub/internal/resolved"
 )
 
 // SystemResource identifies one VPN generation. A guard reserves existing

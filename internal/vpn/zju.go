@@ -21,7 +21,7 @@ import (
 	"github.com/mythologyli/zju-connect/stack/gvisor"
 	"github.com/mythologyli/zju-connect/underlay"
 
-	"github.com/qy/easyconnect/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/model"
 )
 
 // ZJUOptions configure the ZJU-Connect backed connector.

@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qy/easyconnect/internal/proxy"
-	"github.com/qy/easyconnect/internal/resolved"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/proxy"
+	"github.com/ehZyiL/connect-hub/internal/resolved"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 // Run with the private resolved/network/mount namespace probe. No host

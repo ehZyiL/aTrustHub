@@ -7,7 +7,7 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/qy/easyconnect/internal/dnsmapping"
+	"github.com/ehZyiL/connect-hub/internal/dnsmapping"
 )
 
 // register adds a gateway to the existing adapter. It never restarts the stack

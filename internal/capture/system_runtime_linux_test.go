@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qy/easyconnect/internal/netpolicy"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/netpolicy"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 func TestSystemRequiredDNSPoolRejectsBeforeChangingExistingRoutes(t *testing.T) {

@@ -18,7 +18,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const pipePrefix = `\\.\pipe\EasyConnectHub-Capture-`
+const pipePrefix = `\\.\pipe\ConnectHub-Capture-`
 
 var consentPrompt = elevationPrompt{busy: make(chan struct{}, 1)}
 
@@ -54,7 +54,8 @@ func startHelper(ctx context.Context) (*helperTransport, error) {
 	}
 	helper, ok := helperPath(exe)
 	if !ok {
-		return nil, errors.New("缺少 Windows 网络助手，请解压完整安装包（easyconnect-hub-capture.exe 位于 core 目录）")
+		return nil, errors.New("缺少 Windows 网络助手，请解压完整安装包（connect-hub-capture.exe 位于 core 目录）")
+	}
 	}
 	if err := checkHelperProtocol(ctx, helper); err != nil {
 		return nil, err

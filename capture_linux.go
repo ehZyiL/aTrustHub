@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/qy/easyconnect/internal/capture"
+	"github.com/ehZyiL/connect-hub/internal/capture"
 	"os"
 )
 

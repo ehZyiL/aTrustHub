@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qy/easyconnect/internal/netpolicy"
+	"github.com/ehZyiL/connect-hub/internal/netpolicy"
 )
 
 func TestHelperScopeValidation(t *testing.T) {

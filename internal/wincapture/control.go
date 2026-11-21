@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qy/easyconnect/internal/proxy"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/proxy"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 type controlTransport interface {

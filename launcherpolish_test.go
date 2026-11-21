@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/qy/easyconnect/internal/model"
-	"github.com/qy/easyconnect/internal/vpn"
+	"github.com/ehZyiL/connect-hub/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/vpn"
 )
 
 // 底栏只报运行环境：接管方式留在顶栏，同一个东西不该有两个入口。

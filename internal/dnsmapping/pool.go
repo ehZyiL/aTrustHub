@@ -4,8 +4,8 @@ package dnsmapping
 
 import (
 	"errors"
-	"github.com/qy/easyconnect/internal/netpolicy"
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/netpolicy"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 	"net/netip"
 	"sort"
 	"sync"

@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/qy/easyconnect/internal/workeripc"
+	"github.com/ehZyiL/connect-hub/internal/workeripc"
 )
 
 func domainSnapshot(name string, port int) *workeripc.ResourceSnapshot {

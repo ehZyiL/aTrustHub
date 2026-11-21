@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/qy/easyconnect/internal/localapps"
-	"github.com/qy/easyconnect/internal/vpn"
+	"github.com/ehZyiL/connect-hub/internal/localapps"
+	"github.com/ehZyiL/connect-hub/internal/vpn"
 )
 
 func findChromium() string {

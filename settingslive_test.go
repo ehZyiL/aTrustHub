@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/qy/easyconnect/internal/model"
+	"github.com/ehZyiL/connect-hub/internal/model"
 )
 
 // 设置页打开时点导航必须能回到页面：点另一页可以，点当前页也可以。

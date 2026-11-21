@@ -8,7 +8,7 @@ import (
 	"net/netip"
 
 	tun "github.com/mythologyli/sing-tun"
-	"github.com/qy/easyconnect/internal/packetstack"
+	"github.com/ehZyiL/connect-hub/internal/packetstack"
 	"golang.org/x/sys/unix"
 )
 

@@ -262,6 +262,10 @@ type Settings struct {
 	// SimpleMode 把界面收敛成「一个接入点 + 一个网址输入框」，专业设置收进设置页。
 	// 它只影响展示与默认值（见 ConvergeSimple），不改变任何业务逻辑。
 	SimpleMode bool `json:"simpleMode,omitempty"`
+	// AutoRestoreAppCapture 是「启动/登录后自动恢复应用接管」的意图。
+	// CaptureMode 记的是上次真正生效的档位；这个字段记的是用户是否希望
+	// 在条件满足时自动把它重新打开。默认关闭，不改变旧配置行为。
+	AutoRestoreAppCapture bool `json:"autoRestoreAppCapture,omitempty"`
 	// AutoLoginOptIn records that the user has been offered the auto-login
 	// default. Access points do not log in at startup unless they ask for it.
 	AutoLoginOptIn bool `json:"autoLoginOptIn"`
@@ -351,7 +355,7 @@ func (c *Config) Normalize() {
 // Normalize fills the default settings.
 func (s *Settings) Normalize() {
 	if s.ListenHost == "" && s.AggregatePort == 0 && s.Routing == "" &&
-		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && len(s.DNSBindings) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 && s.CaptureMode == "" && !s.SimpleMode {
+		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && len(s.DNSBindings) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 && s.CaptureMode == "" && !s.SimpleMode && !s.AutoRestoreAppCapture {
 		*s = DefaultSettings()
 		return
 	}

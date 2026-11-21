@@ -84,6 +84,8 @@ type app struct {
 	// captureRestored 表示启动后已经试过按记住的接管方式恢复；重试由 3 秒 tick 驱动，
 	// 入口一旦监听就不再重复写系统设置。
 	captureRestored bool
+	// autoCapture 是「启动/登录后自动恢复应用接管」的状态机。
+	autoCapture autoCaptureState
 	// tray is the notification-area icon that keeps the app alive when the
 	// window is closed (Windows), and quitRequested says a quit is intended.
 	tray          *mygo.Tray
@@ -262,6 +264,8 @@ type settingsDraft struct {
 	section int
 	// mode 是接管方式下拉的绑定值，每帧从真实状态回读。
 	mode string
+	// autoRestoreAppCapture 是「启动/登录后自动恢复应用接管」的草稿值。
+	autoRestoreAppCapture bool
 	// appearance 是颜色模式下拉的草稿值（跟随系统 / 浅色 / 深色）。
 	appearance string
 	// theme 是主题色系的草稿值（blue / green / purple）。
@@ -384,6 +388,7 @@ func newApp() (*app, error) {
 		a.logFile = f
 	}
 	a.cfg = st.Config()
+	a.autoCapture.enabled = a.cfg.Settings.AutoRestoreAppCapture
 	a.local = localapps.NewManager(func() {
 		// 本机项目的流量通知最多 250ms 一次，属事件源：合并后再画，
 		// 且要经门控——不能让托盘里的窗口因流量重建整树。
@@ -538,6 +543,7 @@ func (a *app) start() {
 			a.checkTunnels()
 			a.guardSystemProxy()
 			a.maybeRestoreCaptureMode()
+			a.maybeAutoRestoreAppCapture()
 			// TUN 把系统 DNS 指向自己；它一旦不应答，整台机器就上不了网。
 			// 连续两次检查失败就主动关掉 TUN，把网络还给系统。
 			if a.tunOn && time.Since(lastDNSCheck) > 20*time.Second {
@@ -886,9 +892,9 @@ func (a *app) guardSystemProxy() {
 	a.invalidate()
 }
 
-// maybeRestoreCaptureMode 在启动后按记住的接管方式接管一次。默认（也是首次运行）
-// 是系统代理：统一入口一开始监听就把它指过去。只自动恢复系统代理——全局 TUN 有
-// 自己的 tunEnabled 恢复路径，应用接管要先装好网络助手，交给用户手动开。
+// maybeRestoreCaptureMode 在启动后按记住的接管方式接管系统代理。默认（也是首次运行）
+// 是系统代理：统一入口一开始监听就把它指过去。全局 TUN 有自己的 tunEnabled 恢复路径；
+// 应用接管的自动恢复由 auto_capture.go 的独立开关负责，不在这里处理。
 func (a *app) maybeRestoreCaptureMode() {
 	if a.captureRestored {
 		return

@@ -81,6 +81,10 @@ func TestCaptureChipPicksModeWithoutLeavingPage(t *testing.T) {
 		t.Fatalf("点下拉里的 %q 失败: %v", pick, err)
 	}
 	tt.Frame()
+	// view() 把 toast 交给框架后会清空字段；拒绝原因同时写进运行日志。
+	if !strings.Contains(tailLog(a.bus.Tail(10)), "未生效") {
+		t.Errorf("点 %q 被拒绝时应当给出原因；log = %s", pick, tailLog(a.bus.Tail(10)))
+	}
 	if a.captureMenuOpen {
 		t.Error("选完一项后下拉应当收起")
 	}

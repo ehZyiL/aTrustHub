@@ -31,6 +31,7 @@ func TestLocalAppsGroupedByPoint(t *testing.T) {
 	a.tab = 3
 
 	tt := ui.NewTester(a.view, 1120, 780)
+	tt.Frame()
 	texts := strings.Join(tt.Texts(), "|")
 	for _, want := range []string{"公司主网关", "2 个项目", "生产报表数据库", "办公网线路", "接入点已删除", "遗留项目"} {
 		if !strings.Contains(texts, want) {

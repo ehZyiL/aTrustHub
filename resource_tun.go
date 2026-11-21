@@ -68,13 +68,16 @@ func (a *app) setupResourceTUN() {
 				// 启动或接管失败要主动告知，不能只躺在设置页的状态行里。
 				a.setToast(view.Error)
 			}
+			// 自动恢复状态机先记录结果；它返回 true 时说明这次结果是自动
+			// 恢复流程在负责，失败不能把记住的 CaptureMode 改写成「不使用」。
+			autoHandled := a.noteAutoCaptureResult(view)
 			// 接管真的跑起来才记住；失败时不留假的目标，记成「不使用」。
 			switch {
 			case view.Running:
 				a.rememberCaptureMode(captureAppCapture)
 			case view.Busy || view.CleanupPending:
 				// 还在切换或清理：等下一次通知再说。
-			case view.Error != "":
+			case view.Error != "" && !autoHandled:
 				a.rememberCaptureMode(captureOff)
 			}
 			// 控制器每 2 秒会通知一次：走合并入口，隐藏时被门控拦住。
@@ -145,6 +148,14 @@ func (a *app) resourceCaptureConfigs() ([]localapps.CaptureConfig, error) {
 
 func supportsResourceTUN() bool { return runtime.GOOS == "windows" || runtime.GOOS == "linux" }
 
+func (a *app) stopAppCaptureByUser() {
+	a.clearAutoRestoreAppCapture()
+	if a.resourceTUN != nil {
+		a.resourceTUN.Stop()
+	}
+	a.rememberCaptureMode(captureOff)
+}
+
 // captureStatus 是应用接管的状态行：下拉负责开关，这里只报状态与修正入口。
 func (a *app) captureStatus(c *ui.Context) {
 	if !supportsResourceTUN() {
@@ -179,7 +190,7 @@ func (a *app) captureStatus(c *ui.Context) {
 			a.toast = status.Error
 		}
 		if status.Busy && a.resourceTUN != nil && ui.Button(c, "取消接管").FontSize(11).Clicked() {
-			a.resourceTUN.Stop()
+			a.stopAppCaptureByUser()
 		}
 		if status.CleanupPending && a.resourceTUN != nil && ui.Button(c, "重试清理").FontSize(11).Clicked() {
 			a.resourceTUN.Stop()

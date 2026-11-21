@@ -69,6 +69,7 @@ func testApp(t *testing.T) *app {
 		icon:  loadAppIcon(),
 	}
 	a.cfg = st.Config()
+	a.autoCapture.enabled = a.cfg.Settings.AutoRestoreAppCapture
 	a.mgr = vpn.NewManager(
 		func(ctx context.Context, p model.AccessPoint, creds vpn.Credentials) (vpn.Session, error) {
 			ip := map[string]string{"主网关": "10.10.1.23", "教育网线路": "10.10.1.24", "备用网关": "10.10.1.25"}[p.Name]

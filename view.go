@@ -951,6 +951,11 @@ func (a *app) captureMode() string {
 func (a *app) applyCaptureMode(mode string) {
 	from := a.captureMode()
 	if from == mode {
+		// 当前生效档位已经相同，但自动恢复可能还在等待/退避：
+		// 用户选到非应用接管档位，就等于表示「不要再自动回来」。
+		if mode != captureAppCapture {
+			a.clearAutoRestoreAppCapture()
+		}
 		return
 	}
 	// 先在不碰现有模式的前提下判断目标能不能开：先拆再开会让一次失败的
@@ -960,8 +965,15 @@ func (a *app) applyCaptureMode(mode string) {
 		a.invalidate()
 		return
 	}
-	// 先停掉不在目标里的接管方式。
-	if from == captureAppCapture && a.resourceTUN != nil {
+	// 用户主动切到别的档位，就不再希望应用接管自动回来。
+	// 注意：目标档位预检失败时不能清，否则当前正在用的应用接管会被
+	// 一次失败的切换顺手关掉自动恢复。
+	if mode != captureAppCapture {
+		a.clearAutoRestoreAppCapture()
+	}
+	// 先停掉不在目标里的接管方式。这里不能只看 from：自动恢复可能在
+	// applyCaptureMode 读到 from 之后、clearAutoRestoreAppCapture 之前启动。
+	if mode != captureAppCapture && a.resourceTUN != nil && (from == captureAppCapture || a.resourceTUNActive()) {
 		a.resourceTUN.Stop()
 	}
 	if from == captureGlobalTUN {
@@ -991,6 +1003,11 @@ func (a *app) applyCaptureMode(mode string) {
 			a.captureRefuse(mode, "没有在线的 aTrust 接入点，全局 TUN 需要 aTrust 会话")
 		}
 	case captureAppCapture:
+		// 用户手动选回应用接管时，把自动恢复的退避/暂停也清零，
+		// 这样一次手动重试不会被上一轮失败预算挡住。
+		if a.autoRestoreEnabled() {
+			a.armAutoCapture("manual")
+		}
 		a.setupResourceTUN()
 		if a.resourceTUN != nil {
 			a.resourceTUN.Start()
@@ -1920,7 +1937,7 @@ func (a *app) settingsPage(c *ui.Context) {
 		ui.Segmented(c, &d.section, "通用", "网络与接管", "日志", "关于").Label("设置分类")
 		ui.Divider(c)
 		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(6, 2, 6, 0).Children(func() {
-			ui.Column(c).Padding(0, 12, 0, 0).Gap(12).Children(func() {
+			ui.Column(c).Padding(0, 12, 0, 0).Gap(10).Children(func() {
 				switch d.section {
 				case settingNetwork:
 					a.captureSection(c)
@@ -2058,12 +2075,44 @@ func (a *app) captureSection(c *ui.Context) {
 	d := &a.settings
 	// 下拉反映真实状态；用户改选时由 applyCaptureMode 负责先关掉其他方式。
 	d.mode = a.captureMode()
+	d.autoRestoreAppCapture = a.cfg.Settings.AutoRestoreAppCapture
 	ui.Field(c, "接管方式", func() {
 		sel := ui.Select(c, &d.mode, a.captureModes()).Width(180)
 		if sel.Changed() {
 			a.applyCaptureMode(d.mode)
 		}
 	})
+	if supportsResourceTUN() {
+		if ok, reason := autoCaptureSupportedFn(); ok {
+			if ui.Checkbox(c, &d.autoRestoreAppCapture,
+				"启动 / 登录后自动恢复应用接管").Changed() {
+				if err := a.setAutoRestoreAppCapture(d.autoRestoreAppCapture); err != nil {
+					// 关闭失败也会强制本次运行保持关闭；不要在界面上又勾回去。
+					d.autoRestoreAppCapture = false
+					a.toast = "保存自动恢复设置失败：" + err.Error()
+				}
+			}
+			ui.Text(c, "网络助手就绪且至少一个网关在线时自动开启；"+
+				"手动切换接管方式或取消接管会同时关闭本项。取消勾选只影响以后，"+
+				"不会停止当前正在运行的接管。").
+				FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(620)
+			if line := a.autoCaptureStatusLine(); line != "" {
+				color := t.TextMuted
+				if a.autoCapturePaused() {
+					color = t.Warning
+				}
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Text(c, line).FontSize(11).TextColor(color).Wrap().MaxWidth(560)
+					if a.autoCapturePaused() && ui.Button(c, "重试").FontSize(11).Clicked() {
+						a.retryAutoCapture()
+					}
+				})
+			}
+		} else {
+			ui.Text(c, "自动恢复不可用："+reason).
+				FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(620)
+		}
+	}
 	agg := a.mgr.Aggregate()
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
 		ui.Text(c, "当前接管："+a.captureMode()).FontSize(11).TextColor(t.TextMuted)
@@ -2081,7 +2130,8 @@ func (a *app) captureSection(c *ui.Context) {
 	ui.Text(c, "系统代理只写系统代理设置，认它的软件才走代理；"+
 		"全局 TUN 用 aTrust 会话在网络层接管整机 IPv4 TCP，只支持 aTrust 接入点；"+
 		"应用接管用在线会话在网络层接管各接入点授权的 IP 网段与域名（IPv4 TCP，UDP 试验），"+
-		"公网默认路由不动。三者互斥，同一时间只能开一个；选择会记住，首次运行默认开启系统代理。").
+		"公网默认路由不动。三者互斥，同一时间只能开一个；选择会记住，首次运行默认开启系统代理。"+
+		"勾选「自动恢复」后，启动或登录后条件满足时会自动切回应用接管。").
 		FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(620)
 	ui.Divider(c)
 	a.captureStatus(c)
@@ -2714,20 +2764,21 @@ func (a *app) toggleSystemProxy() bool {
 func (a *app) openSettings() {
 	s := a.cfg.Settings
 	a.settings = settingsDraft{
-		open:          true,
-		section:       a.settings.section,
-		appearance:    appearanceLabel(a.savedAppearance()),
-		theme:         a.savedTheme(),
-		quitOnClose:   s.QuitOnClose,
-		host:          s.ListenHost,
-		port:          strconv.Itoa(s.AggregatePort),
-		interval:      strconv.Itoa(s.HealthIntervalSec),
-		routing:       s.Routing.Label(),
-		aggregate:     s.AggregateEnabled,
-		autoReconnect: s.AutoReconnect,
-		secretStore:   secretStoreLabel(s.SecretStore),
-		hideDock:      s.HideDock,
-		simpleMode:    s.SimpleMode,
+		open:                  true,
+		section:               a.settings.section,
+		appearance:            appearanceLabel(a.savedAppearance()),
+		theme:                 a.savedTheme(),
+		quitOnClose:           s.QuitOnClose,
+		autoRestoreAppCapture: s.AutoRestoreAppCapture,
+		host:                  s.ListenHost,
+		port:                  strconv.Itoa(s.AggregatePort),
+		interval:              strconv.Itoa(s.HealthIntervalSec),
+		routing:               s.Routing.Label(),
+		aggregate:             s.AggregateEnabled,
+		autoReconnect:         s.AutoReconnect,
+		secretStore:           secretStoreLabel(s.SecretStore),
+		hideDock:              s.HideDock,
+		simpleMode:            s.SimpleMode,
 	}
 }
 

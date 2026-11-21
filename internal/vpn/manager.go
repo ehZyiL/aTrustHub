@@ -238,6 +238,8 @@ type endpoint struct {
 	// itself (and speeds up retries after a failure).
 	lastTraffic time.Time
 	lastProbe   time.Time
+	// lastTarget 是该节点最近一次成功路由通过的真实业务目标（host:port），保活优先探测已知可达目标。
+	lastTarget string
 	// tunServed means the global TUN owns this point's tunnel and the GUI has
 	// handed its own session over.
 	tunServed bool
@@ -1627,19 +1629,19 @@ func (m *Manager) probeAll(autoReconnect bool) {
 		// A tunnel that just carried traffic is demonstrably alive; probing it
 		// only adds load and noise. A tunnel that already failed is retried
 		// quickly, so a dead one is noticed in seconds rather than minutes.
+		if !ep.lastTraffic.IsZero() && time.Since(ep.lastTraffic) < idleAfter {
+			continue
+		}
 		if ep.tunnelFails > 0 {
 			if time.Since(ep.lastProbe) < 10*time.Second {
 				continue
 			}
 		} else {
-			if !ep.lastTraffic.IsZero() && time.Since(ep.lastTraffic) < idleAfter {
-				continue
-			}
 			if time.Since(ep.lastProbe) < idleAfter {
 				continue
 			}
 		}
-		target := healthTarget(ep.info)
+		target := healthTarget(ep.info, ep.lastTarget)
 		probes = append(probes, probe{
 			id: id, name: ep.cfg.Name, gen: ep.gen, sess: ep.sess, target: target,
 		})
@@ -1700,11 +1702,26 @@ func (m *Manager) recordProbe(id, name string, gen int, sess Session, err error,
 	fails := ep.tunnelFails
 	ep.tunnelState = "degraded"
 	ep.tunnelErr = err.Error()
-	dead := fails >= 3 && autoReconnect
+
+	// 远端单点目标不可达（如 host unreachable、connection refused）表明 SOCKS5 握手成功、
+	// 本地与 VPN 链路正常，仅目标主机未开机/拒绝，绝不能视为整个底层隧道死亡。
+	isFatal := !isRemoteTargetError(err)
+	if !isFatal {
+		ep.lastTarget = ""
+	}
+
+	// 真实流量保护：如果近期（90s 内）有真实连接，证明隧道客观可用，绝不自杀掐断隧道。
+	trafficGuard := !ep.lastTraffic.IsZero() && time.Since(ep.lastTraffic) < 90*time.Second
+
+	dead := isFatal && fails >= 3 && !trafficGuard && autoReconnect
 	m.mu.Unlock()
 
 	if !dead {
-		m.logf("[%s] 隧道保活探测失败（%d/3）：%v", name, fails, err)
+		if !isFatal {
+			m.logf("[%s] 隧道保活探测目标不可达（已忽略，未影响隧道）：%v", name, err)
+		} else {
+			m.logf("[%s] 隧道保活探测失败（%d/3）：%v", name, fails, err)
+		}
 		m.changed()
 		return
 	}
@@ -1782,6 +1799,9 @@ func (m *Manager) noteTraffic(id string) {
 		// Real traffic proves the tunnel works, so the rebuild budget starts
 		// over.
 		ep.tunnelRebuilds = 0
+		ep.tunnelFails = 0
+		ep.tunnelState = ""
+		ep.tunnelErr = ""
 	}
 	m.mu.Unlock()
 }

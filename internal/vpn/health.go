@@ -28,7 +28,17 @@ type DNSProber interface {
 	ProbeDNS(context.Context) error
 }
 
-func healthTarget(info SessionInfo) string {
+func healthTarget(info SessionInfo, preferred ...string) string {
+	for _, p := range preferred {
+		if p == "" {
+			continue
+		}
+		if host, port, err := net.SplitHostPort(p); err == nil {
+			if target := healthHostPort(host, port); target != "" && authorizedHealthTarget(target, info.Resources) {
+				return target
+			}
+		}
+	}
 	if host, port, err := net.SplitHostPort(info.HealthTarget); err == nil {
 		if target := healthHostPort(host, port); target != "" && authorizedHealthTarget(target, info.Resources) {
 			return target
@@ -152,4 +162,17 @@ func (m *Manager) recordHealth(id string, gen int, sess Session, dnsResult, tcpR
 	if changed {
 		m.changed()
 	}
+}
+
+// isRemoteTargetError 检查错误是否属于远端单点目标主机不可达、被防火墙拒绝或端口未开启等。
+// 这类错误表明本地到网关代理/隧道的通道是畅通的（SOCKS5 握手成功），仅仅是具体业务目标不通，不能当作底层隧道崩溃。
+func isRemoteTargetError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "host unreachable") ||
+		strings.Contains(msg, "network unreachable") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "target unreachable")
 }

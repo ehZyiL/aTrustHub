@@ -194,3 +194,97 @@ func TestStaleProbeDoesNotPolluteNewSession(t *testing.T) {
 		t.Fatalf("stale 3rd failure killed current session: state=%v, tunnel=%q", v.State, v.TunnelState)
 	}
 }
+
+func TestHostUnreachableDoesNotKillTunnel(t *testing.T) {
+	conn := &fakeConnector{}
+	cfg := testConfig(model.AccessPoint{
+		ID: "a", Name: "A", Server: "a.example", Port: 443, Username: "u", InPool: true,
+	})
+	cfg.Settings.HealthIntervalSec = 60
+	m := newTestManager(t, conn.Connect, cfg)
+	m.Connect("a")
+	waitFor(t, "online", func() bool {
+		v, _ := m.View("a")
+		return v.State == StateOnline
+	})
+	sess := conn.session("a")
+	// Simulate SOCKS5 0x04 Host unreachable error from remote server
+	sess.dialErr = errors.New("socks connect tcp 127.0.0.1:59918->10.240.32.225:443: unknown error host unreachable")
+
+	m.mu.Lock()
+	m.points["a"].info.Apps = tunnelApps()
+	m.points["a"].info.Resources = &workeripc.ResourceSnapshot{IPRules: []workeripc.IPRule{{Min: "10.240.32.225", Max: "10.240.32.225", PortMin: 443, PortMax: 443, Protocol: "tcp"}}}
+	m.points["a"].lastTraffic = time.Time{}
+	m.mu.Unlock()
+
+	// Probe 5 times - should NEVER kill the tunnel
+	for i := 0; i < 5; i++ {
+		probeNow(m, "a")
+	}
+
+	v, _ := m.View("a")
+	if v.State != StateOnline {
+		t.Fatalf("state = %v, want still StateOnline after host unreachable probe errors", v.State)
+	}
+	if v.TunnelState == "dead" {
+		t.Fatalf("tunnel state = dead, want degraded but alive")
+	}
+}
+
+func TestRecentTrafficProtectsTunnelFromDead(t *testing.T) {
+	conn := &fakeConnector{}
+	cfg := testConfig(model.AccessPoint{
+		ID: "a", Name: "A", Server: "a.example", Port: 443, Username: "u", InPool: true,
+	})
+	cfg.Settings.HealthIntervalSec = 60
+	m := newTestManager(t, conn.Connect, cfg)
+	m.Connect("a")
+	waitFor(t, "online", func() bool {
+		v, _ := m.View("a")
+		return v.State == StateOnline
+	})
+	sess := conn.session("a")
+	sess.dialErr = errors.New("fatal tunnel connection reset")
+
+	m.mu.Lock()
+	m.points["a"].info.Apps = tunnelApps()
+	m.points["a"].info.Resources = &workeripc.ResourceSnapshot{IPRules: []workeripc.IPRule{{Min: "10.1.2.3", Max: "10.1.2.3", PortMin: 3306, PortMax: 3306, Protocol: "tcp"}}}
+	// Recent traffic happened 10 seconds ago
+	m.points["a"].lastTraffic = time.Now().Add(-10 * time.Second)
+	m.mu.Unlock()
+
+	// Probe 3 times with fatal error while recent traffic exists
+	for i := 0; i < 3; i++ {
+		probeNow(m, "a")
+	}
+
+	v, _ := m.View("a")
+	if v.State != StateOnline {
+		t.Fatalf("state = %v, recent traffic should prevent tunnel termination", v.State)
+	}
+	if v.TunnelState == "dead" {
+		t.Fatalf("tunnel state = %q, want degraded due to recent traffic protection", v.TunnelState)
+	}
+}
+
+func TestLastSuccessfulTargetPreferredForProbe(t *testing.T) {
+	info := SessionInfo{
+		Resources: &workeripc.ResourceSnapshot{
+			IPRules: []workeripc.IPRule{
+				{Min: "10.240.32.225", Max: "10.240.32.225", PortMin: 443, PortMax: 443, Protocol: "tcp"},
+				{Min: "192.168.132.16", Max: "192.168.132.16", PortMin: 9011, PortMax: 9011, Protocol: "tcp"},
+			},
+		},
+	}
+	// Without preferred, picks first rule
+	target1 := healthTarget(info)
+	if target1 != "10.240.32.225:443" {
+		t.Fatalf("got %q, want 10.240.32.225:443", target1)
+	}
+
+	// With preferred active target, picks preferred
+	target2 := healthTarget(info, "192.168.132.16:9011")
+	if target2 != "192.168.132.16:9011" {
+		t.Fatalf("got %q, want 192.168.132.16:9011", target2)
+	}
+}

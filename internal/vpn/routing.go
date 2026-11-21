@@ -185,10 +185,11 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 			continue
 		}
 		if !udp {
-			m.recordRouteResult(c, true, time.Since(started))
+			m.recordRouteResult(c, true, time.Since(started), decision.Target)
 		}
 		m.logRoute(request, decision, c, len(tried), time.Since(started), nil)
 		if udp {
+			m.noteTraffic(c.id)
 			conn = newScopedUDPConn(conn, c.sess.(StrictUDPSession).Done(), func() bool { return m.currentRoute(c, decision.GatewayID) })
 		}
 		return conn, nil
@@ -219,7 +220,7 @@ func safeStrictDial(ctx context.Context, sess Session, network, addr string) (co
 	return
 }
 
-func (m *Manager) recordRouteResult(c routedSession, success bool, elapsed time.Duration) {
+func (m *Manager) recordRouteResult(c routedSession, success bool, elapsed time.Duration, target ...string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ep := m.points[c.id]
@@ -239,4 +240,9 @@ func (m *Manager) recordRouteResult(c routedSession, success bool, elapsed time.
 	ep.lastTraffic = time.Now()
 	ep.tunnelFails = 0
 	ep.tunnelRebuilds = 0
+	ep.tunnelState = ""
+	ep.tunnelErr = ""
+	if len(target) > 0 && target[0] != "" {
+		ep.lastTarget = target[0]
+	}
 }

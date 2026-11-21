@@ -97,10 +97,21 @@ func TestInstallCommandUsesPackagedFilesAndLiteralArguments(t *testing.T) {
 	if _, err := installCommand(exe, 1000); err == nil {
 		t.Fatal("incomplete bundle accepted")
 	}
-	for _, name := range []string{"install-capture-helper.sh", "easyconnect-hub-capture", "easyconnect-hub-capture@.service"} {
+	for _, name := range []string{"install-capture-helper.sh", "easyconnect-hub-capture@.service"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("fixture"), 0700); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if _, err := installCommand(exe, 1000); err == nil {
+		t.Fatal("bundle without capture helper accepted")
+	}
+	// 内部程序在 core/ 里；平铺位置留给拆分前的包。
+	core := filepath.Join(dir, "core")
+	if err := os.Mkdir(core, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(core, "easyconnect-hub-capture"), []byte("fixture"), 0700); err != nil {
+		t.Fatal(err)
 	}
 	cmd, err := installCommand(exe, 1000)
 	if err != nil {
@@ -112,6 +123,15 @@ func TestInstallCommandUsesPackagedFilesAndLiteralArguments(t *testing.T) {
 	}
 	if _, err := installCommand(exe, 0); err == nil {
 		t.Fatal("root desktop allowed")
+	}
+	if err := os.RemoveAll(core); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "easyconnect-hub-capture"), []byte("fixture"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installCommand(exe, 1000); err != nil {
+		t.Fatalf("flat bundle rejected: %v", err)
 	}
 	path := filepath.Join(dir, "install-capture-helper.sh")
 	if err := os.Remove(path); err != nil {

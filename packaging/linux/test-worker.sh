@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-worker=${1:-"$(dirname -- "${BASH_SOURCE[0]}")/easyconnect-worker"}
+bundle_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+worker=${1:-}
+if [[ -z "$worker" ]]; then
+  # 内部程序在 core/ 里；平铺位置留给拆分前的包。
+  worker="$bundle_dir/core/easyconnect-worker"
+  if [[ ! -x "$worker" ]]; then
+    worker="$bundle_dir/easyconnect-worker"
+  fi
+fi
 test -x "$worker" || { printf 'Worker binary not found: %s\n' "$worker" >&2; exit 1; }
 set +e
 reply=$(printf '%s\n' '{"version":6,"session":"bundle-check","type":"start","config":{}}' | "$worker" 2>/dev/null)

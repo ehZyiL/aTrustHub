@@ -2,9 +2,9 @@
 
 当前阶段：多网关系统 TCP 接管已完成生产路径自动化验证，真实 UAC、Wintun、NRPT、重连和共存正在验收。用户于 2026-11-20 确认过旧版本 Windows DBX 软件接管成功；该反馈不代表此次新系统模式已通过实测。
 
-构建标识：`0.1.0-dev-multigateway-tun.11`。请将三个程序一起解压。Windows 网络助手协议为 7，EasyConnect worker 协议仍为 6。版本不匹配时在 UAC 前提示重新解压完整包。`COMPONENTS.txt` 记录配套协议及能力范围，`SHA256SUMS` 覆盖包内所有文件（清单自身除外）。网关卡片分别显示网关 DNS 与实际授权 TCP 探测状态；未配置有效 TCP 目标时显示未验证。
+构建标识：`0.1.0-dev-multigateway-tun.11`。请将整个压缩包解压后再运行，只拷贝单个 EXE 会缺少 `core\` 里的内部程序。Windows 网络助手协议为 7，EasyConnect worker 协议仍为 6。版本不匹配时在 UAC 前提示重新解压完整包。`COMPONENTS.txt` 记录配套协议及能力范围，`SHA256SUMS` 覆盖包内所有文件（清单自身除外）。网关卡片分别显示网关 DNS 与实际授权 TCP 探测状态；未配置有效 TCP 目标时显示未验证。
 
-“网络授权与路由 → 用户策略”的同业务出口组可明确勾选“名称服务也等价”。新 DNS 查询按组内顺序选择在线的名称归属网关；固定 DNS 归属仍优先。它只在网关离线时切换，不在解析超时后跨网关查询，也不改绑已发布的地址；默认关闭。包内 `measure-tun-performance.py` 用于后续受控 HTTP 服务的性能对照，需要 Python 3 和 curl，使用 `--help` 查看参数。
+“网络授权与路由 → 用户策略”的同业务出口组可明确勾选“名称服务也等价”。新 DNS 查询按组内顺序选择在线的名称归属网关；固定 DNS 归属仍优先。它只在网关离线时切换，不在解析超时后跨网关查询，也不改绑已发布的地址；默认关闭。仓库 `scripts/` 目录内的 `measure-tun-performance.py` 用于后续受控 HTTP 服务的性能对照，需要 Python 3 和 curl，只随验收包（`EASYCONNECT_BUNDLE_PROFILE=test`）分发，使用 `--help` 查看参数。
 
 **系统 TUN** 复用已登录 worker，以资源归属选择网关；旧 aTrust TUN 入口独立保留。系统模式启动完成后才暂停本应用自己的系统代理，停止或失败时恢复。第三方/自动代理原样保留，不阻止资源捕获；使用第三方代理的应用仍遵循它的分流规则。未完成的清理会阻止新启动，界面显示原因并提供重试清理。
 
@@ -21,16 +21,17 @@
 两个仓库保持并列：`aTrustHub` 使用 `feat/easyconnect-desktop`，`zju-connect` 使用 `feat/desktop-worker`。两个仓库都需要更新。Hub 使用其 patched module；独立 worker 必须设置 `GOWORK=off`，不要通过 `go work use` 把两个实现混入同一 workspace。安装满足 `go.mod` 要求的 Go 工具链，在 Windows x64 的 PowerShell 7 中进入 `aTrustHub`，逐条运行下面的命令；构建报错时先处理该步，不运行尚未完成的包。
 
 ```powershell
-New-Item -ItemType Directory -Force .\build\windows-capture\resources | Out-Null
+New-Item -ItemType Directory -Force .\build\windows-capture\resources, .\build\windows-capture\core | Out-Null
 # `go build` 不会自己写 Windows 资源，先写出带应用图标的 .syso，链接后再删掉。
 go run .\cmd\appicon -arch amd64 -out .\appicon_windows_amd64.syso
 go build -mod=readonly -trimpath '-ldflags=-H=windowsgui' -o .\build\windows-capture\easyconnect-hub.exe .
 Remove-Item .\appicon_windows_amd64.syso
-go build -mod=readonly -trimpath '-ldflags=-H=windowsgui' -o .\build\windows-capture\easyconnect-hub-capture.exe ./cmd/app-helper
+# worker 和抓包助手是内部程序，与发布包一致放进 core/。
+go build -mod=readonly -trimpath '-ldflags=-H=windowsgui' -o .\build\windows-capture\core\easyconnect-hub-capture.exe ./cmd/app-helper
 $previousGoWork = $env:GOWORK
 try {
     $env:GOWORK = 'off'
-    go -C ..\zju-connect build -mod=readonly -trimpath '-ldflags=-H=windowsgui' -o ..\aTrustHub\build\windows-capture\easyconnect-worker.exe ./cmd/easyconnect-worker
+    go -C ..\zju-connect build -mod=readonly -trimpath '-ldflags=-H=windowsgui' -o ..\aTrustHub\build\windows-capture\core\easyconnect-worker.exe ./cmd/easyconnect-worker
     if ($LASTEXITCODE -ne 0) { throw 'worker build failed' }
 } finally { $env:GOWORK = $previousGoWork }
 Copy-Item .\resources\icon.png .\build\windows-capture\resources\icon.png -Force
@@ -41,9 +42,9 @@ go test -mod=readonly -trimpath -c -o .\build\windows-capture\windows-capture-te
 .\build\windows-capture\windows-capture-tests.exe '-test.v' '-test.timeout=60s'
 ```
 
-退出旧版本后，普通双击解压目录中的 `easyconnect-hub.exe`，确认启动日志显示本次测试的版本号。请使用同一个配套包内的 `easyconnect-hub.exe`、`easyconnect-worker.exe` 和 `easyconnect-hub-capture.exe`。助手已内嵌 Wintun DLL。`test-worker.ps1` 使用空配置验证 worker v6 协议，无需登录。
+退出旧版本后，普通双击解压目录中的 `easyconnect-hub.exe`，确认启动日志显示本次测试的版本号。请使用同一个配套包内的 `easyconnect-hub.exe` 以及 `core\` 下的 `easyconnect-worker.exe`、`easyconnect-hub-capture.exe`；`core\` 是内部程序目录，不要手动运行其中的 EXE。助手已内嵌 Wintun DLL。`test-worker.ps1` 使用空配置验证 worker v6 协议，无需登录。
 
-Linux 上交叉编译或 Windows Git Bash 打包，可使用 `bash scripts/package-windows.sh`。默认打发布包 `easyconnect-hub-windows-<arch>`，只放运行必需的三个程序和说明、许可证；需要真机验收包时设 `EASYCONNECT_BUNDLE_PROFILE=test`，包名带 `-capture` 后缀，额外包含 `windows-capture-tests.exe`、`test-capture.ps1`、`test-worker.ps1` 和两份模块清单。两种包在归档前都会用 `test-worker.ps1` 跑一遍 worker v6 协议自检。脚本会先用 `cmd/appicon` 生成带图标的资源对象再编译 GUI，所以包里的 `easyconnect-hub.exe` 不再是 Go 的默认图标。Windows PowerShell 调用示例：`& "C:\Program Files\Git\bin\bash.exe" .\scripts\package-windows.sh`。脚本已为 worker 的构建和模块清单单独禁用 workspace。
+Linux 上交叉编译或 Windows Git Bash 打包，可使用 `bash scripts/package-windows.sh`。默认打发布包 `easyconnect-hub-windows-<arch>`，只放运行必需的程序（根目录的 `easyconnect-hub.exe` 与 `core\` 下的 worker、助手）、说明和许可证；需要真机验收包时设 `EASYCONNECT_BUNDLE_PROFILE=test`，包名带 `-capture` 后缀，额外包含 `windows-capture-tests.exe`、`test-capture.ps1`、`test-worker.ps1`、性能对照脚本和两份模块清单。两种包在归档前都会用 `test-worker.ps1` 跑一遍 worker v6 协议自检。脚本会先用 `cmd/appicon` 生成带图标的资源对象再编译 GUI，所以包里的 `easyconnect-hub.exe` 不再是 Go 的默认图标；三个 EXE 都带 `-s -w`，去掉符号表和调试信息。Windows PowerShell 调用示例：`& "C:\Program Files\Git\bin\bash.exe" .\scripts\package-windows.sh`。脚本已为 worker 的构建和模块清单单独禁用 workspace。
 
 ## 系统 TUN 启动
 
@@ -76,7 +77,7 @@ Linux 上交叉编译或 Windows Git Bash 打包，可使用 `bash scripts/packa
 
 ## 更新与移除
 
-Windows 使用便携包，网络助手按会话通过 UAC 启动，不安装常驻 Windows 服务。更新前关闭系统 TUN 和按软件接管，确认清理完成，再从托盘退出旧 GUI，解压新包到独立目录运行。不要覆盖正在运行的三个 EXE，也不要只替换其中一个。
+Windows 使用便携包，网络助手按会话通过 UAC 启动，不安装常驻 Windows 服务。更新前关闭系统 TUN 和按软件接管，确认清理完成，再从托盘退出旧 GUI，解压新包到独立目录运行。不要覆盖正在运行的 EXE，也不要只替换其中一个或漏掉 `core\` 目录。
 
 移除时先按同样顺序停止接管并退出；确认 Hub 网卡、路由和 NRPT 已清理后，可删除解压目录。用户数据独立保存在 `%APPDATA%/EasyConnect Hub`，删除便携包会保留账号和配置；系统恢复记录清理未完成时，应保留配套程序进行重试。
 
@@ -95,7 +96,7 @@ Windows 使用便携包，网络助手按会话通过 UAC 启动，不安装常�
 编辑接入点 → 高级选项也有 **读取网关证书…**。此入口确认后只填入编辑框，保存接入点后才生效。
 读取只做 TLS 握手，不发送账号密码，不会自动信任。首次请通过管理员或其他可信渠道核实；证书名称和颁发者由对端提供。
 已保存的指纹只作用于当前接入点。之后证书不一致会停止连接并显示新旧指纹，核实换证后才能替换。
-如提示核心不支持读取，请重新构建或替换 `easyconnect-worker.exe`，只更新 GUI 无法添加这个命令。
+如提示核心不支持读取，请重新构建或替换 `core\easyconnect-worker.exe`，只更新 GUI 无法添加这个命令。
 
 ## 本机自测
 

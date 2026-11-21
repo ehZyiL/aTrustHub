@@ -6,7 +6,8 @@ set -euo pipefail
 app_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/easyconnect-helper-setup.XXXXXXXX")
 trap 'rm -rf -- "$test_root"' EXIT
-mkdir -p "$test_root"/{usr/bin,usr/local/libexec,etc/systemd/system,run,dev,bundle}
+mkdir -p "$test_root"/{usr/bin,usr/local/libexec,etc/systemd/system,run,dev}
+mkdir -p "$test_root/bundle/core"
 ln -s usr/bin "$test_root/bin"
 printf 'root:x:0:0:root:/root:/bin/bash\ndesktop:x:1000:1000:Desktop:/home/desktop:/bin/bash\n' > "$test_root/etc/passwd"
 printf 'root:x:0:\ndesktop:x:1000:\n' > "$test_root/etc/group"
@@ -38,7 +39,7 @@ case "$1" in
 esac
 MOCK
 chmod +x "$test_root/usr/bin/systemctl"
-cat > "$test_root/bundle/easyconnect-hub-capture" <<'MOCK'
+cat > "$test_root/bundle/core/easyconnect-hub-capture" <<'MOCK'
 #!/bin/bash
 if [[ ${1:-} == --protocol-version ]]; then
   printf '%s\n' "${CANDIDATE_PROTOCOL:-10}"
@@ -46,7 +47,7 @@ if [[ ${1:-} == --protocol-version ]]; then
 fi
 printf 'new-helper %s\n' "$*" >> /calls
 MOCK
-chmod +x "$test_root/bundle/easyconnect-hub-capture"
+chmod +x "$test_root/bundle/core/easyconnect-hub-capture"
 cat > "$test_root/check.sh" <<'CHECK'
 #!/bin/bash
 set -euo pipefail
@@ -82,7 +83,7 @@ passed() { printf 'PASS %s\n' "$1"; }
 reset_case
 bash /bundle/install-capture-helper.sh --uid 1000 >/result
 [[ -x $helper && -f $template && -f /active ]]
-[[ $(cat "$helper") == "$(cat /bundle/easyconnect-hub-capture)" ]]
+[[ $(cat "$helper") == "$(cat /bundle/core/easyconnect-hub-capture)" ]]
 [[ $(cat /calls) == *"enable --now $unit"* ]]
 passed 'fresh install'
 
@@ -92,7 +93,7 @@ old_helper
 bash /bundle/install-capture-helper.sh --uid 1000 >/result
 calls=$(cat /calls)
 [[ $calls == *"stop $unit"*"old-helper --uid=1000 --recover"*"enable --now $unit"* ]]
-[[ $(cat "$helper") == "$(cat /bundle/easyconnect-hub-capture)" ]]
+[[ $(cat "$helper") == "$(cat /bundle/core/easyconnect-hub-capture)" ]]
 passed 'upgrade cleans old helper before replacement'
 
 reset_case

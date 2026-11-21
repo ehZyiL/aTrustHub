@@ -40,7 +40,7 @@ fi
 mkdir -p "$app_root/build"
 bundle=$(mktemp -d "$app_root/build/.${bundle_name}.staging.XXXXXXXX")
 trap 'rm -rf -- "$bundle"' EXIT
-mkdir -p "$bundle/resources" "$bundle/LICENSES"
+mkdir -p "$bundle/resources" "$bundle/LICENSES" "$bundle/core"
 
 cd "$app_root"
 # go build 自己不写 Windows 资源，没有 .syso 时 EXE 会顶着 Go 的默认图标。
@@ -48,10 +48,11 @@ cd "$app_root"
 icon_syso="$app_root/appicon_windows_${target_arch}.syso"
 trap 'rm -rf -- "$bundle"; rm -f -- "$icon_syso"' EXIT
 env "$go_tool" run ./cmd/appicon -icon resources/icon.png -arch "$target_arch" -out "$icon_syso"
-env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-hub.exe" .
+env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags='-H=windowsgui -s -w' -o "$bundle/easyconnect-hub.exe" .
 rm -f -- "$icon_syso"
-env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-hub-capture.exe" ./cmd/app-helper
-helper_protocol=$("$bundle/easyconnect-hub-capture.exe" --protocol-version)
+# worker 和抓包助手是内部程序，放进 core/，避免用户打开目录时误双击。
+env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags='-H=windowsgui -s -w' -o "$bundle/core/easyconnect-hub-capture.exe" ./cmd/app-helper
+helper_protocol=$("$bundle/core/easyconnect-hub-capture.exe" --protocol-version)
 if [[ "$helper_protocol" != 7 ]]; then
   printf 'Windows capture helper protocol mismatch: expected 7, got %s\n' "$helper_protocol" >&2
   exit 1
@@ -61,7 +62,7 @@ if [[ "$bundle_profile" == test ]]; then
   "$go_tool" list -m all > "$bundle/desktop-modules.txt"
 fi
 cd "$worker_root"
-env GOWORK=off GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-worker.exe" ./cmd/easyconnect-worker
+env GOWORK=off GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags='-H=windowsgui -s -w' -o "$bundle/core/easyconnect-worker.exe" ./cmd/easyconnect-worker
 if [[ "$bundle_profile" == test ]]; then
   env GOWORK=off "$go_tool" list -m all > "$bundle/worker-modules.txt"
 fi
@@ -79,7 +80,11 @@ for module in github.com/egoist/mygo github.com/mythologyli/sing-tun github.com/
 done
 install -m 0644 "$app_root/packaging/windows/Wintun-LICENSE.txt" "$bundle/LICENSES/Wintun-LICENSE.txt"
 install -m 0644 "$app_root/WINDOWS-QUICKSTART.md" "$bundle/README.md"
-install -m 0644 "$app_root/scripts/measure-tun-performance.py" "$bundle/measure-tun-performance.py"
+# 性能对照脚本只用于受控 HTTP 对照测试，需要 Python 3 和 curl；
+# 发布包不携带，只在 test 包里放一份。
+if [[ "$bundle_profile" == test ]]; then
+  install -m 0644 "$app_root/scripts/measure-tun-performance.py" "$bundle/measure-tun-performance.py"
+fi
 cat > "$bundle/COMPONENTS.txt" <<EOF
 EasyConnect Hub Windows bundle
 Bundle profile: $bundle_profile
@@ -90,6 +95,9 @@ Source branch: $repo_branch
 Source commit: $repo_commit$repo_dirty
 App build: ${app_build:-unknown}
 Scope: IPv4 TCP and DNS. System IPv4 UDP for eligible L3 sessions is experimental; IPv6 is unsupported.
+Layout: easyconnect-hub.exe at the bundle root; easyconnect-worker.exe and
+easyconnect-hub-capture.exe under core/. Launch only easyconnect-hub.exe;
+the two programs in core/ are internal and start on demand.
 GUI, worker and helper are a matched build from this bundle; do not mix files from other bundles.
 EOF
 if [[ "$bundle_profile" == test ]]; then
@@ -114,17 +122,23 @@ bundle="$final_bundle"
 # PowerShell/worker execution can hold directory handles on Windows. Run the
 # process check after the directory rename, before replacing the archive.
 # release 包里不放自测脚本，直接用打包目录中的那份跑同一个检查。
+# worker 已移到 core/；test-worker.ps1 的默认路径同时兼容 core/ 与平铺位置。
 if [[ "$bundle_profile" == test ]]; then
   pwsh -NoProfile -ExecutionPolicy Bypass -File "$bundle/test-worker.ps1"
 else
-  pwsh -NoProfile -ExecutionPolicy Bypass -File "$app_root/packaging/windows/test-worker.ps1" -WorkerPath "$bundle/easyconnect-worker.exe"
+  pwsh -NoProfile -ExecutionPolicy Bypass -File "$app_root/packaging/windows/test-worker.ps1" -WorkerPath "$bundle/core/easyconnect-worker.exe"
 fi
 archive_tmp="$app_root/build/.${bundle_name}.zip.tmp.$$"
 trap 'rm -f -- "$archive_tmp"' EXIT
 "$python_bin" - "$bundle" "$archive_tmp" <<'PY'
 import pathlib, sys, zipfile
 bundle = pathlib.Path(sys.argv[1])
-with zipfile.ZipFile(sys.argv[2], 'w', zipfile.ZIP_DEFLATED) as output:
+# compresslevel 需要 Python 3.7；旧解释器回落到默认级别。
+try:
+    archive = zipfile.ZipFile(sys.argv[2], 'w', zipfile.ZIP_DEFLATED, compresslevel=9)
+except TypeError:
+    archive = zipfile.ZipFile(sys.argv[2], 'w', zipfile.ZIP_DEFLATED)
+with archive as output:
     for file in sorted(bundle.rglob('*')):
         if file.is_file():
             output.write(file, file.relative_to(bundle.parent))

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -233,7 +234,7 @@ func RunWatchdog(ctx context.Context, id string, expected Identity) error {
 	if err != nil {
 		return err
 	}
-	if err = verifyExecutable(parent, exe); err != nil {
+	if err = verifyExecutable(parent, filepath.Dir(exe), bundleRoot(exe)); err != nil {
 		return err
 	}
 	name, _ := windows.UTF16PtrFromString(`Local\EasyConnectHub-Recovery-` + id)

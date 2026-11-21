@@ -134,13 +134,26 @@ func installCommand(executable string, uid int) (*exec.Cmd, error) {
 		return nil, err
 	}
 	dir := filepath.Dir(path)
-	for _, name := range []string{"install-capture-helper.sh", "easyconnect-hub-capture", "easyconnect-hub-capture@.service"} {
+	for _, name := range []string{"install-capture-helper.sh", "easyconnect-hub-capture@.service"} {
 		st, err := os.Lstat(filepath.Join(dir, name))
-		if err != nil || !st.Mode().IsRegular() || (name == "easyconnect-hub-capture" && st.Mode()&0111 == 0) {
+		if err != nil || !st.Mode().IsRegular() {
 			return nil, errors.New("当前目录缺少完整安装文件，请从完整 Linux 软件包启动应用")
 		}
 	}
+	// 内部程序放在 core/，避免用户直接双击；拆分前的平铺布局仍兼容。
+	if !packagedCaptureHelper(filepath.Join(dir, "core", "easyconnect-hub-capture")) &&
+		!packagedCaptureHelper(filepath.Join(dir, "easyconnect-hub-capture")) {
+		return nil, errors.New("当前目录缺少完整安装文件，请从完整 Linux 软件包启动应用")
+	}
 	return exec.Command("/usr/bin/pkexec", "--disable-internal-agent", "/usr/bin/bash", filepath.Join(dir, "install-capture-helper.sh"), "--uid", strconv.Itoa(uid)), nil
+}
+
+// packagedCaptureHelper reports whether path is the executable helper shipped
+// in the bundle. The installer re-checks it; this only catches an incomplete
+// extraction before asking for system authorization.
+func packagedCaptureHelper(path string) bool {
+	st, err := os.Lstat(path)
+	return err == nil && st.Mode().IsRegular() && st.Mode()&0111 != 0
 }
 
 func installPackagedHelper() error {

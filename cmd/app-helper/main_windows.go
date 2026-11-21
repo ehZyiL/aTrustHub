@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/qy/easyconnect/internal/wincapture"
+	"golang.org/x/sys/windows"
 )
 
 func main() {
@@ -16,6 +17,10 @@ func main() {
 	parent := flag.Uint("parent", 0, "expected parent process ID")
 	created := flag.Uint64("created", 0, "expected parent creation time")
 	flag.Parse()
+	if len(os.Args) == 1 {
+		explainManualLaunch()
+		os.Exit(2)
+	}
 	if *protocolVersion {
 		if flag.NArg() != 0 || *pipe != "" || *watchdog != "" || *parent != 0 || *created != 0 {
 			os.Exit(2)
@@ -37,4 +42,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Windows capture helper stopped")
 		os.Exit(1)
 	}
+}
+
+// explainManualLaunch answers a user who double-clicked the helper in core/.
+// Without it the elevated-only helper exits silently with no window at all.
+func explainManualLaunch() {
+	text, _ := windows.UTF16PtrFromString("此程序由 EasyConnect Hub 自动启动，请勿手动运行。\n\n请回到程序目录双击 easyconnect-hub.exe。")
+	caption, _ := windows.UTF16PtrFromString("EasyConnect Hub")
+	_, _ = windows.MessageBox(0, text, caption, windows.MB_OK|windows.MB_ICONINFORMATION|windows.MB_SETFOREGROUND)
 }

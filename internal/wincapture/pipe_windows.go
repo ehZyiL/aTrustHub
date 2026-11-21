@@ -52,9 +52,9 @@ func startHelper(ctx context.Context) (*helperTransport, error) {
 	if err != nil {
 		return nil, windowsError("定位主程序", err)
 	}
-	helper := filepath.Join(filepath.Dir(exe), "easyconnect-hub-capture.exe")
-	if info, err := os.Stat(helper); err != nil || !info.Mode().IsRegular() {
-		return nil, errors.New("缺少 Windows 网络助手，请解压完整测试包")
+	helper, ok := helperPath(exe)
+	if !ok {
+		return nil, errors.New("缺少 Windows 网络助手，请解压完整安装包（easyconnect-hub-capture.exe 位于 core 目录）")
 	}
 	if err := checkHelperProtocol(ctx, helper); err != nil {
 		return nil, err
@@ -149,7 +149,7 @@ func startHelper(ctx context.Context) (*helperTransport, error) {
 		return nil, windowsError("读取助手身份 OpenProcess", err)
 	}
 	defer windows.CloseHandle(peer)
-	if err = verifyExecutable(peer, helper); err != nil {
+	if err = verifyExecutable(peer, filepath.Dir(helper)); err != nil {
 		return nil, fmt.Errorf("校验网络助手文件身份：%w", err)
 	}
 	var token windows.Token
@@ -185,7 +185,7 @@ func checkHelperProtocol(ctx context.Context, helper string) error {
 		return ctx.Err()
 	}
 	if err != nil || strings.TrimSpace(string(output)) != strconv.Itoa(ProtocolVersion) {
-		return fmt.Errorf("Windows 网络助手版本不匹配或无法校验（需要协议 v%d），请重新解压完整测试包", ProtocolVersion)
+		return fmt.Errorf("Windows 网络助手版本不匹配或无法校验（需要协议 v%d），请重新解压完整安装包（easyconnect-hub-capture.exe 位于 core 目录）", ProtocolVersion)
 	}
 	return nil
 }
@@ -212,7 +212,7 @@ func connectDesktop(ctx context.Context, id string, expected Identity) (*os.File
 	if err != nil {
 		return nil, 0, err
 	}
-	if err = verifyExecutable(parent, filepath.Join(filepath.Dir(exe), "easyconnect-hub.exe")); err != nil {
+	if err = verifyExecutable(parent, filepath.Dir(exe), bundleRoot(exe)); err != nil {
 		return nil, 0, err
 	}
 	name := pipePrefix + id
@@ -239,15 +239,21 @@ func connectDesktop(ctx context.Context, id string, expected Identity) (*os.File
 	return f, parent, nil
 }
 
-func verifyExecutable(process windows.Handle, expected string) error {
+// verifyExecutable accepts a parent whose image directory is any of the
+// bundle layouts that hold easyconnect-hub.exe. Naming the executable is
+// deliberately avoided: users may copy or rename the desktop app, but the
+// helper must still ship in the same bundle.
+func verifyExecutable(process windows.Handle, allowed ...string) error {
 	var path [32768]uint16
 	n := uint32(len(path))
 	if err := windows.QueryFullProcessImageName(process, 0, &path[0], &n); err != nil {
 		return windowsError("QueryFullProcessImageName", err)
 	}
-	parentPath := windows.UTF16ToString(path[:n])
-	if !strings.EqualFold(filepath.Dir(parentPath), filepath.Dir(expected)) {
-		return errors.New("网络助手与主程序必须来自同一安装目录")
+	parentDir := filepath.Dir(windows.UTF16ToString(path[:n]))
+	for _, dir := range allowed {
+		if dir != "" && strings.EqualFold(parentDir, dir) {
+			return nil
+		}
 	}
-	return nil
+	return errors.New("网络助手与主程序必须来自同一安装目录")
 }

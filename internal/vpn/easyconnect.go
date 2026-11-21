@@ -50,11 +50,18 @@ func workerPath() (string, error) {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	path := filepath.Join(filepath.Dir(exe), name)
-	if _, err := os.Stat(path); err != nil {
-		return "", errors.New("缺少 easyconnect-worker 核心，请使用完整安装包，或设置 EASYCONNECT_WORKER")
+	// core/ 是当前发布的布局（避免用户直接双击内部程序）；平铺位置留给
+	// 开发构建目录和拆分之前的旧包。
+	dir := filepath.Dir(exe)
+	for _, path := range []string{
+		filepath.Join(dir, "core", name),
+		filepath.Join(dir, name),
+	} {
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+			return path, nil
+		}
 	}
-	return path, nil
+	return "", errors.New("缺少 easyconnect-worker 核心，请解压完整安装包（easyconnect-worker.exe 位于 core 目录），或设置 EASYCONNECT_WORKER")
 }
 
 func NewEasyConnectConnector(path string) Connector {

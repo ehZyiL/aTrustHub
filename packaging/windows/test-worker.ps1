@@ -1,6 +1,16 @@
-param([string]$WorkerPath = (Join-Path $PSScriptRoot 'easyconnect-worker.exe'))
+param([string]$WorkerPath)
 
 $ErrorActionPreference = 'Stop'
+if (-not $WorkerPath) {
+    # 新包把 worker 放在 core/；拆分前的包和本机开发目录仍是平铺的。
+    $WorkerPath = Join-Path $PSScriptRoot 'core\easyconnect-worker.exe'
+    if (-not (Test-Path -LiteralPath $WorkerPath -PathType Leaf)) {
+        $WorkerPath = Join-Path $PSScriptRoot 'easyconnect-worker.exe'
+    }
+}
+if (-not (Test-Path -LiteralPath $WorkerPath -PathType Leaf)) {
+    throw "Worker binary not found: $WorkerPath (use the complete bundle, worker lives in core\\)."
+}
 $info = [Diagnostics.ProcessStartInfo]::new()
 $info.FileName = (Resolve-Path -LiteralPath $WorkerPath).Path
 $info.UseShellExecute = $false

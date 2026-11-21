@@ -20,9 +20,17 @@ fi
 for capture_tool in /usr/bin/ip /usr/bin/nft /usr/bin/busctl /usr/bin/systemd-run /usr/bin/systemctl /usr/bin/flock; do
   test -x "$capture_tool" || { printf 'Missing dependency: %s\n' "$capture_tool" >&2; exit 1; }
 done
-test -x "$bundle_dir/easyconnect-hub-capture"
+# 内部程序在 core/ 里；平铺位置留给拆分前的包。
+capture_helper="$bundle_dir/core/easyconnect-hub-capture"
+if [[ ! -x "$capture_helper" ]]; then
+  capture_helper="$bundle_dir/easyconnect-hub-capture"
+fi
+if [[ ! -x "$capture_helper" ]]; then
+  printf 'Missing capture helper in bundle: %s (expected core/ or the bundle root)\n' "$capture_helper" >&2
+  exit 1
+fi
 test -f "$bundle_dir/easyconnect-hub-capture@.service"
-capture_protocol=$("$bundle_dir/easyconnect-hub-capture" --protocol-version)
+capture_protocol=$("$capture_helper" --protocol-version)
 if [[ "$capture_protocol" != 10 ]]; then
   printf 'Capture helper protocol mismatch: expected 10, got %s. Replace the complete bundle.\n' "$capture_protocol" >&2
   exit 1
@@ -71,7 +79,7 @@ fi
 install -d -o root -g root -m 0755 /usr/local/libexec
 capture_staging=$(mktemp /usr/local/libexec/.easyconnect-hub-capture.XXXXXXXX)
 trap 'rm -f -- "$capture_staging"' EXIT
-install -o root -g root -m 0755 "$bundle_dir/easyconnect-hub-capture" "$capture_staging"
+install -o root -g root -m 0755 "$capture_helper" "$capture_staging"
 mv -f -- "$capture_staging" /usr/local/libexec/easyconnect-hub-capture
 install -o root -g root -m 0644 "$bundle_dir/easyconnect-hub-capture@.service" /etc/systemd/system/easyconnect-hub-capture@.service
 systemctl daemon-reload

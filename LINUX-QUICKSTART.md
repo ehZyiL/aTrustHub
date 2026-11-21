@@ -2,7 +2,7 @@
 
 当前为 `0.1.0-dev-multigateway-tun.11` 开发版，支持 EasyConnect 登录、代理浏览器、数据库 TCP 转发与多网关系统 TUN。系统 TUN 的业务 IPv4 UDP 限已授权 EasyConnect L3 会话，真实网关应答待验。已知内网 IPv6 资源会在申请系统 TUN 前拒绝。网关卡片分别显示网关 DNS 与实际授权 TCP 探测状态；未配置有效 TCP 目标时显示未验证。网络助手协议为 10，需使用本包更新已安装的旧助手；worker 协议仍为 6。软件模式和系统模式通过当前会话的 DNS 租约共用映射池，切换前仍需停止当前接管模式。外部路由、其他用户或过期租约占用的池会明确拒绝，不覆盖其他配置。Fedora 宿主 DNS 和软件启动往返验收仍需完成。
 
-“网络授权与路由 → 用户策略”的同业务出口组可明确勾选“名称服务也等价”。新 DNS 查询按组内顺序选择在线的名称归属网关；固定 DNS 归属仍优先。它只在网关离线时切换，不在解析超时后跨网关查询，也不改绑已发布的地址；默认关闭。包内 `measure-tun-performance.py` 用于后续受控 HTTP 服务的性能对照，需要 Python 3 和 curl，使用 `--help` 查看参数。
+“网络授权与路由 → 用户策略”的同业务出口组可明确勾选“名称服务也等价”。新 DNS 查询按组内顺序选择在线的名称归属网关；固定 DNS 归属仍优先。它只在网关离线时切换，不在解析超时后跨网关查询，也不改绑已发布的地址；默认关闭。仓库 `scripts/` 目录内的 `measure-tun-performance.py` 用于后续受控 HTTP 服务的性能对照，需要 Python 3 和 curl，不随发布包分发，使用 `--help` 查看参数。
 Linux 软件 TCP 接管实验入口默认显示，无需环境变量。早期版本已在 Fedora 45 x86_64 启动原生窗口；本批系统 TUN 的 Fedora 宿主实测待验。
 无需 Docker 或 v2rayN；基础代理以普通用户运行，软件接管需要先安装系统辅助服务。
 
@@ -22,10 +22,10 @@ Linux 软件 TCP 接管实验入口默认显示，无需环境变量。早期版
 
 移动或删除解压目录后重新运行一次；想从菜单里注销时用 `./install-desktop-entry.sh --remove`。不装也能用 `./start.sh` 启动，只是应用菜单里没有它的图标。
 
-`easyconnect-hub` 和 `easyconnect-worker` 必须放在同一目录，并使用同一次构建的版本。
-本批 worker 控制协议为 v6，Linux 辅助服务控制协议为 v7。请使用同一个包内的主程序、worker 和辅助服务。
+`easyconnect-hub` 与 `core/easyconnect-worker`、`core/easyconnect-hub-capture` 必须来自同一次构建的同一个包，并保持 `core/` 目录结构；不要只拷贝 `easyconnect-hub`。
+本批 worker 控制协议为 v6，Linux 辅助服务控制协议为 v10。请使用同一个包内的主程序、worker 和辅助服务。
 旧助手会提示更新；在「本机软件」中点击「安装 / 更新辅助服务」，通过系统认证后重新检查状态。
-检查独立 worker 时运行 `./test-worker.sh`；Linux 辅助服务的协议标记可用 `./easyconnect-hub-capture --protocol-version` 检查。
+检查独立 worker 时运行 `./test-worker.sh`（默认检查 `core/easyconnect-worker`）；Linux 辅助服务的协议标记可用 `./core/easyconnect-hub-capture --protocol-version` 检查。
 `COMPONENTS.txt` 记录配套协议及能力范围；运行 `sha256sum -c SHA256SUMS` 检查完整包。安装器会在停止旧服务前拒绝协议不匹配的候选 helper。
 从旧版切换时，先从托盘菜单 **退出**（关闭窗口现在只是隐藏），再运行本目录的 `start.sh`；仅覆盖磁盘文件不会更新已运行的进程。
 旧试用包的 helper 协议不同，不要混用程序；存在新版本恢复记录时，不应仅替换成旧助手运行。

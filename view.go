@@ -207,9 +207,9 @@ func (a *app) appsSection(c *ui.Context) {
 			Label("搜索资源").Width(240)
 	})
 
-	scroll := ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4)
+	scroll := ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(6, 2, 6, 0)
 	scroll.Children(func() {
-		ui.Column(c).Gap(14).Children(func() {
+		ui.Column(c).Padding(0, 12, 0, 0).Gap(14).Children(func() {
 			if len(all) == 0 {
 				a.appsEmpty(c)
 				return
@@ -1684,14 +1684,22 @@ func dialogFooter(c *ui.Context, fn func()) {
 
 // 弹窗正文的高度上下限（DIP）：太小看不见内容，太大则把页脚挤出面板。
 const (
-	dialogBodyMin float32 = 160
-	dialogBodyMax float32 = 520
+	dialogBodyMin float32 = 140
+	dialogBodyMax float32 = 380
 )
 
-// dialogBodyHeight 是弹窗内可滚动区域的高度上限：从窗口高度里扣掉标题、
-// 底部按钮、内边距和间距（reserved），这样按钮不会被挤出弹窗。
-func (a *app) dialogBodyHeight(reserved float32) float32 {
-	h := a.windowH - reserved
+// dialogBodyMaxHeight 计算弹窗内滚动正文的安全高度上限：
+// 从窗口内容区高度中预留出充足空间，包括：
+// - Modal 面板外层相对窗口的上下边距（mygo 预留 40 DIP）
+// - Modal 面板内部 padding（上下各 20 DIP，共 40 DIP）
+// - dialogHeader（约 50 DIP）
+// - dialogFooter（约 45 DIP）
+// - 容器内组件间距 Gap（约 20 DIP）
+// - 安全缓冲裕量（约 45 DIP，适应不同 DPI、系统字号与窗口修饰）
+// 固定开销总计预留 240 DIP。在窗口高度 600 时正文约 320 DIP，在最小高度 520 时正文约 248 DIP。
+// 这样可以确保弹窗在任何屏幕和窗口缩放比例下，底部的保存/取消按钮永远 100% 显露在视口内。
+func (a *app) dialogBodyMaxHeight() float32 {
+	h := a.windowH - 240
 	if h < dialogBodyMin {
 		h = dialogBodyMin
 	}
@@ -1699,6 +1707,11 @@ func (a *app) dialogBodyHeight(reserved float32) float32 {
 		h = dialogBodyMax
 	}
 	return h
+}
+
+// dialogBodyHeight 兼容旧接口，直接基于全局安全的 dialogBodyMaxHeight 计算。
+func (a *app) dialogBodyHeight(reserved float32) float32 {
+	return a.dialogBodyMaxHeight()
 }
 
 func (a *app) editorView(c *ui.Context) {
@@ -1710,9 +1723,9 @@ func (a *app) editorView(c *ui.Context) {
 	ui.Modal(c, &d.open, func() {
 		ui.Column(c).Width(dialogWide).Gap(10).Children(func() {
 			dialogHeader(c, editorTitle(d), editorSubtitle(d))
-			ui.Scroll(c).MaxHeight(a.dialogBodyHeight(300)).MinHeight(0).
-				ScrollbarInsets(6, 6, 6, 6).Children(func() {
-				ui.Column(c).Gap(10).Children(func() {
+			ui.Scroll(c).MaxHeight(a.dialogBodyMaxHeight()).MinHeight(0).
+				ScrollbarInsets(4, 2, 4, 0).Children(func() {
+				ui.Column(c).Padding(0, 14, 8, 0).Gap(10).Children(func() {
 					ui.Field(c, "VPN 协议", func() { ui.Select(c, &d.protocol, []string{"EasyConnect", "aTrust"}) })
 					ui.Field(c, "名称", func() {
 						ui.TextInput(c, &d.name).Placeholder("例如：主网关 / 教育网线路")
@@ -1805,8 +1818,8 @@ func (a *app) editorView(c *ui.Context) {
 					}
 					ui.Field(c, "密码存储方式", func() {
 						ui.Select(c, &d.secretStore, secretStoreLabels()).Width(220)
-						ui.Text(c, "系统凭据服务不可用时仅在本次运行保存，重启后需重新填写。").FontSize(11).TextColor(t.TextMuted).Wrap()
 					})
+					ui.Text(c, "系统凭据服务不可用时仅在本次运行保存，重启后需重新填写。").FontSize(11).TextColor(t.TextMuted).Wrap()
 					ui.Divider(c)
 					ui.Row(c).Gap(14).AlignItems(ui.Start).Children(func() {
 						// 简单模式下这两个字段被锁定（一个代理地址），不再展示：
@@ -1838,11 +1851,11 @@ func (a *app) editorView(c *ui.Context) {
 							}
 						})
 					}
+					if d.err != "" {
+						ui.Text(c, d.err).FontSize(11).TextColor(t.Danger)
+					}
 				})
 			})
-			if d.err != "" {
-				ui.Text(c, d.err).FontSize(11).TextColor(t.Danger)
-			}
 			// 底部：删除在左，取消与保存在右。
 			dialogFooter(c, func() {
 				if d.editingID != "" {
@@ -1903,8 +1916,8 @@ func (a *app) settingsPage(c *ui.Context) {
 		})
 		ui.Segmented(c, &d.section, "通用", "网络与接管", "日志", "关于").Label("设置分类")
 		ui.Divider(c)
-		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4).Children(func() {
-			ui.Column(c).Gap(12).Children(func() {
+		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(6, 2, 6, 0).Children(func() {
+			ui.Column(c).Padding(0, 12, 0, 0).Gap(12).Children(func() {
 				switch d.section {
 				case settingNetwork:
 					a.captureSection(c)

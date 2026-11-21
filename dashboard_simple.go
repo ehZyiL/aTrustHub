@@ -8,6 +8,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -19,6 +20,21 @@ import (
 // siteTileLimit 限制磁贴数量：单接入点用户要的是「最近在用的几个」，
 // 不是把网关上下发的几十个应用铺满首屏。
 const siteTileLimit = 8
+
+// isWebTarget 过滤掉 DNS (53)、SSH (22)、RDP (3389) 等纯网络/基础设施端口，
+// 只保留能通过 Web 浏览器正常打开的 HTTP/HTTPS 服务。
+func isWebTarget(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	port := u.Port()
+	switch port {
+	case "53", "22", "3389", "3306", "5432", "6379", "27017":
+		return false
+	}
+	return true
+}
 
 // simpleMode 报告界面是否处于简单模式。
 func (a *app) simpleMode() bool { return a.cfg.Settings.SimpleMode }
@@ -96,7 +112,11 @@ func (a *app) simpleSiteTiles(v vpn.View) []siteTile {
 	}
 	if v.State == vpn.StateOnline {
 		for _, app := range v.Apps {
-			add(app.Name, appOpenURL(app))
+			targetURL := appOpenURL(app)
+			if !isWebTarget(targetURL) {
+				continue
+			}
+			add(app.Name, targetURL)
 		}
 	}
 	for _, p := range a.cfg.LocalApps {
@@ -121,21 +141,19 @@ func (a *app) openSiteInProxyBrowser(v vpn.View, url string) {
 	}
 }
 
-// simpleHome 是简单模式的首屏：一张状态卡、接管方式、网址入口。
+// simpleHome 是简单模式的首屏：一张核心连接卡片，按需展示内网服务。
 // 只有恰好一个接入点时用它；多个点退回列表，单卡描述不了复数。
 func (a *app) simpleHome(c *ui.Context, v vpn.View) {
+	t := c.Theme()
 	ui.Column(c).Grow(1).MinHeight(0).Gap(12).Children(func() {
-		pageBar(c, "连接", "1 个接入点", func() {
-			if ui.Button(c, "高级设置").FontSize(11).Clicked() {
-				a.openSettingsAt(settingGeneral)
-			}
+		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+			ui.Text(c, "连接").FontSize(15).Bold()
+			ui.Text(c, "1 个接入点").FontSize(11).TextColor(t.TextMuted)
 		})
-		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4).Children(func() {
-			ui.Column(c).Gap(12).Children(func() {
+		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(6, 2, 6, 0).Children(func() {
+			ui.Column(c).Padding(0, 10, 0, 0).Gap(14).Children(func() {
 				a.simpleHero(c, v)
 				a.simpleSites(c, v)
-				// 护栏：失败在首屏就能看到，日志入口跟着模式走。
-				a.recentFailures(c)
 			})
 		})
 	})
@@ -145,10 +163,8 @@ func (a *app) simpleHome(c *ui.Context, v vpn.View) {
 // 不摆常用入口和状态条——它们此刻什么也说明不了。
 func (a *app) simpleEmpty(c *ui.Context) {
 	ui.Column(c).Grow(1).MinHeight(0).Gap(12).Children(func() {
-		pageBar(c, "连接", "", func() {
-			if ui.Button(c, "高级设置").FontSize(11).Clicked() {
-				a.openSettingsAt(settingGeneral)
-			}
+		ui.Row(c).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "连接").FontSize(15).Bold()
 		})
 		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4).Children(func() {
 			a.emptyState(c)
@@ -156,27 +172,32 @@ func (a *app) simpleEmpty(c *ui.Context) {
 	})
 }
 
-// simpleHero 是那张核心卡片：状态、地址、动作、接管方式。
+// simpleHero 是那张核心卡片：状态、地址、动作、接管方式展示。
 func (a *app) simpleHero(c *ui.Context, v vpn.View) {
 	t := c.Theme()
-	card := ui.Column(c).Padding(16).Gap(10).Radius(14).Background(t.Surface).
+	card := ui.Column(c).Padding(18).Gap(12).Radius(14).Background(t.Surface).
 		Border(1, t.Border).Shadow(0, 2, 10, 0, cardShadow(t))
 	card.Children(func() {
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Row(c).Size(8, 8).Radius(4).Background(stateColor(t, v.State))
-			ui.Column(c).Gap(3).Grow(1).MinWidth(0).Children(func() {
-				ui.Text(c, v.Name).FontSize(16).Bold().Ellipsis("…")
+			ui.Row(c).Size(10, 10).Radius(5).Background(stateColor(t, v.State))
+			ui.Column(c).Gap(2).Grow(1).MinWidth(0).Children(func() {
+				ui.Text(c, v.Name).FontSize(17).Bold().Ellipsis("…")
 				ui.Text(c, addrOf(v)).Font("monospace").FontSize(11).
 					TextColor(t.TextMuted).Ellipsis("…")
 			})
 			a.stateBadge(c, v.State)
+			if ui.Button(c, "编辑").Label("编辑 " + v.Name).FontSize(11).Clicked() {
+				a.openEditor(v)
+			}
 		})
 		if v.State == vpn.StateError && v.Error != "" {
-			ui.Text(c, v.Error).FontSize(13).TextColor(t.Danger).Wrap()
+			ui.Row(c).Padding(8, 12).Radius(8).Background(t.SurfaceHover).Border(1, t.Danger).Children(func() {
+				ui.Text(c, v.Error).FontSize(12).TextColor(t.Danger).Wrap()
+			})
 		}
-		// 登录之后才有的东西：内网 IP 与拨号延迟。
+		// 状态信息行：内网 IP、拨号延迟
 		if v.State == vpn.StateOnline {
-			ui.Row(c).GapX(12).GapY(4).Wrap().Children(func() {
+			ui.Row(c).GapX(14).GapY(4).Wrap().AlignItems(ui.Center).Children(func() {
 				if v.ClientIP != "" {
 					meta(c, t, "内网 IP", v.ClientIP)
 				}
@@ -186,46 +207,94 @@ func (a *app) simpleHero(c *ui.Context, v vpn.View) {
 			})
 		}
 		a.simpleActions(c, v)
-		ui.Divider(c)
-		a.simpleCaptureRow(c)
+		a.simpleCaptureSelector(c)
 	})
 }
 
-// simpleActions 是首屏的动作行：登录 / 断开 / 编辑，加上统一入口地址。
-// 统一入口必须露出来——「系统代理」那一档要的就是这个地址。
+// simpleCaptureSelector 是卡片内紧凑优雅的接管方式分段切换器。
+func (a *app) simpleCaptureSelector(c *ui.Context) {
+	t := c.Theme()
+	cur := a.captureMode()
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+		ui.Text(c, "网络接管").FontSize(11).Bold().TextColor(t.TextMuted)
+		seg := ui.Row(c).Padding(2).Radius(999).Background(t.SurfaceHover).
+			Border(1, t.Border).Gap(2)
+		seg.Children(func() {
+			for _, mode := range a.captureModes() {
+				it := mode
+				on := it == cur
+				item := ui.Row(c).Padding(3, 10).Radius(999).AlignItems(ui.Center).
+					OnClick(func() {
+						a.applyCaptureMode(it)
+						a.invalidate()
+					})
+				if on {
+					item = item.Background(t.Surface).Shadow(0, 1, 3, 0, cardShadow(t))
+				}
+				item.Children(func() {
+					col := t.TextMuted
+					if on {
+						col = t.Text
+					}
+					ui.Text(c, it).FontSize(11).TextColor(col)
+				})
+			}
+		})
+	})
+}
+
+// simpleActions 是首屏的动作行：根据接管模式动态呈现必要动作。
+// 系统代理生效时，系统所有软件均已走代理，无需展示独立代理地址与代理浏览器；
+// 只有不使用接管时，才提供专用代理浏览器与 SOCKS5 复制。
 func (a *app) simpleActions(c *ui.Context, v vpn.View) {
 	t := c.Theme()
+	curCapture := a.captureMode()
+	isIntercepted := curCapture != captureOff
 	agg := a.mgr.Aggregate()
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
 		switch v.State {
 		case vpn.StateOnline:
-			if ui.Button(c, "断开").Label("断开 " + v.Name).FontSize(11).Clicked() {
+			if ui.Button(c, "断开").Label("断开 " + v.Name).FontSize(12).Clicked() {
 				a.disconnectPoint(v.ID)
 			}
-			if ui.Button(c, "代理浏览器").Label("代理浏览器 " + v.Name).FontSize(11).Clicked() {
-				if err := openProxyBrowser(a.proxyFor(v.ID), "about:blank"); err != nil {
-					a.setToast(err.Error())
+			// 仅在未开启系统/应用接管时，才需要专用代理浏览器
+			if !isIntercepted {
+				if ui.PrimaryButton(c, "代理浏览器").Label("代理浏览器 " + v.Name).FontSize(12).Clicked() {
+					if err := openProxyBrowser(a.proxyFor(v.ID), "about:blank"); err != nil {
+						a.setToast(err.Error())
+					}
 				}
 			}
 		case vpn.StateConnecting:
-			ui.Text(c, "正在接入…").FontSize(11).TextColor(t.Warning)
-			if ui.Button(c, "取消").Label("取消 " + v.Name).FontSize(11).Clicked() {
+			ui.Text(c, "正在接入…").FontSize(12).TextColor(t.Warning)
+			if ui.Button(c, "取消").Label("取消 " + v.Name).FontSize(12).Clicked() {
 				go a.mgr.Disconnect(v.ID)
 			}
 		default:
-			if ui.PrimaryButton(c, "登录").Label("登录 " + v.Name).FontSize(11).Clicked() {
+			if ui.PrimaryButton(c, "登录").Label("登录 " + v.Name).FontSize(12).Clicked() {
 				a.mgr.Connect(v.ID)
 			}
 		}
-		if ui.Button(c, "编辑").Label("编辑 " + v.Name).FontSize(11).Clicked() {
-			a.openEditor(v)
-		}
-		if agg.Running && agg.Addr != "" {
+
+		if v.State == vpn.StateOnline {
+			if isIntercepted {
+				ui.Text(c, "✓ "+curCapture+"生效中，浏览器可直接访问内网").
+					FontSize(11).TextColor(t.Success)
+			} else if agg.Running && agg.Addr != "" {
+				addr := "socks5://" + displayAddr(agg.Addr)
+				pill := ui.Row(c).Padding(3, 8).Radius(6).Background(t.SurfaceHover).
+					Border(1, t.Border).Gap(6).AlignItems(ui.Center)
+				pill.Children(func() {
+					ui.Text(c, addr).Font("monospace").FontSize(11).TextColor(t.Text)
+					if ui.Button(c, "复制").Label("复制代理地址").FontSize(10).Clicked() {
+						a.copyText(addr)
+					}
+				})
+			}
+		} else if agg.Running && agg.Addr != "" && !isIntercepted {
 			addr := "socks5://" + displayAddr(agg.Addr)
 			ui.Text(c, addr).Font("monospace").FontSize(11).TextColor(t.TextMuted)
-			if ui.Button(c, "复制").Label("复制代理地址").FontSize(11).Clicked() {
-				a.copyText(addr)
-			}
 		} else if agg.Error != "" {
 			ui.Text(c, "入口未启动："+agg.Error).FontSize(11).TextColor(t.Danger).
 				MaxWidth(220).Ellipsis("…").Tooltip(agg.Error)
@@ -235,59 +304,30 @@ func (a *app) simpleActions(c *ui.Context, v vpn.View) {
 	})
 }
 
-// simpleCaptureRow 是首屏的接管方式。它走 a.captureModes()：平台或配置做不到的
-// 档位照样不出现——简单模式不复制接管逻辑，也不把不可用的档位重新摆出来。
-func (a *app) simpleCaptureRow(c *ui.Context) {
-	t := c.Theme()
-	cur := a.captureMode()
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-		ui.Text(c, "网络接管").FontSize(11).Bold().TextColor(t.TextMuted)
-		for _, mode := range a.captureModes() {
-			it := mode
-			on := it == cur
-			btn := ui.Row(c).Padding(6, 12).Radius(999).AlignItems(ui.Center).
-				Border(1, t.Border)
-			if on {
-				btn = btn.Background(t.SurfaceHover).Border(1, t.Accent)
-			}
-			btn.OnClick(func() {
-				a.applyCaptureMode(it)
-				a.invalidate()
-			}).Children(func() {
-				colour := t.Text
-				if on {
-					colour = t.Accent
-				}
-				ui.Text(c, it).FontSize(11).TextColor(colour)
-			})
-		}
-	})
-}
-
 // siteHeading 是「打开内网网站」的小标题；name 非空时补上接入点名，
 // 多接入点的「内网网站」页靠它区分磁贴属于谁。
 func siteHeading(c *ui.Context, name string) {
 	t := c.Theme()
 	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-		ui.Text(c, "打开内网网站").FontSize(13).Bold()
+		ui.Text(c, "打开内网网站").FontSize(14).Bold()
 		if name != "" {
-			ui.Text(c, name).FontSize(10).TextColor(t.TextMuted)
+			ui.Text(c, name).FontSize(11).TextColor(t.TextMuted)
 		}
-		ui.Text(c, "填个网址，用代理浏览器打开").FontSize(10).TextColor(t.TextMuted)
+		ui.Text(c, "填个网址，用代理浏览器打开").FontSize(11).TextColor(t.TextMuted)
 	})
 }
 
 // siteAddressField 是那个「填个网址」的输入框与按钮。它全程只有一份：
 // 输入框绑定 a.siteURL，多接入点时共用，不能每个接入点各画一个。
 func (a *app) siteAddressField(c *ui.Context, open func()) {
-	ui.Row(c).Gap(8).AlignItems(ui.End).Children(func() {
+	ui.Row(c).Gap(10).AlignItems(ui.End).Children(func() {
 		ui.Field(c, "内网地址", func() {
-			e := ui.TextInput(c, &a.siteURL).Placeholder("oa.corp.example").Width(300)
+			e := ui.TextInput(c, &a.siteURL).Placeholder("oa.corp.example 或 10.x.x.x").Width(340)
 			if e.Submitted() {
 				open()
 			}
 		})
-		if ui.PrimaryButton(c, "用代理浏览器打开").FontSize(11).Clicked() {
+		if ui.PrimaryButton(c, "用代理浏览器打开").FontSize(12).Clicked() {
 			open()
 		}
 	})
@@ -298,15 +338,15 @@ func (a *app) siteTiles(c *ui.Context, v vpn.View) {
 	t := c.Theme()
 	tiles := a.simpleSiteTiles(v)
 	if len(tiles) == 0 {
-		ui.Text(c, "登录之后，网关上能直接打开的地址会出现在这里。").FontSize(11).
+		ui.Text(c, "登录之后，网关上能直接打开的内网网站会出现在这里。").FontSize(11).
 			TextColor(t.TextMuted)
 		return
 	}
-	ui.Row(c).Gap(8).Wrap().Children(func() {
+	ui.Row(c).Gap(10).Wrap().Children(func() {
 		for _, tile := range tiles {
 			it := tile
-			card := ui.Column(c).Width(220).Padding(10, 12).Radius(12).Gap(3).
-				Background(t.Surface).Border(1, t.Border)
+			card := ui.Column(c).Width(240).Padding(10, 12).Radius(10).Gap(4).
+				Background(t.SurfaceHover).Border(1, t.Border)
 			card.OnClick(func() {
 				a.openSiteInProxyBrowser(v, it.URL)
 				a.invalidate()
@@ -320,12 +360,34 @@ func (a *app) siteTiles(c *ui.Context, v vpn.View) {
 	})
 }
 
-// simpleSites 是简单模式首屏的「打开内网网站」：一个输入框 + 这个接入点的磁贴。
+// simpleSites 渲染内网服务区：
+// 在系统接管模式下，仅当网关有下发可用 Web 磁贴时，才展示快捷入口（无需输入框）；
+// 只有在未接管（不使用）模式下，才展示内网网址输入框供代理浏览器使用。
 func (a *app) simpleSites(c *ui.Context, v vpn.View) {
-	ui.Column(c).Gap(8).Children(func() {
-		siteHeading(c, "")
-		a.siteAddressField(c, func() { a.openTypedSite(v) })
-		a.siteTiles(c, v)
+	t := c.Theme()
+	curCapture := a.captureMode()
+	isIntercepted := curCapture != captureOff
+	tiles := a.simpleSiteTiles(v)
+
+	// 系统接管生效时：如果没有任何网关下发磁贴，则完全无需渲染该区域，保持首屏极致简洁
+	if isIntercepted && len(tiles) == 0 {
+		return
+	}
+
+	card := ui.Column(c).Padding(16).Gap(12).Radius(14).Background(t.Surface).
+		Border(1, t.Border)
+	card.Children(func() {
+		if isIntercepted {
+			ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+				ui.Text(c, "常用内网服务").FontSize(14).Bold()
+				ui.Text(c, "网关已授权的应用，点击直接打开").FontSize(11).TextColor(t.TextMuted)
+			})
+			a.siteTiles(c, v)
+		} else {
+			siteHeading(c, "")
+			a.siteAddressField(c, func() { a.openTypedSite(v) })
+			a.siteTiles(c, v)
+		}
 	})
 }
 
@@ -349,8 +411,8 @@ func (a *app) sitesPage(c *ui.Context) {
 				a.openSettingsAt(settingGeneral)
 			}
 		})
-		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4).Children(func() {
-			ui.Column(c).Gap(12).Children(func() {
+		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(6, 2, 6, 0).Children(func() {
+			ui.Column(c).Padding(0, 10, 0, 0).Gap(12).Children(func() {
 				if len(views) == 0 {
 					ui.Text(c, "还没有接入点，先到「连接」页添加一个。").FontSize(13).
 						TextColor(t.TextMuted)

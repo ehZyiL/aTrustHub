@@ -592,10 +592,10 @@ func (a *app) start() {
 func (a *app) createWindow() {
 	a.win = mygo.NewWindow(mygo.WindowOptions{
 		Title:           appName,
-		Width:           1120,
-		Height:          780,
-		MinWidth:        860,
-		MinHeight:       560,
+		Width:           880,
+		Height:          600,
+		MinWidth:        720,
+		MinHeight:       520,
 		StateKey:        "main",
 		BackgroundColor: "light-dark(#f7f7f9, #17181a)",
 		Content:         ui.View(a.view),

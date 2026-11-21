@@ -280,9 +280,9 @@ func (a *app) launcherBody(c *ui.Context) {
 					}
 				}
 			})
-			a.quickLaunch(c)
-			ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4).Children(func() {
-				ui.Column(c).Gap(12).Children(func() {
+			ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(6, 2, 6, 0).Children(func() {
+				ui.Column(c).Padding(0, 14, 0, 0).Gap(12).Children(func() {
+					a.quickLaunch(c)
 					a.statusBanner(c, views)
 					if len(views) == 0 {
 						a.emptyState(c)

@@ -142,7 +142,7 @@ func TestSettingsNormalizeKeepsSimpleMode(t *testing.T) {
 	}
 }
 
-// 顶栏在简单模式下只剩两段；逻辑 tab 仍是 0 和 3，不改 a.tab 的含义。
+// 顶栏在简单模式下收成纯单页，不需要顶部分段 Tab。
 func TestPageNavSimpleMode(t *testing.T) {
 	a := testApp(t)
 	pages := a.pages()
@@ -151,30 +151,26 @@ func TestPageNavSimpleMode(t *testing.T) {
 	}
 	a.setSimpleMode(true)
 	pages = a.pages()
-	if len(pages) != 2 {
-		t.Fatalf("简单模式的导航应当只剩两段，实际 %+v", pages)
-	}
-	if pages[0].Tab != 0 || pages[0].Label != "连接" ||
-		pages[1].Tab != 3 || pages[1].Label != "内网网站" {
-		t.Fatalf("简单模式的页面应当是 {0,连接}{3,内网网站}，实际 %+v", pages)
+	if len(pages) != 0 {
+		t.Fatalf("简单模式为纯单页，顶栏无需导航分段，实际 %+v", pages)
 	}
 }
 
-// 首屏：一张卡 + 接管方式 + 网址输入框 + 高级设置入口；多网关那一套不出现。
+// 首屏：一张卡 + 接管方式 + 网址输入框；多网关那一套不出现，右上角已有齿轮不再塞重复的高级设置按钮。
 func TestSimpleHomeLayout(t *testing.T) {
 	a := simpleApp(t)
 	texts, _ := frames(t, a, 1120, 780)
-	for _, want := range []string{"连接", "公司主网关", "网络接管", "打开内网网站", "内网地址", "高级设置"} {
+	for _, want := range []string{"连接", "公司主网关", "网络接管", "打开内网网站", "内网地址"} {
 		if !strings.Contains(texts, want) {
 			t.Errorf("首屏缺少 %q；texts = %s", want, texts)
 		}
 	}
-	for _, no := range []string{"全部接入点重新登录", "常用入口", "本机软件", "网关资源", "独立 SOCKS5", "运行环境"} {
+	for _, no := range []string{"全部接入点重新登录", "常用入口", "本机软件", "网关资源", "独立 SOCKS5", "运行环境", "高级设置"} {
 		if strings.Contains(texts, no) {
 			t.Errorf("简单模式首屏不该出现 %q；texts = %s", no, texts)
 		}
 	}
-	// 护栏 3：统一入口状态还在首屏（系统代理这一档要用它）。
+	// 护栏 3：统一入口状态还在首屏（未接管时要用它）。
 	if !strings.Contains(texts, "入口未启动") {
 		t.Errorf("首屏应当仍然能看到入口状态；texts = %s", texts)
 	}
@@ -197,7 +193,7 @@ func TestSimpleHomeFallsBackToMulti(t *testing.T) {
 	}
 }
 
-// 打开 / 关闭简单模式都要把 tab 收敛到存在的页面上。
+// 打开简单模式都要把 tab 收敛到唯一的首页 0。
 func TestSimpleModeClampsTab(t *testing.T) {
 	a := testApp(t)
 	a.tab = 2
@@ -207,12 +203,8 @@ func TestSimpleModeClampsTab(t *testing.T) {
 	}
 	a.tab = 3
 	a.setSimpleMode(true)
-	if a.tab != 3 {
-		t.Errorf("「内网网站」在简单模式下合法，tab 应当保持 3，实际 %d", a.tab)
-	}
-	a.setSimpleMode(false)
-	if a.tab != 3 {
-		t.Errorf("关掉简单模式不该动当前 tab，实际 %d", a.tab)
+	if a.tab != 0 {
+		t.Errorf("简单模式为纯单页，tab 应当收敛到 0，实际 %d", a.tab)
 	}
 }
 
@@ -444,5 +436,27 @@ func TestSimpleHomeKeepsCaptureModes(t *testing.T) {
 	}
 	if strings.Contains(texts, captureGlobalTUN) {
 		t.Errorf("只有 EasyConnect 接入点时不该出现全局 TUN；texts = %s", texts)
+	}
+}
+
+// 护栏：弹窗正文高度自适应必须为 Header、Footer 和 Panel Padding 预留安全空间，
+// 防止在紧凑窗口下弹窗溢出视口导致底部操作按钮被截断。
+func TestDialogBodyHeightFitsViewport(t *testing.T) {
+	a := onePointApp(t, model.AccessPoint{
+		ID: "E", Name: "测试点", Server: "ec.corp.example", Port: 443,
+	})
+	for _, winH := range []float32{480, 520, 560, 600, 720, 900} {
+		a.windowH = winH
+		bodyH := a.dialogBodyMaxHeight()
+		if bodyH < dialogBodyMin || bodyH > dialogBodyMax {
+			t.Errorf("winH=%.0f: bodyH=%.0f 超出上下限 [%.0f, %.0f]", winH, bodyH, dialogBodyMin, dialogBodyMax)
+		}
+		// 弹窗固定占用 (Header ~50 + Footer ~45 + Gaps ~20 + Padding ~40) 约 155 DIP，
+		// 加上计算出的正文高度后，总高必须小于窗口高度，保证 Footer 永远完整露在视口内。
+		const estimatedFixedOverhead float32 = 155
+		totalH := bodyH + estimatedFixedOverhead
+		if totalH > winH {
+			t.Errorf("winH=%.0f: 弹窗预估总高 %.0f 超出视口！底部按钮将被截断", winH, totalH)
+		}
 	}
 }

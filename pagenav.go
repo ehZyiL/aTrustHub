@@ -10,15 +10,11 @@ type pageRef struct {
 	Label string
 }
 
-// pages 是当前模式下顶栏的段。简单模式只留「连接」和「内网网站」：
-// 网关资源、访问日志这些页面在单接入点的场景里只是噪音，真正的入口
-// （接管方式、日志）在「连接」页和设置页里。
+// pages 是当前模式下顶栏的段。简单模式下为单页面应用，不需要顶部分段 Tab；
+// 完整模式下保留四段。
 func (a *app) pages() []pageRef {
 	if a.simpleMode() {
-		return []pageRef{
-			{Tab: 0, Label: "连接"},
-			{Tab: 3, Label: "内网网站"},
-		}
+		return nil
 	}
 	return []pageRef{
 		{Tab: 0, Label: "接入点"},
@@ -29,8 +25,12 @@ func (a *app) pages() []pageRef {
 }
 
 // clampTab 把 a.tab 收敛到当前模式下存在的页面：切进简单模式时
-// 「访问日志」那一页会消失，留着它就会渲染一个导航里没有的页面。
+// 收敛到唯一的首页 0。
 func (a *app) clampTab() {
+	if a.simpleMode() {
+		a.tab = 0
+		return
+	}
 	for _, ref := range a.pages() {
 		if ref.Tab == a.tab {
 			return

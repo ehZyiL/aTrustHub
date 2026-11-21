@@ -18,6 +18,9 @@ trap 'rm -rf -- "$bundle"' EXIT
 mkdir -p "$bundle/resources" "$bundle/LICENSES"
 
 cd "$app_root"
+# ELF 不能像 EXE 那样内嵌图标：窗口和托盘图标由程序自己读 resources/icon.png，
+# 应用菜单、Dock 则需要 hicolor 图标；这里把它们按尺寸放进包里。
+env "$go_tool" run ./cmd/appicon -icon resources/icon.png -png-dir "$bundle/share/icons/hicolor" -png-name easyconnect-hub
 env GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/easyconnect-hub" .
 env GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/easyconnect-hub-capture" ./cmd/app-helper
 helper_protocol=$("$bundle/easyconnect-hub-capture" --protocol-version)
@@ -54,12 +57,13 @@ EOF
 install -m 0644 "$app_root/packaging/linux/easyconnect-hub-capture@.service" "$bundle/easyconnect-hub-capture@.service"
 install -m 0755 "$app_root/packaging/linux/install-capture-helper.sh" "$bundle/install-capture-helper.sh"
 install -m 0755 "$app_root/packaging/linux/uninstall-capture-helper.sh" "$bundle/uninstall-capture-helper.sh"
+install -m 0755 "$app_root/packaging/linux/install-desktop-entry.sh" "$bundle/install-desktop-entry.sh"
 install -m 0755 "$app_root/packaging/linux/test-worker.sh" "$bundle/test-worker.sh"
 "$bundle/test-worker.sh"
 
 printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'bundle_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)' 'cd "$bundle_dir"' 'exec "$bundle_dir/easyconnect-hub" "$@"' > "$bundle/start.sh"
 chmod +x "$bundle/start.sh"
-chmod +x "$bundle/easyconnect-hub" "$bundle/easyconnect-worker" "$bundle/easyconnect-hub-capture" "$bundle/test-worker.sh" "$bundle/install-capture-helper.sh" "$bundle/uninstall-capture-helper.sh"
+chmod +x "$bundle/easyconnect-hub" "$bundle/easyconnect-worker" "$bundle/easyconnect-hub-capture" "$bundle/test-worker.sh" "$bundle/install-capture-helper.sh" "$bundle/uninstall-capture-helper.sh" "$bundle/install-desktop-entry.sh"
 
 cd "$bundle"
 find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS

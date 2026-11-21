@@ -14,6 +14,14 @@ Linux 软件 TCP 接管实验入口默认显示，无需环境变量。早期版
 ./start.sh
 ```
 
+桌面图标：Linux 的可执行文件不能像 Windows 的 EXE 那样把图标带在文件里，窗口和托盘图标是程序启动后自己按同目录的 `resources/icon.png` 设置的；应用菜单、Dock 和任务栏显示的图标则需要桌面条目。随包的 `install-desktop-entry.sh` 会把一份 `.desktop` 与包里 `share/icons/hicolor` 的各尺寸图标装进本用户目录（不需要 root），之后就能在应用菜单里带图标启动：
+
+```bash
+./install-desktop-entry.sh
+```
+
+移动或删除解压目录后重新运行一次；想从菜单里注销时用 `./install-desktop-entry.sh --remove`。不装也能用 `./start.sh` 启动，只是应用菜单里没有它的图标。
+
 `easyconnect-hub` 和 `easyconnect-worker` 必须放在同一目录，并使用同一次构建的版本。
 本批 worker 控制协议为 v6，Linux 辅助服务控制协议为 v7。请使用同一个包内的主程序、worker 和辅助服务。
 旧助手会提示更新；在「本机软件」中点击「安装 / 更新辅助服务」，通过系统认证后重新检查状态。

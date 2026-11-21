@@ -22,7 +22,10 @@
 
 ```powershell
 New-Item -ItemType Directory -Force .\build\windows-capture\resources | Out-Null
+# `go build` 不会自己写 Windows 资源，先写出带应用图标的 .syso，链接后再删掉。
+go run .\cmd\appicon -arch amd64 -out .\appicon_windows_amd64.syso
 go build -mod=readonly -trimpath '-ldflags=-H=windowsgui' -o .\build\windows-capture\easyconnect-hub.exe .
+Remove-Item .\appicon_windows_amd64.syso
 go build -mod=readonly -trimpath '-ldflags=-H=windowsgui' -o .\build\windows-capture\easyconnect-hub-capture.exe ./cmd/app-helper
 $previousGoWork = $env:GOWORK
 try {
@@ -40,7 +43,7 @@ go test -mod=readonly -trimpath -c -o .\build\windows-capture\windows-capture-te
 
 退出旧版本后，普通双击解压目录中的 `easyconnect-hub.exe`，确认启动日志显示本次测试的版本号。请使用同一个配套包内的 `easyconnect-hub.exe`、`easyconnect-worker.exe` 和 `easyconnect-hub-capture.exe`。助手已内嵌 Wintun DLL。`test-worker.ps1` 使用空配置验证 worker v6 协议，无需登录。
 
-Linux 上交叉编译或 Windows Git Bash 打包，可使用 `bash scripts/package-windows.sh`。默认打发布包 `easyconnect-hub-windows-<arch>`，只放运行必需的三个程序和说明、许可证；需要真机验收包时设 `EASYCONNECT_BUNDLE_PROFILE=test`，包名带 `-capture` 后缀，额外包含 `windows-capture-tests.exe`、`test-capture.ps1`、`test-worker.ps1` 和两份模块清单。两种包在归档前都会用 `test-worker.ps1` 跑一遍 worker v6 协议自检。Windows PowerShell 调用示例：`& "C:\Program Files\Git\bin\bash.exe" .\scripts\package-windows.sh`。脚本已为 worker 的构建和模块清单单独禁用 workspace。
+Linux 上交叉编译或 Windows Git Bash 打包，可使用 `bash scripts/package-windows.sh`。默认打发布包 `easyconnect-hub-windows-<arch>`，只放运行必需的三个程序和说明、许可证；需要真机验收包时设 `EASYCONNECT_BUNDLE_PROFILE=test`，包名带 `-capture` 后缀，额外包含 `windows-capture-tests.exe`、`test-capture.ps1`、`test-worker.ps1` 和两份模块清单。两种包在归档前都会用 `test-worker.ps1` 跑一遍 worker v6 协议自检。脚本会先用 `cmd/appicon` 生成带图标的资源对象再编译 GUI，所以包里的 `easyconnect-hub.exe` 不再是 Go 的默认图标。Windows PowerShell 调用示例：`& "C:\Program Files\Git\bin\bash.exe" .\scripts\package-windows.sh`。脚本已为 worker 的构建和模块清单单独禁用 workspace。
 
 ## 系统 TUN 启动
 

@@ -43,7 +43,13 @@ trap 'rm -rf -- "$bundle"' EXIT
 mkdir -p "$bundle/resources" "$bundle/LICENSES"
 
 cd "$app_root"
+# go build 自己不写 Windows 资源，没有 .syso 时 EXE 会顶着 Go 的默认图标。
+# 先生成带应用图标的资源对象，链接进 GUI 后再删除，免得留在工作树里。
+icon_syso="$app_root/appicon_windows_${target_arch}.syso"
+trap 'rm -rf -- "$bundle"; rm -f -- "$icon_syso"' EXIT
+env "$go_tool" run ./cmd/appicon -icon resources/icon.png -arch "$target_arch" -out "$icon_syso"
 env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-hub.exe" .
+rm -f -- "$icon_syso"
 env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-hub-capture.exe" ./cmd/app-helper
 helper_protocol=$("$bundle/easyconnect-hub-capture.exe" --protocol-version)
 if [[ "$helper_protocol" != 7 ]]; then

@@ -90,7 +90,7 @@ func TestLayoutBoundsWithinWindow(t *testing.T) {
 func TestSettingsPageFitsWindow(t *testing.T) {
 	a := layoutApp(t)
 	sections := map[int][]string{
-		settingGeneral: {"设置", "监听地址", "统一入口端口", "分流模式"},
+		settingGeneral: {"设置", "监听地址", "统一入口端口", "分流模式", "颜色模式", "主题配色", "经典蓝白", "极客森绿", "柔和紫灰"},
 		settingNetwork: {"网络与接管", "接管方式", "当前接管：系统代理"},
 		settingLogs:    {"日志", "运行日志", "打开 TUN 日志"},
 		settingAbout:   {"关于", "版本", "项目主页", "打开数据目录"},

@@ -383,19 +383,26 @@ func TestSimpleFallbackLogEntry(t *testing.T) {
 	}
 }
 
-// 多接入点的「内网网站」页只能有一个地址输入框：一排绑同一变量的输入框
-// 会让人分不清自己填的地址会从哪条隧道出去。
+// 多接入点的「内网网站」页不能多出输入框：输入框绑的是同一份 a.siteURL，
+// 每个点各画一份就会出现“填了但不知道从哪条隧道出去”的局面。
 func TestSimpleSitesPageSingleInput(t *testing.T) {
-	a := twoPointApp(t)
-	a.setSimpleMode(true)
-	a.tab = 3
-	texts, _ := frames(t, a, 1120, 780)
-	if got := strings.Count(texts, "内网地址"); got != 1 {
-		t.Errorf("内网地址输入框应当只有 1 个，实际 %d；texts = %s", got, texts)
+	one := simpleApp(t)
+	one.tab = 3
+	oneTexts, _ := frames(t, one, 1120, 780)
+
+	two := twoPointApp(t)
+	two.setSimpleMode(true)
+	two.tab = 3
+	twoTexts, _ := frames(t, two, 1120, 780)
+
+	// ui.Field 会把标题算成两个文本元素，所以不比绝对值，只盯「点数不影响个数」。
+	if got, want := strings.Count(twoTexts, "内网地址"), strings.Count(oneTexts, "内网地址"); got != want {
+		t.Errorf("内网地址输入框不该随接入点数量增加（单点 %d 次、双点 %d 次）；texts = %s",
+			want, got, twoTexts)
 	}
 	// 磁贴按接入点分组时要能看出归属。
-	if !strings.Contains(texts, "公司主网关") || !strings.Contains(texts, "办公网线路") {
-		t.Errorf("磁贴分组应当标出接入点名；texts = %s", texts)
+	if !strings.Contains(twoTexts, "公司主网关") || !strings.Contains(twoTexts, "办公网线路") {
+		t.Errorf("磁贴分组应当标出接入点名；texts = %s", twoTexts)
 	}
 }
 

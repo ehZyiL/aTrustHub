@@ -1992,7 +1992,7 @@ func (a *app) simpleModeField(c *ui.Context) {
 		}
 	})
 	ui.Text(c, "简单模式把首屏收成一张卡和一个网址输入框（接入点多于一个时仍列成清单）；"+
-		"监听地址、端口、健康检查、分流这些项收起来，按默认值跑。").
+		"专业设置按默认值跑，要看或改它们用「显示全部设置」。").
 		FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
 }
 

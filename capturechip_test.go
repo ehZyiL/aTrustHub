@@ -90,8 +90,15 @@ func TestCaptureChipPicksModeWithoutLeavingPage(t *testing.T) {
 	if a.tab != 0 {
 		t.Errorf("就地切换不该换页，tab = %d", a.tab)
 	}
-	if a.toast == "" {
-		t.Errorf("点 %q 被拒绝时应当给出原因", pick)
+	// 提示是转瞬即逝的（下一帧就被 view() 消费掉），可查的是运行日志。
+	found := ""
+	for _, entry := range a.bus.Tail(50) {
+		if strings.Contains(entry.Line, "未生效") && strings.Contains(entry.Line, pick) {
+			found = entry.Line
+		}
+	}
+	if found == "" {
+		t.Errorf("点 %q 被拒绝时应当把原因写进运行日志；日志 = %+v", pick, a.bus.Tail(50))
 	}
 }
 

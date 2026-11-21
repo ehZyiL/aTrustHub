@@ -57,6 +57,8 @@ var pageShortcuts = []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4}
 func (a *app) view(c *ui.Context) {
 	// 主线程上用框架的可见性校正门控标记：藏在托盘时不再重建整树。
 	a.syncWindowVisible()
+	// 日志回调只能读原子快照，这里在主线程算一次「日志面板是否在画」。
+	a.syncLogViewActive()
 	// 原型是暗色启动台，但颜色模式由设置里的偏好决定：
 	// 跟随系统时听系统的，浅色 / 深色则把外观固定下来。
 	c.SetTheme(a.appearanceTheme(c.Theme().Dark))

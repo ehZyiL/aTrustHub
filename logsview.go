@@ -12,19 +12,25 @@ const (
 	logCopyLimit = 200
 )
 
-// logViewsVisible 判断这一帧是否正在展示日志：日志抽屉打开、
-// 停在访问日志页，或者设置页停在「日志」分区。
+// logViewsVisible 判断这一帧日志面板是否真的在画：日志需要打开且停在
+// 「日志」分区，或者停在访问日志页。只由主线程（view）调用。
 func (a *app) logViewsVisible() bool {
 	if a.settings.open {
-		return a.settings.section == settingLogs
+		return a.settings.section == settingLogs && a.logsOpen
 	}
-	return a.logsOpen || a.tab == 2
+	return a.tab == 2
+}
+
+// syncLogViewActive 在主线程把判定结果快照进原子量：
+// 日志回调跑在 logger 的 goroutine 上，不能直读 settings / tab。
+func (a *app) syncLogViewActive() {
+	a.logViewActive.Store(a.logViewsVisible())
 }
 
 // onLogEvent 是 logbus 的回调。正在看日志就按 30 FPS 合并刷新；
 // 其它页面降到 1 秒一次——首屏的「最近的失败」最多慢一秒，不会停更。
 func (a *app) onLogEvent() {
-	if a.logViewsVisible() {
+	if a.logViewActive.Load() {
 		a.invalidateCoalesced()
 		return
 	}

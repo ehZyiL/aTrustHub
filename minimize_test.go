@@ -50,24 +50,27 @@ func TestMinimizeSuspendsRepaints(t *testing.T) {
 	}
 }
 
-// 最小化让工作集修剪走同一条「隐藏够久且无流量」的路。
+// 最小化让工作集修剪走同一条「不在前台够久且无流量」的路。
 func TestMinimizeArmsMemoryTrim(t *testing.T) {
 	a := testApp(t)
 	trims := 0
 	a.trimMemoryFn = func() { trims++ }
 	a.onWindowMinimized()
-	if a.hiddenSince.IsZero() {
-		t.Fatal("最小化应当开始计时")
+	if hidden, _ := a.idle.periods(time.Now()); hidden < 0 || hidden > time.Second {
+		t.Fatalf("最小化应当刚开会计时，实际 %v", hidden)
 	}
 	// 刚最小化、又有流量：不修。
-	a.lastTrafficAt = time.Now()
+	a.idle.noteTraffic(a.trafficTotal()+1, time.Now())
 	a.maybeTrimMemory()
 	if trims != 0 {
 		t.Fatalf("刚最小化且有流量时不该修剪，实际 %d 次", trims)
 	}
 	// 最小化够久且无流量：修一次。
-	a.hiddenSince = time.Now().Add(-time.Hour)
-	a.lastTrafficAt = time.Now().Add(-time.Hour)
+	now := time.Now()
+	a.idle.begin(now.Add(-time.Hour))
+	a.idle.mu.Lock()
+	a.idle.lastTrafficAt = now.Add(-time.Hour)
+	a.idle.mu.Unlock()
 	a.maybeTrimMemory()
 	if trims != 1 {
 		t.Fatalf("应当修剪一次，实际 %d 次", trims)

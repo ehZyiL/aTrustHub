@@ -5,7 +5,7 @@ import (
 )
 
 // 状态机与重绘彻底分开：TUN / 代理 / 本机项目这些业务推进由后台
-// ticker 负责，窗口藏进托盘也照跑；重绘只决定「要不要画」。
+// ticker 负责，窗口藏进托盘或最小化也照跑；重绘只决定「要不要画」。
 //
 // 之前这些推进挂在 invalidate() 上，导致「藏起来不画」就顺带把状态机也停了，
 // 而「一有事件就画」又把状态推进和整树重建绑在一起。
@@ -20,7 +20,7 @@ func (a *app) startStateTicker() {
 }
 
 // maintainState 是一次状态维护：恢复/刷新 TUN，并记一笔流量，
-// 供「隐藏够久且没有流量」时修剪工作集用。它不画界面。
+// 供「不在前台够久且没有流量」时修剪工作集用。它不画界面。
 func (a *app) maintainState() {
 	a.maybeResumeTUN()
 	a.maybeRefreshTUN()
@@ -36,21 +36,14 @@ func (a *app) hideToTray() {
 	a.win.Hide()
 	a.updateDockVisibility(true)
 	a.windowHidden.Store(true)
-	a.hiddenSince = time.Now()
-	// 从隐藏这一刻起算「多久没流量」，并允许本轮再修剪一次。
-	if a.lastTrafficAt.IsZero() {
-		a.lastTrafficAt = a.hiddenSince
-	}
-	a.trimmedThisHide = false
-	a.onWindowHidden()
+	a.idle.begin(time.Now())
 }
 
 // showFromTray 把窗口拉回来：清掉隐藏标记并立刻补一帧，
 // 因为立即模式界面的点击热区来自上一帧。
 func (a *app) showFromTray() {
 	a.windowHidden.Store(false)
-	a.hiddenSince = time.Time{}
-	a.trimmedThisHide = false
+	a.idle.end()
 	// 从托盘叫回时，即使底层窗口还处在最小化，也按「回到前台」处理。
 	a.minimized.Store(false)
 	if a.win == nil || a.win.IsDestroyed() {
@@ -63,7 +56,7 @@ func (a *app) showFromTray() {
 	// 有些平台在 Show 之后还要一帧才能量出真实尺寸，再补一帧。
 	go func() {
 		time.Sleep(120 * time.Millisecond)
-		if a.win != nil && !a.windowHidden.Load() {
+		if a.win != nil && !a.win.IsDestroyed() && a.windowVisible() {
 			a.invalidate()
 		}
 	}()
@@ -79,7 +72,7 @@ func (a *app) syncWindowVisible() {
 	}
 	if gateClears(a.win.IsVisible(), a.minimized.Load()) && a.windowHidden.Load() {
 		a.windowHidden.Store(false)
-		a.hiddenSince = time.Time{}
+		a.idle.end()
 	}
 }
 
@@ -93,24 +86,12 @@ func gateClears(isVisible, minimized bool) bool {
 // Linux 没有托盘，最小化到任务栏就是那里的「后台常驻」。
 func (a *app) onWindowMinimized() {
 	a.minimized.Store(true)
-	if a.hiddenSince.IsZero() {
-		a.hiddenSince = time.Now()
-	}
-	if a.lastTrafficAt.IsZero() {
-		a.lastTrafficAt = a.hiddenSince
-	}
-	a.trimmedThisHide = false
-	a.onWindowHidden()
+	a.idle.begin(time.Now())
 }
 
 // onWindowRestored 是还原时的补帧：立即模式界面的点击热区来自上一帧。
 func (a *app) onWindowRestored() {
 	a.minimized.Store(false)
-	a.hiddenSince = time.Time{}
-	a.trimmedThisHide = false
+	a.idle.end()
 	a.invalidate()
 }
-
-// onWindowHidden 是各平台的降占用钩子：默认什么都不做，
-// Windows 上会在「隐藏够久且没有流量」时修剪工作集。
-func (a *app) onWindowHidden() {}

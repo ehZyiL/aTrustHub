@@ -192,13 +192,9 @@ type app struct {
 	// 手段，因为没有托盘）。它与 windowHidden 区分开，
 	// 因为最小化的窗口 IsVisible() 仍为 true，不能用它来校正。
 	minimized atomic.Bool
-	// hiddenSince 记录这次隐藏的开始时间，工作集修剪要看它。
-	hiddenSince time.Time
-	// trafficMark/lastTrafficAt 记录流量刻度与最后一次流量的时间。
-	trafficMark   int64
-	lastTrafficAt time.Time
-	// trimmedThisHide 保证一次隐藏只修剪一次工作集。
-	trimmedThisHide bool
+	// hiddenSince 等字段收在 idleState 里：它被 UI 线程与 1 秒 ticker 同时访问，
+	// 自带锁，外部不直接碰字段。
+	idle idleState
 	// trimMemoryFn 是测试注入点；生产走 runtime + 平台钩子。
 	trimMemoryFn func()
 
@@ -206,6 +202,9 @@ type app struct {
 	redrawOnce sync.Once
 	redrawFast *redrawScheduler
 	redrawSlow *redrawScheduler
+	// logViewActive 是「这一帧的日志面板是否在画」的主线程快照：
+	// 日志回调跑在 logger 的 goroutine 上，不能直读 settings/tab。
+	logViewActive atomic.Bool
 
 	shutdownOnce sync.Once
 }
@@ -625,6 +624,8 @@ func (a *app) createWindow() {
 
 func (a *app) shutdown() {
 	a.shutdownOnce.Do(func() {
+		// 先把排队的重绘停掉：窗口马上要销毁，别再排新的帧。
+		a.stopPainting()
 		if a.resourceTUN != nil {
 			if err := a.resourceTUN.Close(); err != nil {
 				a.tunLogf("系统捕获清理未完成：%v", err)

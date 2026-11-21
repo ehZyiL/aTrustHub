@@ -3,13 +3,14 @@ package main
 import (
 	"runtime"
 	"runtime/debug"
+	"sync"
 	"time"
 )
 
 // 内存策略只做两件事，而且都做得保守：
 //   - 启动时给 Go 一个软上限，避免异常情况把内存吃穿（GOGC 保持默认 100，
 //     降 GC 百分比换来的是更频繁的 GC，与「省 CPU」的目标相悖）；
-//   - 只有在「藏进托盘 ≥30 秒，而且这段时间没有新流量」时才修剪一次工作集。
+//   - 只有在「藏进托盘或最小化 ≥30 秒，而且这段时间没有新流量」时才修剪一次工作集。
 //
 // 修剪（FreeOSMemory / SetProcessWorkingSetSize）会把页面换出去，
 // 下次唤醒要重新缺页读回来；隐藏一两秒就做，等于给自己制造卡顿。
@@ -25,6 +26,78 @@ const (
 // shouldTrim 决定这次隐藏期间要不要修剪工作集。
 func shouldTrim(hiddenFor, idleFor time.Duration) bool {
 	return hiddenFor >= trimHiddenFor && idleFor >= trimIdleFor
+}
+
+// idleState 记录「多久没在前台、多久没流量」。
+//
+// 它同时被 UI 线程（隐藏/最小化/还原/可见性校正）和 1 秒状态 ticker
+// （记流量、判断修剪）读写，所以字段全部私有不外露，进出都走锁：
+// 一边写 time.Time、一边读 time.Time 是会撕裂的。
+type idleState struct {
+	mu            sync.Mutex
+	hiddenSince   time.Time
+	lastTrafficAt time.Time
+	trafficMark   int64
+	trimmed       bool
+}
+
+// begin 记下「这一刻开始不在前台」，并允许本轮再修剪一次。
+func (s *idleState) begin(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hiddenSince = now
+	if s.lastTrafficAt.IsZero() {
+		s.lastTrafficAt = now
+	}
+	s.trimmed = false
+}
+
+// end 是回到前台：清掉计时，允许下一轮重新修剪。
+func (s *idleState) end() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hiddenSince = time.Time{}
+	s.trimmed = false
+}
+
+// noteTraffic 在累计刻度变化时记一笔流量时间；返回是否真的更新了。
+func (s *idleState) noteTraffic(total int64, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if total == s.trafficMark {
+		return false
+	}
+	s.trafficMark = total
+	s.lastTrafficAt = now
+	return true
+}
+
+// periods 返回「不在前台多久」与「多久没流量」，零值按「一直」处理。
+func (s *idleState) periods(now time.Time) (hiddenFor, idleFor time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hiddenFor = now.Sub(s.hiddenSince)
+	idleFor = time.Duration(1<<62 - 1)
+	if !s.lastTrafficAt.IsZero() {
+		idleFor = now.Sub(s.lastTrafficAt)
+	}
+	return hiddenFor, idleFor
+}
+
+// due 判断现在要不要修剪；返回 true 时顺手记下「本轮已经修剪过」，
+// 保证一次隐藏/最小化只修剪一次。
+func (s *idleState) due(now time.Time) bool {
+	hiddenFor, idleFor := s.periods(now)
+	if !shouldTrim(hiddenFor, idleFor) {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.trimmed {
+		return false
+	}
+	s.trimmed = true
+	return true
 }
 
 // trafficTotal 是累计到现在的流量刻度：接入点的连接计数，加上本机项目
@@ -45,29 +118,17 @@ func (a *app) trafficTotal() int64 {
 
 // noteTraffic 在状态 ticker 里每秒调一次：刻度变了就记一笔流量时间。
 func (a *app) noteTraffic() {
-	total := a.trafficTotal()
-	if total != a.trafficMark {
-		a.trafficMark = total
-		a.lastTrafficAt = time.Now()
-	}
+	a.idle.noteTraffic(a.trafficTotal(), time.Now())
 }
 
-// maybeTrimMemory 在状态 ticker 里调：满足条件才修剪，一次隐藏只修一次。
+// maybeTrimMemory 在状态 ticker 里调：不在前台且「够久没动」才修剪。
 func (a *app) maybeTrimMemory() {
-	// 托盘隐藏与最小化都算「不在前台」；只要还在画就不修剪。
-	if a.windowVisible() || a.hiddenSince.IsZero() || a.trimmedThisHide {
+	if a.windowVisible() {
 		return
 	}
-	hiddenFor := time.Since(a.hiddenSince)
-	// lastTrafficAt 为零值时表示「一直没流量」，按够久处理。
-	idleFor := time.Duration(1<<62 - 1)
-	if !a.lastTrafficAt.IsZero() {
-		idleFor = time.Since(a.lastTrafficAt)
-	}
-	if !shouldTrim(hiddenFor, idleFor) {
+	if !a.idle.due(time.Now()) {
 		return
 	}
-	a.trimmedThisHide = true
 	a.trimMemory()
 }
 
@@ -80,5 +141,5 @@ func (a *app) trimMemory() {
 	runtime.GC()
 	debug.FreeOSMemory()
 	trimWorkingSet()
-	a.tunLogf("窗口已隐藏 %s 且无流量，已修剪工作集", trimHiddenFor)
+	a.tunLogf("窗口不在前台 %s 且无流量，已修剪工作集", trimHiddenFor)
 }

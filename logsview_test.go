@@ -41,7 +41,8 @@ func TestLastEntriesCapsRenderOnly(t *testing.T) {
 	}
 }
 
-// 日志回调按页面分档：看日志时立刻合并刷新，其它页面降到 1 秒。
+// 只有「日志面板真的在画」才算在看日志：
+// 离开设置后 logsOpen 还留着 true，不能因此就走 30 FPS 那一档。
 func TestLogEventRoutesByVisibleViews(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -53,9 +54,10 @@ func TestLogEventRoutesByVisibleViews(t *testing.T) {
 	}{
 		{"接入点页", 0, false, false, 0, false},
 		{"访问日志页", 2, false, false, 0, true},
-		{"日志抽屉打开", 0, true, false, 0, true},
-		{"设置页日志分区", 0, false, true, settingLogs, true},
-		{"设置页通用分区", 0, false, true, settingGeneral, false},
+		{"日志面板打开", 0, true, true, settingLogs, true},
+		{"日志分区但面板收着", 0, false, true, settingLogs, false},
+		{"离开设置后 logsOpen 残留", 0, true, false, 0, false},
+		{"设置页通用分区", 0, true, true, settingGeneral, false},
 	}
 	for _, c := range cases {
 		a := &app{}
@@ -69,22 +71,69 @@ func TestLogEventRoutesByVisibleViews(t *testing.T) {
 	}
 }
 
-// 走一遍回调：非日志页只排 1 秒那一档，日志页排 33ms 那一档。
-func TestLogEventUsesSlowPathOffLogPages(t *testing.T) {
+// 事件源按档排队：日志页排 33ms，其它页面排 1 秒。
+// 用注入的假时钟断言「排了哪一档」——只看到点后画了几帧的话，没到点永远都是 0。
+func TestLogEventUsesTheRightScheduler(t *testing.T) {
 	a := &app{}
+	a.painter()
+	fast, slow := &fakeSchedule{}, &fakeSchedule{}
+	a.redrawFast.schedule = fast.schedule
+	a.redrawSlow.schedule = slow.schedule
+
+	// 接入点页：只排慢档。
 	a.tab = 0
+	a.syncLogViewActive()
 	a.onLogEvent()
-	fastDraws, slowDraws, _, _, _ := a.redrawCounts()
-	if fastDraws != 0 {
-		t.Fatalf("非日志页不该立刻画，fast 档画了 %d 帧", fastDraws)
+	if fast.armed() {
+		t.Error("非日志页不该排快档")
 	}
-	if _, _, _, coalesced, _ := a.redrawCounts(); coalesced == 0 && slowDraws != 0 {
-		t.Log("slow 档已排队，等定时器到点再画")
+	if !slow.armed() {
+		t.Fatal("非日志页应当排 1 秒档")
 	}
+	if slow.delay != redrawSlowInterval {
+		t.Errorf("慢档间隔 = %v，想要 %v", slow.delay, redrawSlowInterval)
+	}
+	slow.fire()
+
+	// 访问日志页：只排快档。
 	a.tab = 2
+	a.syncLogViewActive()
 	a.onLogEvent()
-	if slowDraws != 0 {
-		t.Fatalf("日志页不该走 1 秒档，slow 档画了 %d 帧", slowDraws)
+	if !fast.armed() {
+		t.Error("日志页应当排 33ms 档")
+	}
+	if fast.delay != redrawFastInterval {
+		t.Errorf("快档间隔 = %v，想要 %v", fast.delay, redrawFastInterval)
+	}
+}
+
+// 判定在主线程算成原子快照，回调只读快照：日志 goroutine 不碰 settings / tab。
+func TestLogViewSnapshotDrivesCallback(t *testing.T) {
+	a := &app{}
+	a.painter()
+	fast, slow := &fakeSchedule{}, &fakeSchedule{}
+	a.redrawFast.schedule = fast.schedule
+	a.redrawSlow.schedule = slow.schedule
+
+	a.tab = 2
+	a.syncLogViewActive()
+	if !a.logViewActive.Load() {
+		t.Fatal("访问日志页的快照应当为 true")
+	}
+	a.onLogEvent()
+	if !fast.armed() || slow.armed() {
+		t.Error("日志页应当只排快档")
+	}
+	fast.fire()
+
+	a.tab = 0
+	a.syncLogViewActive()
+	if a.logViewActive.Load() {
+		t.Fatal("离开日志页后快照应当为 false")
+	}
+	a.onLogEvent()
+	if !slow.armed() || fast.armed() {
+		t.Error("离开日志页后应当只排慢档")
 	}
 }
 

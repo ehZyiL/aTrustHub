@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// 修剪的判定只看两件事：藏得够久、且这段时间没有流量。
+// 修剪的判定只看两件事：不在前台够久、且这段时间没有流量。
 func TestShouldTrim(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -28,33 +28,62 @@ func TestShouldTrim(t *testing.T) {
 
 // 流量刻度只在真的变了的时候才更新时间戳。
 func TestNoteTrafficUpdatesIdleClock(t *testing.T) {
-	a := testApp(t)
-	// 刻度不变：不碰时间戳，否则「无流量」永远不成立。
-	old := time.Now().Add(-time.Hour)
-	a.lastTrafficAt = old
-	a.trafficMark = a.trafficTotal()
-	a.noteTraffic()
-	if !a.lastTrafficAt.Equal(old) {
-		t.Errorf("刻度没变却把流量时间改成了 %v", a.lastTrafficAt)
+	s := &idleState{}
+	now := time.Now()
+	if s.noteTraffic(0, now) {
+		t.Error("刻度没变时不该报告更新")
 	}
-
-	// 刻度变了：立刻刷新，作为「刚有流量」的证据。
-	a.trafficMark = a.trafficTotal() - 1
-	a.noteTraffic()
-	if time.Since(a.lastTrafficAt) > time.Minute {
-		t.Errorf("刻度变了却没更新流量时间（%v）", a.lastTrafficAt)
+	if !s.noteTraffic(5, now) {
+		t.Fatal("刻度变了就该记一笔流量")
+	}
+	s.mu.Lock()
+	mark := s.trafficMark
+	s.mu.Unlock()
+	if mark != 5 {
+		t.Errorf("刻度 = %d，想要 5", mark)
+	}
+	// 同样的刻度再来一次不算新流量：无流量阈值才能成立。
+	if s.noteTraffic(5, now.Add(time.Minute)) {
+		t.Error("刻度相同时不该刷新流量时间")
 	}
 }
 
-// 只有「隐藏够久 + 无流量」才修剪，而且一次隐藏只修一次。
+// 隐藏/最小化开始计时，回到前台清掉；一次隐藏只修剪一次。
+func TestIdleStateDue(t *testing.T) {
+	now := time.Now()
+	s := &idleState{}
+	s.begin(now)
+	// 刚进后台：两个时长都还不到阈值。
+	if s.due(now) {
+		t.Fatal("刚进后台不该修剪")
+	}
+	// 一分钟后仍无新流量：应当修剪，且只修一次。
+	if !s.due(now.Add(time.Minute)) {
+		t.Fatal("够久且无流量时应当修剪")
+	}
+	if s.due(now.Add(time.Minute)) {
+		t.Error("同一轮不该重复修剪")
+	}
+	// 回到前台后再进后台：重新允许修剪。
+	s.end()
+	s.begin(now.Add(-time.Hour))
+	s.mu.Lock()
+	s.lastTrafficAt = now.Add(-time.Hour)
+	s.mu.Unlock()
+	if !s.due(now) {
+		t.Error("新一轮隐藏应当重新允许修剪")
+	}
+}
+
+// 只有「不在前台够久 + 无流量」才修剪，而且一次只修一次。
 func TestMaybeTrimMemoryGating(t *testing.T) {
 	a := testApp(t)
 	trims := 0
 	a.trimMemoryFn = func() { trims++ }
+	now := time.Now()
 
 	// 可见时不修。
-	a.hiddenSince = time.Now().Add(-2 * time.Hour)
-	a.lastTrafficAt = time.Now().Add(-2 * time.Hour)
+	a.idle.begin(now.Add(-2 * time.Hour))
 	a.maybeTrimMemory()
 	if trims != 0 {
 		t.Fatalf("窗口可见时不该修剪，实际修了 %d 次", trims)
@@ -62,15 +91,18 @@ func TestMaybeTrimMemoryGating(t *testing.T) {
 
 	// 隐藏但刚有流量：不修。
 	a.windowHidden.Store(true)
-	a.lastTrafficAt = time.Now()
+	a.idle.begin(now)
+	a.idle.noteTraffic(a.trafficTotal()+1, now)
 	a.maybeTrimMemory()
 	if trims != 0 {
 		t.Fatalf("刚有流量时不该修剪，实际修了 %d 次", trims)
 	}
 
 	// 隐藏够久且长时间无流量：修一次。
-	a.hiddenSince = time.Now().Add(-time.Hour)
-	a.lastTrafficAt = time.Now().Add(-time.Hour)
+	a.idle.begin(now.Add(-time.Hour))
+	a.idle.mu.Lock()
+	a.idle.lastTrafficAt = now.Add(-time.Hour)
+	a.idle.mu.Unlock()
 	a.maybeTrimMemory()
 	if trims != 1 {
 		t.Fatalf("应当修剪一次，实际 %d 次", trims)

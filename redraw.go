@@ -35,6 +35,9 @@ type redrawScheduler struct {
 	pending bool
 	stop    func()
 
+	// stopped 置位后不再排新的帧（退出时用）。
+	stopped atomic.Bool
+
 	draws     atomic.Int64
 	coalesced atomic.Int64
 	gated     atomic.Int64
@@ -51,6 +54,9 @@ func newRedrawScheduler(interval time.Duration, visible func() bool, draw func()
 
 // request 由事件源调用：把这一帧合并到最近的一个 interval 边界。
 func (r *redrawScheduler) request() {
+	if r.stopped.Load() {
+		return
+	}
 	if !r.visibleNow() {
 		r.gated.Add(1)
 		return
@@ -68,6 +74,9 @@ func (r *redrawScheduler) request() {
 
 // requestNow 由交互路径调用：取消待发的合并帧，立刻画。
 func (r *redrawScheduler) requestNow() {
+	if r.stopped.Load() {
+		return
+	}
 	if !r.visibleNow() {
 		r.gated.Add(1)
 		return
@@ -132,10 +141,19 @@ func (a *app) painter() *redrawScheduler {
 }
 
 // paint 是调度器最后一步：只做一件事，把窗口标脏。
+// 窗口可能已经被销毁（退出时还有排队的定时器），所以这里要再确认一次。
 func (a *app) paint() {
-	if a.win != nil {
-		a.win.Invalidate()
+	if a.win == nil || a.win.IsDestroyed() {
+		return
 	}
+	a.win.Invalidate()
+}
+
+// stopPainting 在退出前停掉两档调度器：不留定时器到窗口销毁之后。
+func (a *app) stopPainting() {
+	a.painter()
+	a.redrawFast.stop()
+	a.redrawSlow.stop()
 }
 
 // invalidate 是交互路径的入口：立即画，不做合并。

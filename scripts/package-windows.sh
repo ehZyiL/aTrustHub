@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
+
 app_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # 工作树里没有 zju-connect 兄弟目录，允许用环境变量指过去；
 # 默认仍是同级的 ../zju-connect。

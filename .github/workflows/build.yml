@@ -1,140 +1,159 @@
-name: build
+name: Build & Release
 
-# 推送与 PR 跑测试；打 v* 标签时为每个平台各出一个安装文件并发 Release。
+# 改为仅手动触发或推送 v* 标签时执行打包，杜绝普通 push 频繁触发失败
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
-  pull_request:
   workflow_dispatch:
+    inputs:
+      create_release:
+        description: "是否同时发布为 GitHub Release"
+        required: false
+        type: boolean
+        default: false
+      custom_tag:
+        description: "发布 Release 时的版本号（若留空则自动生成时间戳版本，如 v0.1.0-20261121）"
+        required: false
+        type: string
+        default: ""
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: write
 
 env:
   GOFLAGS: -mod=mod
-  GOPROXY: https://proxy.golang.org,direct
+  GOPROXY: https://goproxy.cn,https://proxy.golang.org,direct
 
 jobs:
-  test:
-    name: 测试
-    runs-on: macos-latest
+  build-windows:
+    name: 构建 Windows 便携包 (amd64)
+    runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: 检出 Connect Hub (主仓库)
+        uses: actions/checkout@v4
         with:
-          go-version-file: go.mod
-          cache: true
-      - run: go vet ./...
-      - run: go test ./...
+          path: connect-hub
 
-  build:
-    name: 打包 ${{ matrix.artifact }}
-    # 只在打标签或手动触发时打包，普通推送跑测试就够。
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # universal 一个包同时覆盖 Apple Silicon 与 Intel，产物是 .dmg。
-          - os: macos-latest
-            platform: darwin/universal
-            artifact: macos
-          # Windows 产物是 NSIS 安装包（atrusthub-setup-<版本>-<arch>.exe）。
-          # 三种架构都要编对应的 helper，32 位系统里放 64 位 helper 是跑不起来的。
-          - os: windows-latest
-            platform: windows/amd64
-            artifact: windows-amd64
-          # 暂时停用：这两个产物先不发布，恢复时去掉注释即可。
-          # - os: windows-latest
-          #   platform: windows/386
-          #   artifact: windows-386
-          # - os: windows-latest
-          #   platform: windows/arm64
-          #   artifact: windows-arm64
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: 检出 ZJU-Connect (依赖 Worker 分支)
+        uses: actions/checkout@v4
         with:
-          go-version-file: go.mod
+          repository: ehZyiL/zju-connect
+          ref: feat/desktop-worker
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: zju-connect
+
+      - name: 配置 Go 运行环境
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: connect-hub/go.mod
           cache: true
+          cache-dependency-path: |
+            connect-hub/go.sum
+            zju-connect/go.sum
 
-      # 产物名带版本号，所以 mygo.json 的 version 要跟标签一致。
-      - name: 同步版本号
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: 执行 Windows 便携包打包构建
         shell: bash
+        env:
+          ZJU_CONNECT_ROOT: ${{ github.workspace }}/zju-connect
         run: |
-          v="${GITHUB_REF_NAME#v}"
-          sed -i.bak "s/\"version\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"version\": \"$v\"/" mygo.json
-          rm -f mygo.json.bak
-          cat mygo.json
+          cd connect-hub
+          bash ./scripts/package-windows.sh
 
-      - name: 编译 TUN 辅助程序
-        shell: bash
-        run: |
-          cd third_party/zju-connect
-          if [ "${{ matrix.platform }}" = "darwin/universal" ]; then
-            # mygo 会把 darwin-arm64 与 darwin-amd64 合并进 universal 包。
-            GOOS=darwin GOARCH=arm64 go build -o ../../resources/darwin-arm64/zju-connect-multitun ./cmd/multitun
-            GOOS=darwin GOARCH=amd64 go build -o ../../resources/darwin-amd64/zju-connect-multitun ./cmd/multitun
-          else
-            # 注意：${matrix.platform} 不是合法的 bash 变量名，必须先用
-            # GitHub 表达式取出来，再在 bash 里截断前缀。
-            platform="${{ matrix.platform }}"
-            arch="${platform#windows/}"
-            mkdir -p "../../resources/windows-$arch"
-            GOOS=windows GOARCH="$arch" go build -ldflags "-H=windowsgui" \
-              -o "../../resources/windows-$arch/zju-connect-multitun.exe" ./cmd/multitun
-          fi
-          find ../../resources -maxdepth 2 -type f | sort
-
-      # mygo 在 Windows 上用它生成安装包，缺了会自动下载，这里先装好。
-      - name: 安装 NSIS
-        if: runner.os == 'Windows'
+      - name: 安装 NSIS 打包工具
         run: choco install nsis -y --no-progress
 
-      - name: 打包
-        run: go tool mygo build -platform ${{ matrix.platform }}
-
-      - name: 检查产物
+      - name: 生成 Windows 安装包 (Setup.exe)
         shell: bash
         run: |
-          ls -lh build/*/ || true
-          find build -maxdepth 2 -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.tar.gz' -o -name '*.deb' \) -print
+          cd connect-hub
+          go run ./cmd/appicon -ico resources/icon.ico
+          makensis packaging/windows/installer.nsi
 
-      - uses: actions/upload-artifact@v4
+      - name: 上传 Windows 产物 (便携包与安装程序)
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: connect-hub-windows-amd64
           path: |
-            build/**/*.dmg
-            build/**/*-setup-*.exe
-            build/**/*.tar.gz
-            build/**/*.deb
-            build/**/checksums.txt
+            connect-hub/build/connect-hub-windows-*.zip
+            connect-hub/build/connect-hub-setup-windows-*.exe
           if-no-files-found: error
-          compression-level: 0
 
-  release:
-    name: 发布 Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+  build-linux:
+    name: 构建 Linux 便携包 (amd64)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - name: 检出 Connect Hub (主仓库)
+        uses: actions/checkout@v4
+        with:
+          path: connect-hub
+
+      - name: 检出 ZJU-Connect (依赖 Worker 分支)
+        uses: actions/checkout@v4
+        with:
+          repository: ehZyiL/zju-connect
+          ref: feat/desktop-worker
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: zju-connect
+
+      - name: 配置 Go 运行环境
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: connect-hub/go.mod
+          cache: true
+          cache-dependency-path: |
+            connect-hub/go.sum
+            zju-connect/go.sum
+
+      - name: 执行 Linux 打包构建
+        env:
+          ZJU_CONNECT_ROOT: ${{ github.workspace }}/zju-connect
+        run: |
+          cd connect-hub
+          bash ./scripts/package-linux.sh
+
+      - name: 上传 Linux 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: connect-hub-linux-amd64
+          path: connect-hub/build/connect-hub-linux-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: 发布 GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release)
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载全部构建产物
+        uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      - name: 列出产物
-        run: find dist -type f | sort
-      - uses: softprops/action-gh-release@v2
+
+      - name: 列出已准备产物
+        run: ls -lh dist/
+
+      - name: 确定 Release 标签版本
+        id: release_tag
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          elif [[ -n "${{ inputs.custom_tag }}" ]]; then
+            echo "tag=${{ inputs.custom_tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=v0.1.0-$(date +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 创建并发布 Release
+        uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: "Connect Hub ${{ steps.release_tag.outputs.tag }}"
           files: |
-            dist/**/*.dmg
-            dist/**/*-setup-*.exe
-            dist/**/*.tar.gz
-            dist/**/*.deb
-            dist/**/checksums.txt
-          fail_on_unmatched_files: false
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.exe
           generate_release_notes: true
+          draft: false
+          prerelease: false

@@ -38,8 +38,9 @@ func main() {
 	iconPath := flag.String("icon", "resources/icon.png", "方形 PNG 图标")
 	arch := flag.String("arch", "amd64", "Windows 目标架构：amd64、386、arm64")
 	out := flag.String("out", "", "Windows 资源对象输出文件（默认 appicon_windows_<arch>.syso）")
+	icoPath := flag.String("ico", "", "导出 Windows .ico 文件路径")
 	pngDir := flag.String("png-dir", "", "Linux 图标主题根目录，写出 <N>x<N>/apps/<name>.png")
-	pngName := flag.String("png-name", "easyconnect-hub", "-png-dir 下的图标名")
+	pngName := flag.String("png-name", "connect-hub", "-png-dir 下的图标名")
 	flag.Parse()
 
 	src, err := os.ReadFile(*iconPath)
@@ -49,6 +50,13 @@ func main() {
 	images, err := iconImages(src)
 	if err != nil {
 		fail(fmt.Errorf("%s：%w", *iconPath, err))
+	}
+	if *icoPath != "" {
+		icoData := encodeICO(images)
+		if err := os.WriteFile(*icoPath, icoData, 0o644); err != nil {
+			fail(err)
+		}
+		fmt.Printf("Windows ICO 图标：%s（%d 字节，%d 个尺寸）\n", *icoPath, len(icoData), len(images))
 	}
 	if *pngDir != "" {
 		writePNGIcons(*pngDir, *pngName, images)
@@ -287,4 +295,28 @@ func sortedKeys[V any](m map[uint16]V) []uint16 {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// encodeICO 把一组尺寸的 PNG 打包为 Windows 标准 .ico 文件。
+func encodeICO(images [][]byte) []byte {
+	var buf bytes.Buffer
+	// ICONDIR 头部：保留 2 字节（0）、类型 2 字节（1 代表图标）、数量 2 字节
+	_ = binary.Write(&buf, binary.LittleEndian, [3]uint16{0, 1, uint16(len(images))})
+	offset := uint32(6 + len(images)*16)
+	for i, img := range images {
+		dim := byte(iconSizes[i])
+		if iconSizes[i] >= 256 {
+			dim = 0
+		}
+		// ICONDIRENTRY: 宽、高、颜色数(0)、保留(0)、色彩平面(1)、色深(32)、大小、偏移
+		buf.Write([]byte{dim, dim, 0, 0})
+		_ = binary.Write(&buf, binary.LittleEndian, [2]uint16{1, 32})
+		_ = binary.Write(&buf, binary.LittleEndian, uint32(len(img)))
+		_ = binary.Write(&buf, binary.LittleEndian, offset)
+		offset += uint32(len(img))
+	}
+	for _, img := range images {
+		buf.Write(img)
+	}
+	return buf.Bytes()
 }

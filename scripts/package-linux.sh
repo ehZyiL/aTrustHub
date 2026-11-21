@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
+
 app_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-worker_root=$(cd -- "$app_root/../zju-connect" && pwd)
+worker_root=${ZJU_CONNECT_ROOT:-$(cd -- "$app_root/../zju-connect" && pwd)}
 # The two independently built modules must agree before bundling their IPC.
-diff -u --strip-trailing-cr <(sed 's/^package desktop$/package workeripc/' "$worker_root/internal/desktop/protocol.go") "$app_root/internal/workeripc/protocol.go"
+diff -u --strip-trailing-cr <(sed -e 's/\r$//' -e 's/^package desktop$/package workeripc/' "$worker_root/internal/desktop/protocol.go") <(sed 's/\r$//' "$app_root/internal/workeripc/protocol.go")
 go_tool=${GO:-go}
 target_arch=${GOARCH:-$($go_tool env GOARCH)}
-bundle_name=${EASYCONNECT_BUNDLE_NAME:-easyconnect-hub-linux-$target_arch}
+bundle_name=${EASYCONNECT_BUNDLE_NAME:-connect-hub-linux-$target_arch}
 if [[ ! "$bundle_name" =~ ^[a-zA-Z0-9._-]+$ || "$bundle_name" == "." || "$bundle_name" == ".." ]]; then
   printf 'Invalid bundle name\n' >&2
   exit 1
@@ -20,11 +22,11 @@ mkdir -p "$bundle/resources" "$bundle/LICENSES" "$bundle/core"
 cd "$app_root"
 # ELF 不能像 EXE 那样内嵌图标：窗口和托盘图标由程序自己读 resources/icon.png，
 # 应用菜单、Dock 则需要 hicolor 图标；这里把它们按尺寸放进包里。
-env "$go_tool" run ./cmd/appicon -icon resources/icon.png -png-dir "$bundle/share/icons/hicolor" -png-name easyconnect-hub
-env GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/easyconnect-hub" .
+env "$go_tool" run ./cmd/appicon -icon resources/icon.png -png-dir "$bundle/share/icons/hicolor" -png-name connect-hub
+env GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/connect-hub" .
 # worker 和抓包助手是内部程序，放进 core/，避免用户直接双击。
-env GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/core/easyconnect-hub-capture" ./cmd/app-helper
-helper_protocol=$("$bundle/core/easyconnect-hub-capture" --protocol-version)
+env GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/core/connect-hub-capture" ./cmd/app-helper
+helper_protocol=$("$bundle/core/connect-hub-capture" --protocol-version)
 if [[ "$helper_protocol" != 10 ]]; then
   printf 'Linux capture helper protocol mismatch: expected 10, got %s\n' "$helper_protocol" >&2
   exit 1
@@ -66,9 +68,9 @@ install -m 0755 "$app_root/packaging/linux/install-desktop-entry.sh" "$bundle/in
 install -m 0755 "$app_root/packaging/linux/test-worker.sh" "$bundle/test-worker.sh"
 "$bundle/test-worker.sh"
 
-printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'bundle_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)' 'cd "$bundle_dir"' 'exec "$bundle_dir/easyconnect-hub" "$@"' > "$bundle/start.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'bundle_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)' 'cd "$bundle_dir"' 'exec "$bundle_dir/connect-hub" "$@"' > "$bundle/start.sh"
 chmod +x "$bundle/start.sh"
-chmod +x "$bundle/easyconnect-hub" "$bundle/core/easyconnect-worker" "$bundle/core/easyconnect-hub-capture" "$bundle/test-worker.sh" "$bundle/install-capture-helper.sh" "$bundle/uninstall-capture-helper.sh" "$bundle/install-desktop-entry.sh"
+chmod +x "$bundle/connect-hub" "$bundle/core/easyconnect-worker" "$bundle/core/connect-hub-capture" "$bundle/test-worker.sh" "$bundle/install-capture-helper.sh" "$bundle/uninstall-capture-helper.sh" "$bundle/install-desktop-entry.sh"
 
 cd "$bundle"
 find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS

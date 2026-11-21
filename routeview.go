@@ -168,9 +168,9 @@ func (a *app) routesView(c *ui.Context) {
 			dialogHeader(c, "网络授权与路由", "只读预览：不查询 DNS、不连业务端口、不分配映射地址")
 			// 弹窗内的分段也用与主界面一致的胶囊导航。
 			ui.Segmented(c, &d.tab, "路由预览", "授权资源", "用户策略").Label("授权视图")
-			ui.Scroll(c).MaxHeight(a.dialogBodyHeight(260)).MinHeight(0).
-				ScrollbarInsets(6, 6, 6, 6).Children(func() {
-				ui.Column(c).Gap(10).Children(func() {
+			ui.Scroll(c).MaxHeight(a.dialogBodyMaxHeight() - 40).MinHeight(0).
+				ScrollbarInsets(4, 2, 4, 0).Children(func() {
+				ui.Column(c).Padding(0, 14, 8, 0).Gap(10).Children(func() {
 					switch d.tab {
 					case 0:
 						ui.Text(c, "预览只读取当前规则，不查询 DNS、不连接业务端口，也不分配映射地址。").FontSize(13).Wrap()
@@ -186,11 +186,11 @@ func (a *app) routesView(c *ui.Context) {
 					case 2:
 						a.routePolicies(c)
 					}
+					if d.err != "" {
+						ui.Text(c, d.err).FontSize(11).TextColor(c.Theme().Danger).Wrap()
+					}
 				})
 			})
-			if d.err != "" {
-				ui.Text(c, d.err).FontSize(11).TextColor(c.Theme().Danger).Wrap()
-			}
 			dialogFooter(c, func() {
 				ui.Row(c).Grow(1)
 				if ui.Button(c, "关闭").FontSize(11).Clicked() {

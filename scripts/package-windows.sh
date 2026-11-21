@@ -21,7 +21,18 @@ if [[ "$target_arch" != "amd64" ]]; then
   printf 'Windows capture test bundle currently supports amd64 only\n' >&2
   exit 1
 fi
-bundle_name=${EASYCONNECT_BUNDLE_NAME:-easyconnect-hub-windows-amd64-capture}
+# 两种包：release 只放运行必需的文件；test 额外带抓包自测程序和 test-*.ps1，
+# 供验收在普通用户 Windows 上跑。
+bundle_profile=${EASYCONNECT_BUNDLE_PROFILE:-release}
+case "$bundle_profile" in
+  release) default_bundle_name="easyconnect-hub-windows-$target_arch" ;;
+  test) default_bundle_name="easyconnect-hub-windows-$target_arch-capture" ;;
+  *)
+    printf 'Invalid bundle profile: %s (use release or test)\n' "$bundle_profile" >&2
+    exit 1
+    ;;
+esac
+bundle_name=${EASYCONNECT_BUNDLE_NAME:-$default_bundle_name}
 if [[ ! "$bundle_name" =~ ^[a-zA-Z0-9._-]+$ || "$bundle_name" == "." || "$bundle_name" == ".." ]]; then
   printf 'Invalid bundle name\n' >&2
   exit 1
@@ -39,11 +50,15 @@ if [[ "$helper_protocol" != 7 ]]; then
   printf 'Windows capture helper protocol mismatch: expected 7, got %s\n' "$helper_protocol" >&2
   exit 1
 fi
-env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" test -mod=readonly -trimpath -c -o "$bundle/windows-capture-tests.exe" ./internal/wincapture
-"$go_tool" list -m all > "$bundle/desktop-modules.txt"
+if [[ "$bundle_profile" == test ]]; then
+  env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" test -mod=readonly -trimpath -c -o "$bundle/windows-capture-tests.exe" ./internal/wincapture
+  "$go_tool" list -m all > "$bundle/desktop-modules.txt"
+fi
 cd "$worker_root"
 env GOWORK=off GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags=-H=windowsgui -o "$bundle/easyconnect-worker.exe" ./cmd/easyconnect-worker
-env GOWORK=off "$go_tool" list -m all > "$bundle/worker-modules.txt"
+if [[ "$bundle_profile" == test ]]; then
+  env GOWORK=off "$go_tool" list -m all > "$bundle/worker-modules.txt"
+fi
 
 install -m 0644 "$app_root/resources/icon.png" "$bundle/resources/icon.png"
 install -m 0644 "$app_root/LICENSE" "$bundle/LICENSES/aTrustHub-AGPL-3.0.txt"
@@ -61,6 +76,7 @@ install -m 0644 "$app_root/WINDOWS-QUICKSTART.md" "$bundle/README.md"
 install -m 0644 "$app_root/scripts/measure-tun-performance.py" "$bundle/measure-tun-performance.py"
 cat > "$bundle/COMPONENTS.txt" <<EOF
 EasyConnect Hub Windows bundle
+Bundle profile: $bundle_profile
 Architecture: $target_arch
 Worker IPC protocol: 6
 Windows capture helper protocol: $helper_protocol
@@ -70,8 +86,10 @@ App build: ${app_build:-unknown}
 Scope: IPv4 TCP and DNS. System IPv4 UDP for eligible L3 sessions is experimental; IPv6 is unsupported.
 GUI, worker and helper are a matched build from this bundle; do not mix files from other bundles.
 EOF
-install -m 0644 "$app_root/packaging/windows/test-capture.ps1" "$bundle/test-capture.ps1"
-install -m 0644 "$app_root/packaging/windows/test-worker.ps1" "$bundle/test-worker.ps1"
+if [[ "$bundle_profile" == test ]]; then
+  install -m 0644 "$app_root/packaging/windows/test-capture.ps1" "$bundle/test-capture.ps1"
+  install -m 0644 "$app_root/packaging/windows/test-worker.ps1" "$bundle/test-worker.ps1"
+fi
 
 cd "$bundle"
 find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
@@ -89,7 +107,12 @@ trap - EXIT
 bundle="$final_bundle"
 # PowerShell/worker execution can hold directory handles on Windows. Run the
 # process check after the directory rename, before replacing the archive.
-pwsh -NoProfile -ExecutionPolicy Bypass -File "$bundle/test-worker.ps1"
+# release 包里不放自测脚本，直接用打包目录中的那份跑同一个检查。
+if [[ "$bundle_profile" == test ]]; then
+  pwsh -NoProfile -ExecutionPolicy Bypass -File "$bundle/test-worker.ps1"
+else
+  pwsh -NoProfile -ExecutionPolicy Bypass -File "$app_root/packaging/windows/test-worker.ps1" -WorkerPath "$bundle/easyconnect-worker.exe"
+fi
 archive_tmp="$app_root/build/.${bundle_name}.zip.tmp.$$"
 trap 'rm -f -- "$archive_tmp"' EXIT
 "$python_bin" - "$bundle" "$archive_tmp" <<'PY'

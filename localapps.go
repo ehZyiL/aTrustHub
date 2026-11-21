@@ -143,29 +143,31 @@ func (a *app) localAppList(c *ui.Context) {
 	panel := ui.Column(c).Grow(1).Radius(12).Border(1, t.Border).
 		Background(t.Surface)
 	panel.Children(func() {
-		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4).Children(func() {
-			if len(groups) == 0 {
-				noResults(c, "没有匹配的项目",
-					"换个名称、地址或接入点试试；清空搜索可以看到全部项目。")
-				return
-			}
-			first := true
-			for _, g := range groups {
-				if !first {
-					ui.Divider(c)
+		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(6, 2, 6, 0).Children(func() {
+			ui.Column(c).Padding(0, 10, 0, 0).Children(func() {
+				if len(groups) == 0 {
+					noResults(c, "没有匹配的项目",
+						"换个名称、地址或接入点试试；清空搜索可以看到全部项目。")
+					return
 				}
-				first = false
-				// 搜索时全部展开，不然命中的项目还被折在组里。
-				collapsed := a.localCollapsed[g.id] && query == ""
-				a.localGroupHeader(c, g, collapsed)
-				if collapsed {
-					continue
+				first := true
+				for _, g := range groups {
+					if !first {
+						ui.Divider(c)
+					}
+					first = false
+					// 搜索时全部展开，不然命中的项目还被折在组里。
+					collapsed := a.localCollapsed[g.id] && query == ""
+					a.localGroupHeader(c, g, collapsed)
+					if collapsed {
+						continue
+					}
+					for _, p := range g.items {
+						ui.Divider(c)
+						a.localAppRow(c, p)
+					}
 				}
-				for _, p := range g.items {
-					ui.Divider(c)
-					a.localAppRow(c, p)
-				}
-			}
+			})
 		})
 	})
 }
@@ -420,14 +422,14 @@ func (a *app) localAppEditorView(c *ui.Context) {
 				title = "编辑本机项目"
 			}
 			dialogHeader(c, title, "点列表里的项目就能回到这里；改动配置前请先停止项目或关闭浏览器窗口。")
-			if d.id != "" {
-				if p := a.cfg.FindLocalApp(d.id); p != nil {
-					a.localAppStatusBlock(c, *p)
-				}
-			}
-			ui.Scroll(c).MaxHeight(a.dialogBodyHeight(380)).MinHeight(0).
-				ScrollbarInsets(6, 6, 6, 6).Children(func() {
-				ui.Column(c).Gap(10).Children(func() {
+			ui.Scroll(c).MaxHeight(a.dialogBodyMaxHeight()).MinHeight(0).
+				ScrollbarInsets(4, 2, 4, 0).Children(func() {
+				ui.Column(c).Padding(0, 14, 8, 0).Gap(10).Children(func() {
+					if d.id != "" {
+						if p := a.cfg.FindLocalApp(d.id); p != nil {
+							a.localAppStatusBlock(c, *p)
+						}
+					}
 					ui.Field(c, "项目名称", func() { ui.TextInput(c, &d.name).Placeholder("例如：工作浏览器 / 开发数据库") })
 					ui.Field(c, "接入方式", func() {
 						modes := []string{localModeLabel(model.LocalAppBrowser), localModeLabel(model.LocalAppTCPForward)}
@@ -485,18 +487,18 @@ func (a *app) localAppEditorView(c *ui.Context) {
 						ui.Field(c, "本地端口", func() { ui.TextInput(c, &d.port).Placeholder("0 表示自动分配") })
 						ui.Text(c, "启动后将显示本地连接地址，填入数据库工具即可。只转发这一个 TCP 目标；无需提供数据库密码。").FontSize(11).TextColor(t.TextMuted).Wrap()
 					}
+					if d.mode == localModeLabel(model.LocalAppCapture) {
+						note := "请先保存工作并关闭已有实例。启动前检查同一可执行文件的运行实例；脚本包装器、已有后台服务和 D-Bus 启动仍需自行确认。实验接管 IPv4 TCP，内网 UDP/IPv6 与 Flatpak 暂不支持。"
+						if runtime.GOOS == "windows" {
+							note = "请先保存工作并退出已有实例。接管所选 .exe 和新建的常规子进程，已有后台服务及需要管理员权限的软件暂不支持。停止接管会保留软件进程。仅支持 IPv4 TCP；首次使用需要实机验证。"
+						}
+						ui.Text(c, note).FontSize(11).TextColor(t.Warning).Wrap()
+					}
+					if d.err != "" {
+						ui.Text(c, d.err).FontSize(11).TextColor(t.Danger).Wrap()
+					}
 				})
 			})
-			if d.mode == localModeLabel(model.LocalAppCapture) {
-				note := "请先保存工作并关闭已有实例。启动前检查同一可执行文件的运行实例；脚本包装器、已有后台服务和 D-Bus 启动仍需自行确认。实验接管 IPv4 TCP，内网 UDP/IPv6 与 Flatpak 暂不支持。"
-				if runtime.GOOS == "windows" {
-					note = "请先保存工作并退出已有实例。接管所选 .exe 和新建的常规子进程，已有后台服务及需要管理员权限的软件暂不支持。停止接管会保留软件进程。仅支持 IPv4 TCP；首次使用需要实机验证。"
-				}
-				ui.Text(c, note).FontSize(11).TextColor(t.Warning).Wrap()
-			}
-			if d.err != "" {
-				ui.Text(c, d.err).FontSize(11).TextColor(t.Danger).Wrap()
-			}
 			dialogFooter(c, func() {
 				if d.id != "" && ui.Button(c, "删除项目").FontSize(11).Clicked() {
 					a.localDelete = d.id

@@ -73,9 +73,13 @@ func (a *app) view(c *ui.Context) {
 	}
 	root.OnShortcut(ui.Cmd, ui.KeyN, a.openNewEditor)
 	root.OnShortcut(ui.Cmd, ui.KeyR, func() { a.mgr.ConnectAll(false) })
-	// ⌘1–⌘4 直接跳到四个页面，与分段导航和底部提示一致。
-	for page, key := range pageShortcuts {
-		root.OnShortcut(ui.Cmd, key, func() {
+	// ⌘1–⌘n 跳到顶栏对应的段：简单模式下只有两段，键位跟着段走。
+	for i, ref := range a.pages() {
+		if i >= len(pageShortcuts) {
+			break
+		}
+		page := ref.Tab
+		root.OnShortcut(ui.Cmd, pageShortcuts[i], func() {
 			a.goTab(page)
 		})
 	}
@@ -85,7 +89,9 @@ func (a *app) view(c *ui.Context) {
 		ui.Divider(c)
 		a.launcherBody(c)
 		if !a.settings.open {
-			a.envStrip(c)
+			if !a.simpleMode() {
+				a.envStrip(c)
+			}
 		}
 	})
 	// Esc 从设置页返回，和关闭弹窗的习惯一致。
@@ -201,9 +207,9 @@ func (a *app) appsSection(c *ui.Context) {
 			Label("搜索资源").Width(240)
 	})
 
-	scroll := ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4)
+	scroll := ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(6, 2, 6, 0)
 	scroll.Children(func() {
-		ui.Column(c).Gap(14).Children(func() {
+		ui.Column(c).Padding(0, 12, 0, 0).Gap(14).Children(func() {
 			if len(all) == 0 {
 				a.appsEmpty(c)
 				return
@@ -512,8 +518,12 @@ func (a *app) appDetailView(c *ui.Context) {
 }
 
 func (a *app) proxyFor(pointID string) string {
-	if p := a.cfg.Find(pointID); p != nil && p.SocksPort > 0 {
-		return displayAddr(net.JoinHostPort(a.cfg.Settings.ListenHost, strconv.Itoa(p.SocksPort)))
+	// 简单模式只有统一入口这一个代理地址：每点端口不再参与，但也不去改它
+	// （改 SocksPort 会让 Manager 重建在线的隧道）。
+	if !a.simpleMode() {
+		if p := a.cfg.Find(pointID); p != nil && p.SocksPort > 0 {
+			return displayAddr(net.JoinHostPort(a.cfg.Settings.ListenHost, strconv.Itoa(p.SocksPort)))
+		}
 	}
 	if agg := a.mgr.Aggregate(); agg.Running && agg.Addr != "" {
 		return displayAddr(agg.Addr)
@@ -1100,42 +1110,21 @@ func (a *app) statusBanner(c *ui.Context, views []vpn.View) {
 	})
 }
 
-// pointsSection 是首屏：顶部上下文栏 + 状态条 + 接入点列表（行间发丝分隔）。
-func (a *app) pointsSection(c *ui.Context) {
-	t := c.Theme()
-	views := a.mgr.Views()
-	pageBar(c, "接入点", fmt.Sprintf("%d 个", len(views)), func() {
-		if len(views) > 0 {
-			if ui.Button(c, "全部登录").Label("全部接入点重新登录").FontSize(11).Clicked() {
-				a.mgr.ConnectAll(false)
-			}
-		}
-	})
-	ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4).Children(func() {
-		ui.Column(c).Gap(12).Children(func() {
-			a.statusBanner(c, views)
-			if len(views) == 0 {
-				a.emptyState(c)
-				return
-			}
-			// 接入点是一个列表，行间只有发丝线；开关与操作都在行里，不另开弹层。
-			panel := ui.Column(c).Radius(12).Background(t.Surface)
-			panel.Children(func() {
-				for i, v := range views {
-					if i > 0 {
-						ui.Divider(c)
-					}
-					a.pointCard(c, v)
-				}
-			})
-			a.recentFailures(c)
-		})
-	})
-}
-
 // recentFailures 把最近几条失败放到首屏卡片下面：首屏下半屏不再空着，
 // 需要处理的事一看就能去日志里查。
+//
+// 日志入口按模式走：简单模式没有「访问日志」页，落到设置页的日志分区，
+// 否则会跳到一个导航里不存在的页面。
 func (a *app) recentFailures(c *ui.Context) {
+	if a.simpleMode() {
+		a.recentFailuresFor(c, func() { a.openSettingsAt(settingLogs) })
+		return
+	}
+	a.recentFailuresFor(c, func() { a.tab = 2 })
+}
+
+// recentFailuresFor 是同一块面板的可换动作版本。
+func (a *app) recentFailuresFor(c *ui.Context, onOpen func()) {
 	t := c.Theme()
 	var fails []vpn.LogEntry
 	for _, e := range a.bus.Tail(200) {
@@ -1156,7 +1145,7 @@ func (a *app) recentFailures(c *ui.Context) {
 			ui.Text(c, fmt.Sprintf("最近 %d 条", len(fails))).FontSize(11).TextColor(t.TextMuted)
 			ui.Row(c).Grow(1)
 			if ui.Button(c, "查看访问日志").FontSize(11).Clicked() {
-				a.tab = 2
+				onOpen()
 			}
 		})
 		ui.Divider(c)
@@ -1226,7 +1215,7 @@ func (a *app) pointCard(c *ui.Context, v vpn.View) {
 			})
 			a.stateBadge(c, v.State)
 		})
-		if sub := subtitleOf(v); sub != "" {
+		if sub := a.subtitleOf(v); sub != "" {
 			ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted).Ellipsis("…")
 		}
 
@@ -1234,7 +1223,7 @@ func (a *app) pointCard(c *ui.Context, v vpn.View) {
 			if v.ClientIP != "" {
 				meta(c, t, "隧道 IP", v.ClientIP)
 			}
-			if v.SocksPort > 0 {
+			if v.SocksPort > 0 && !a.simpleMode() {
 				addr := "127.0.0.1:" + strconv.Itoa(v.SocksPort)
 				socks := "socks5://" + addr
 				metaCopy(c, t, "HTTP / SOCKS5", addr, "复制独立 SOCKS5 地址",
@@ -1349,6 +1338,19 @@ func (a *app) sessionMonitor(c *ui.Context, v vpn.View) {
 	})
 }
 
+// disconnectPoint 停掉这个接入点上的本机项目再断开隧道：顺序不能反，
+// 先断隧道会让还在跑的项目变成一堆失败日志。
+func (a *app) disconnectPoint(id string) {
+	go func() {
+		a.localLife.Lock()
+		defer a.localLife.Unlock()
+		if a.local != nil {
+			a.local.StopPoint(id)
+		}
+		a.mgr.Disconnect(id)
+	}()
+}
+
 func (a *app) pointButtons(c *ui.Context, v vpn.View) {
 	switch v.State {
 	case vpn.StateOnline:
@@ -1361,14 +1363,7 @@ func (a *app) pointButtons(c *ui.Context, v vpn.View) {
 			}
 		}
 		if ui.Button(c, "断开").Label("断开 " + v.Name).FontSize(11).Clicked() {
-			go func() {
-				a.localLife.Lock()
-				defer a.localLife.Unlock()
-				if a.local != nil {
-					a.local.StopPoint(v.ID)
-				}
-				a.mgr.Disconnect(v.ID)
-			}()
+			a.disconnectPoint(v.ID)
 		}
 		// Only the WeCom login keeps a session worth discarding by hand: it is
 		// the one where "退出登录" means "sign in as someone else next time".
@@ -1568,7 +1563,7 @@ func addrOf(v vpn.View) string {
 	return model.FormatAccessAddress(v.Server, v.Port)
 }
 
-func subtitleOf(v vpn.View) string {
+func (a *app) subtitleOf(v vpn.View) string {
 	parts := []string{}
 	switch model.AuthMode(v.AuthMode) {
 	case model.AuthModeAuto:
@@ -1586,10 +1581,13 @@ func subtitleOf(v vpn.View) string {
 			parts = append(parts, user)
 		}
 	}
-	if v.SocksPort > 0 {
-		parts = append(parts, "SOCKS5 :"+strconv.Itoa(v.SocksPort))
-	} else {
-		parts = append(parts, "仅统一入口")
+	// 简单模式只有一个代理地址，独立端口连提都不用提。
+	if !a.simpleMode() {
+		if v.SocksPort > 0 {
+			parts = append(parts, "SOCKS5 :"+strconv.Itoa(v.SocksPort))
+		} else {
+			parts = append(parts, "仅统一入口")
+		}
 	}
 	if v.AutoConnect {
 		parts = append(parts, "启动时自动登录")
@@ -1686,14 +1684,22 @@ func dialogFooter(c *ui.Context, fn func()) {
 
 // 弹窗正文的高度上下限（DIP）：太小看不见内容，太大则把页脚挤出面板。
 const (
-	dialogBodyMin float32 = 160
-	dialogBodyMax float32 = 520
+	dialogBodyMin float32 = 140
+	dialogBodyMax float32 = 380
 )
 
-// dialogBodyHeight 是弹窗内可滚动区域的高度上限：从窗口高度里扣掉标题、
-// 底部按钮、内边距和间距（reserved），这样按钮不会被挤出弹窗。
-func (a *app) dialogBodyHeight(reserved float32) float32 {
-	h := a.windowH - reserved
+// dialogBodyMaxHeight 计算弹窗内滚动正文的安全高度上限：
+// 从窗口内容区高度中预留出充足空间，包括：
+// - Modal 面板外层相对窗口的上下边距（mygo 预留 40 DIP）
+// - Modal 面板内部 padding（上下各 20 DIP，共 40 DIP）
+// - dialogHeader（约 50 DIP）
+// - dialogFooter（约 45 DIP）
+// - 容器内组件间距 Gap（约 20 DIP）
+// - 安全缓冲裕量（约 45 DIP，适应不同 DPI、系统字号与窗口修饰）
+// 固定开销总计预留 240 DIP。在窗口高度 600 时正文约 320 DIP，在最小高度 520 时正文约 248 DIP。
+// 这样可以确保弹窗在任何屏幕和窗口缩放比例下，底部的保存/取消按钮永远 100% 显露在视口内。
+func (a *app) dialogBodyMaxHeight() float32 {
+	h := a.windowH - 240
 	if h < dialogBodyMin {
 		h = dialogBodyMin
 	}
@@ -1701,6 +1707,11 @@ func (a *app) dialogBodyHeight(reserved float32) float32 {
 		h = dialogBodyMax
 	}
 	return h
+}
+
+// dialogBodyHeight 兼容旧接口，直接基于全局安全的 dialogBodyMaxHeight 计算。
+func (a *app) dialogBodyHeight(reserved float32) float32 {
+	return a.dialogBodyMaxHeight()
 }
 
 func (a *app) editorView(c *ui.Context) {
@@ -1712,9 +1723,9 @@ func (a *app) editorView(c *ui.Context) {
 	ui.Modal(c, &d.open, func() {
 		ui.Column(c).Width(dialogWide).Gap(10).Children(func() {
 			dialogHeader(c, editorTitle(d), editorSubtitle(d))
-			ui.Scroll(c).MaxHeight(a.dialogBodyHeight(300)).MinHeight(0).
-				ScrollbarInsets(6, 6, 6, 6).Children(func() {
-				ui.Column(c).Gap(10).Children(func() {
+			ui.Scroll(c).MaxHeight(a.dialogBodyMaxHeight()).MinHeight(0).
+				ScrollbarInsets(4, 2, 4, 0).Children(func() {
+				ui.Column(c).Padding(0, 14, 8, 0).Gap(10).Children(func() {
 					ui.Field(c, "VPN 协议", func() { ui.Select(c, &d.protocol, []string{"EasyConnect", "aTrust"}) })
 					ui.Field(c, "名称", func() {
 						ui.TextInput(c, &d.name).Placeholder("例如：主网关 / 教育网线路")
@@ -1807,18 +1818,23 @@ func (a *app) editorView(c *ui.Context) {
 					}
 					ui.Field(c, "密码存储方式", func() {
 						ui.Select(c, &d.secretStore, secretStoreLabels()).Width(220)
-						ui.Text(c, "系统凭据服务不可用时仅在本次运行保存，重启后需重新填写。").FontSize(11).TextColor(t.TextMuted).Wrap()
 					})
+					ui.Text(c, "系统凭据服务不可用时仅在本次运行保存，重启后需重新填写。").FontSize(11).TextColor(t.TextMuted).Wrap()
 					ui.Divider(c)
 					ui.Row(c).Gap(14).AlignItems(ui.Start).Children(func() {
-						ui.Field(c, "独立 SOCKS5 端口", func() {
-							ui.TextInput(c, &d.socksPort).Width(100)
-						})
-						// The two boxes follow the field's own rhythm: the first lines
-						// up with the "独立 SOCKS5 端口" caption, the second with the
-						// input under it.
+						// 简单模式下这两个字段被锁定（一个代理地址），不再展示：
+						// 看得见却改不了比看不见更糟。
+						if !a.simpleMode() {
+							ui.Field(c, "独立 SOCKS5 端口", func() {
+								ui.TextInput(c, &d.socksPort).Width(100)
+							})
+						}
+						// The boxes follow the field's own rhythm: the first lines up
+						// with the port caption, the next with the input under it.
 						ui.Column(c).Gap(9).Children(func() {
-							ui.Checkbox(c, &d.inPool, "加入统一入口分流")
+							if !a.simpleMode() {
+								ui.Checkbox(c, &d.inPool, "加入统一入口分流")
+							}
 							ui.Checkbox(c, &d.autoConnect, "应用启动时自动登录")
 						})
 					})
@@ -1835,11 +1851,11 @@ func (a *app) editorView(c *ui.Context) {
 							}
 						})
 					}
+					if d.err != "" {
+						ui.Text(c, d.err).FontSize(11).TextColor(t.Danger)
+					}
 				})
 			})
-			if d.err != "" {
-				ui.Text(c, d.err).FontSize(11).TextColor(t.Danger)
-			}
 			// 底部：删除在左，取消与保存在右。
 			dialogFooter(c, func() {
 				if d.editingID != "" {
@@ -1900,8 +1916,8 @@ func (a *app) settingsPage(c *ui.Context) {
 		})
 		ui.Segmented(c, &d.section, "通用", "网络与接管", "日志", "关于").Label("设置分类")
 		ui.Divider(c)
-		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4).Children(func() {
-			ui.Column(c).Gap(12).Children(func() {
+		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(6, 2, 6, 0).Children(func() {
+			ui.Column(c).Padding(0, 12, 0, 0).Gap(12).Children(func() {
 				switch d.section {
 				case settingNetwork:
 					a.captureSection(c)
@@ -1929,9 +1945,16 @@ func (a *app) settingsPage(c *ui.Context) {
 }
 
 // generalSection 是原来的设置弹窗内容，按整页排版重新分好组。
+// 简单模式下只保留外观与日常开关，专业项收起来（开关就在最上面）。
 func (a *app) generalSection(c *ui.Context) {
 	t := c.Theme()
 	d := &a.settings
+	a.simpleModeField(c)
+	if a.simpleMode() {
+		a.appearanceFields(c)
+		a.commonSwitches(c)
+		return
+	}
 	ui.Field(c, "监听地址", func() {
 		e := ui.TextInput(c, &d.host).Placeholder("127.0.0.1").Width(180)
 		// 文本项在回车或失焦时落盘，免得每敲一个字就写一次配置。
@@ -1958,6 +1981,38 @@ func (a *app) generalSection(c *ui.Context) {
 			a.applySettingsIfChanged()
 		}
 	})
+	a.appearanceFields(c)
+	a.commonSwitches(c)
+	ui.Text(c, "监听 127.0.0.1 只有本机能用；要让局域网里的设备用，"+
+		"改成 0.0.0.0，但 SOCKS5 没有认证，请只在自己信任的网络里这样做。").
+		FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
+}
+
+// simpleModeField 是简单模式的开关与出口。开了之后专业设置收起，
+// 「显示全部设置」是唯一的回来路径，所以它就挨着开关放。
+func (a *app) simpleModeField(c *ui.Context) {
+	t := c.Theme()
+	d := &a.settings
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+		if ui.Checkbox(c, &d.simpleMode, "简单模式").Changed() {
+			a.setSimpleMode(d.simpleMode)
+		}
+		if a.simpleMode() {
+			if ui.Button(c, "显示全部设置").FontSize(11).Clicked() {
+				d.simpleMode = false
+				a.setSimpleMode(false)
+			}
+		}
+	})
+	ui.Text(c, "简单模式把首屏收成一张卡和一个网址输入框（接入点多于一个时仍列成清单）；"+
+		"专业设置按默认值跑，要看或改它们用「显示全部设置」。").
+		FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
+}
+
+// appearanceFields 是颜色模式与主题配色：任何模式下都要能改。
+func (a *app) appearanceFields(c *ui.Context) {
+	t := c.Theme()
+	d := &a.settings
 	ui.Field(c, "颜色模式", func() {
 		if ui.Select(c, &d.appearance, appearanceLabels()).Width(160).Changed() {
 			a.applySettingsIfChanged()
@@ -1966,9 +2021,17 @@ func (a *app) generalSection(c *ui.Context) {
 	a.themeCards(c)
 	ui.Text(c, "跟随系统时，窗口外观跟着操作系统的深浅设置变；浅色与深色会把外观固定下来。").
 		FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
+}
+
+// commonSwitches 是几个日常开关。「开启统一入口 SOCKS5」只在完整模式下出现：
+// 简单模式唯一的代理地址就是它，关掉这一档就没意义了。
+func (a *app) commonSwitches(c *ui.Context) {
+	d := &a.settings
 	ui.Column(c).Gap(4).Children(func() {
-		if ui.Checkbox(c, &d.aggregate, "开启统一入口 SOCKS5").Changed() {
-			a.applySettingsIfChanged()
+		if !a.simpleMode() {
+			if ui.Checkbox(c, &d.aggregate, "开启统一入口 SOCKS5").Changed() {
+				a.applySettingsIfChanged()
+			}
 		}
 		if ui.Checkbox(c, &d.autoReconnect, "连接断开时自动重连").Changed() {
 			a.applySettingsIfChanged()
@@ -1982,11 +2045,8 @@ func (a *app) generalSection(c *ui.Context) {
 		a.quitOnCloseSwitch(c)
 	})
 	if a.quitOnCloseSupported() {
-		ui.Text(c, quitOnCloseHint()).FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
+		ui.Text(c, quitOnCloseHint()).FontSize(11).TextColor(c.Theme().TextMuted).Wrap().MaxWidth(560)
 	}
-	ui.Text(c, "监听 127.0.0.1 只有本机能用；要让局域网里的设备用，"+
-		"改成 0.0.0.0，但 SOCKS5 没有认证，请只在自己信任的网络里这样做。").
-		FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
 }
 
 // captureSection 是「网络与接管」：接管方式是一个下拉，状态与诊断在下面。
@@ -2659,6 +2719,7 @@ func (a *app) openSettings() {
 		autoReconnect: s.AutoReconnect,
 		secretStore:   secretStoreLabel(s.SecretStore),
 		hideDock:      s.HideDock,
+		simpleMode:    s.SimpleMode,
 	}
 }
 

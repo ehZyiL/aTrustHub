@@ -258,6 +258,9 @@ type Settings struct {
 	// CaptureMode 是记住的接管方式（见 CaptureMode* 常量）：启动后按它恢复。
 	// 首次运行默认为系统代理；用 id 而不是界面文案，改文案不会让设置失效。
 	CaptureMode string `json:"captureMode,omitempty"`
+	// SimpleMode 把界面收敛成「一个接入点 + 一个网址输入框」，专业设置收进设置页。
+	// 它只影响展示与默认值（见 ConvergeSimple），不改变任何业务逻辑。
+	SimpleMode bool `json:"simpleMode,omitempty"`
 	// AutoLoginOptIn records that the user has been offered the auto-login
 	// default. Access points do not log in at startup unless they ask for it.
 	AutoLoginOptIn bool `json:"autoLoginOptIn"`
@@ -347,7 +350,7 @@ func (c *Config) Normalize() {
 // Normalize fills the default settings.
 func (s *Settings) Normalize() {
 	if s.ListenHost == "" && s.AggregatePort == 0 && s.Routing == "" &&
-		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && len(s.DNSBindings) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 && s.CaptureMode == "" {
+		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && len(s.DNSBindings) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 && s.CaptureMode == "" && !s.SimpleMode {
 		*s = DefaultSettings()
 		return
 	}
@@ -648,6 +651,19 @@ func (p *AccessPoint) Validate() error {
 		return errors.New("至少勾选统一入口，或填一个独立 SOCKS5 端口")
 	}
 	return nil
+}
+
+// ConvergeSimple 把配置收敛成简单模式要的样子：只有一个代理地址。
+//
+// 它刻意不动每个接入点的 SocksPort：Manager.needsRestart 把它当成重建条件，
+// 改它就会把在线的隧道拆了重登（WeCom / SSO 用户会掉回扫码）。简单模式下由
+// proxyFor 忽略每点端口、统一走统一入口，配置保持原样。
+func (c *Config) ConvergeSimple() {
+	for i := range c.Points {
+		c.Points[i].InPool = true
+	}
+	// 统一入口是简单模式唯一的代理地址，关掉它这一档就没意义了。
+	c.Settings.AggregateEnabled = true
 }
 
 // EnsurePorts gives every access point a SOCKS5 port of its own that does

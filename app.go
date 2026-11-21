@@ -178,6 +178,9 @@ type app struct {
 	// appCollapsed remembers which access points' app groups are collapsed
 	// (true = collapsed). A point is expanded by default.
 	appCollapsed map[string]bool
+	// siteURL 是简单模式「内网网站」页输入框里的地址，不落盘：
+	// 它只是这一次想打开的地址，不是配置。
+	siteURL string
 	// detailOpen shows one application's details.
 	detailOpen    bool
 	detailApp     vpn.App
@@ -273,7 +276,10 @@ type settingsDraft struct {
 	secretStore   string
 	// hideDock hides the macOS Dock icon; the menu bar icon takes over.
 	hideDock bool
-	err      string
+	// simpleMode 是简单模式开关的绑定值。它只是界面绑定：真正的持久化与
+	// 概念收敛在 setSimpleMode 里，所以它不参与 settingsDirty。
+	simpleMode bool
+	err        string
 }
 
 func main() {
@@ -585,10 +591,10 @@ func (a *app) start() {
 func (a *app) createWindow() {
 	a.win = mygo.NewWindow(mygo.WindowOptions{
 		Title:           appName,
-		Width:           1120,
-		Height:          780,
-		MinWidth:        860,
-		MinHeight:       560,
+		Width:           880,
+		Height:          600,
+		MinWidth:        720,
+		MinHeight:       520,
 		StateKey:        "main",
 		BackgroundColor: "light-dark(#f7f7f9, #17181a)",
 		Content:         ui.View(a.view),

@@ -3,9 +3,9 @@
 package main
 
 import (
-	"time"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // setSystemDNS points every interface's IPv4 DNS at addr.

@@ -56,12 +56,12 @@ func TestSOCKS4Connect(t *testing.T) {
 
 	echoPort := echoLn.Addr().(*net.TCPAddr).Port
 	req := []byte{
-		0x04,                   // VN: SOCKS4
-		0x01,                   // CD: CONNECT
+		0x04,                  // VN: SOCKS4
+		0x01,                  // CD: CONNECT
 		byte(echoPort >> 8),   // Port high
 		byte(echoPort & 0xff), // Port low
-		127, 0, 0, 1,           // IP: 127.0.0.1
-		0x00,                   // USERID: empty
+		127, 0, 0, 1,          // IP: 127.0.0.1
+		0x00, // USERID: empty
 	}
 	if _, err := conn.Write(req); err != nil {
 		t.Fatal(err)

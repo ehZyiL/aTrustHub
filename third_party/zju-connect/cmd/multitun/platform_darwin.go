@@ -3,11 +3,11 @@
 package main
 
 import (
-	"time"
 	"errors"
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // setSystemDNS points every network service at addr.

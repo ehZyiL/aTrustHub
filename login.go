@@ -912,7 +912,7 @@ func (a *app) browserLogin(ctx context.Context, pointName, server, loginURL stri
 		MinHeight:       320,
 		URL:             "about:blank",
 		BackgroundColor: "light-dark(#ffffff, #1e1e1e)",
-		Page: mygo.PageOptions{DevTools: mygo.DevToolsEnabled},
+		Page:            mygo.PageOptions{DevTools: mygo.DevToolsEnabled},
 	})
 	if iconBytes := loadAppIconPNG(); len(iconBytes) > 0 {
 		_ = win.SetIcon(iconBytes)

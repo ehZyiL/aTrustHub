@@ -2640,6 +2640,7 @@ func (a *app) toggleSystemProxy() bool {
 			a.rememberCaptureMode(captureSystem)
 		}
 	}()
+	return true
 }
 
 func (a *app) openSettings() {

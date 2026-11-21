@@ -14,9 +14,9 @@ func TestDropDisabledApps(t *testing.T) {
 		{IPMin: net.IPv4(10, 20, 1, 1), AppID: "c"},
 	}
 	domains := zcclient.DomainResources{
-		"i6s.qctc.com.cn": {{AppID: "a"}},
+		"i6s.qctc.com.cn":    {{AppID: "a"}},
 		"gitlab.qctc.com.cn": {{AppID: "b"}},
-		"only-b": {{AppID: "b"}, {AppID: "b"}},
+		"only-b":             {{AppID: "b"}, {AppID: "b"}},
 	}
 	gotIP, gotDomain := dropDisabledApps([]string{"b"}, ips, domains)
 	if len(gotIP) != 2 {

@@ -124,7 +124,11 @@ func TestDarkAccentStaysForEmphasis(t *testing.T) {
 	if chroma(dark.Selection) >= chroma(dark.Accent) {
 		t.Errorf("选中底色 %v 比强调色 %v 更花", dark.Selection, dark.Accent)
 	}
-	if chroma(dark.Selection) >= chroma(softLight.Selection)+8 {
-		t.Errorf("深色选中底色 %v 过于饱和", dark.Selection)
+	// 选中底色只该比背景亮一点，不能自己变成一个大色块。
+	lum := func(c ui.Color) int {
+		return (int(c.R)*299 + int(c.G)*587 + int(c.B)*114) / 1000
+	}
+	if lift := lum(dark.Selection) - lum(dark.Background); lift > 40 {
+		t.Errorf("选中底色比背景亮了 %d，夜里看着像贴在屏幕上的色块", lift)
 	}
 }

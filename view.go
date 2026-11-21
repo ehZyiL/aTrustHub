@@ -1749,6 +1749,7 @@ func (a *app) generalSection(c *ui.Context) {
 			a.applySettingsIfChanged()
 		}
 	})
+	a.themeCards(c)
 	ui.Text(c, "跟随系统时，窗口外观跟着操作系统的深浅设置变；浅色与深色会把外观固定下来。").
 		FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
 	ui.Column(c).Gap(4).Children(func() {
@@ -2417,6 +2418,7 @@ func (a *app) openSettings() {
 		open:          true,
 		section:       a.settings.section,
 		appearance:    appearanceLabel(a.savedAppearance()),
+		theme:         a.savedTheme(),
 		host:          s.ListenHost,
 		port:          strconv.Itoa(s.AggregatePort),
 		interval:      strconv.Itoa(s.HealthIntervalSec),
@@ -2467,6 +2469,7 @@ func (a *app) saveSettings() {
 		cfg.Settings.AutoReconnect = d.autoReconnect
 		cfg.Settings.HideDock = d.hideDock
 		cfg.Settings.Appearance = appearanceFromLabel(d.appearance)
+		cfg.Settings.Theme = d.theme
 		cfg.Settings.SecretStore = secretStoreFromLabel(d.secretStore)
 		return cfg.Settings.Validate()
 	})
@@ -2499,6 +2502,7 @@ func (a *app) settingsDirty() bool {
 		strings.TrimSpace(d.port) != strconv.Itoa(s.AggregatePort) ||
 		strings.TrimSpace(d.interval) != strconv.Itoa(s.HealthIntervalSec) ||
 		appearanceFromLabel(d.appearance) != a.savedAppearance() ||
+		d.theme != a.savedTheme() ||
 		routingFromLabel(d.routing) != s.Routing ||
 		d.aggregate != s.AggregateEnabled ||
 		d.autoReconnect != s.AutoReconnect ||

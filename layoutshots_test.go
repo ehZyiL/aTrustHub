@@ -82,6 +82,15 @@ func TestLayoutShots(t *testing.T) {
 	shot("22-capture-menu-dark", 0, true, 1120, 780)
 	a.captureMenuOpen = false
 
+	// 三套色系各出一张，加绿色系的深色一张：同一份代码、不同的色板。
+	for _, name := range themeNames() {
+		a.cfg.Settings.Theme = name
+		shot("23-theme-"+name, 0, false, 1120, 780)
+	}
+	a.cfg.Settings.Theme = themeGreen
+	shot("24-theme-green-dark", 0, true, 1120, 780)
+	a.cfg.Settings.Theme = themeBlue
+
 	if apps := a.allApps(); len(apps) > 0 {
 		a.openAppDetail(apps[0])
 		shot("13-dialog-app-detail", 1, false, 1120, 780)

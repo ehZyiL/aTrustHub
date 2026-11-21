@@ -238,6 +238,9 @@ type Settings struct {
 	// Appearance is the window colour mode: "system" follows the desktop,
 	// "light" and "dark" pin it. Empty means "system".
 	Appearance string `json:"appearance,omitempty"`
+	// Theme is the colour family: "blue" (default), "green", or "purple".
+	// Each family ships a light and a dark version.
+	Theme string `json:"theme,omitempty"`
 	// SecretStore is where access point passwords are kept: "file" for the
 	// local 0600 secrets.json, or "keychain" for the macOS Keychain. It is
 	// read at startup, so a change takes effect after a restart.
@@ -356,6 +359,12 @@ func (s *Settings) Normalize() {
 	case "light", "dark", "system":
 	default:
 		s.Appearance = "system"
+	}
+	// 主题色系同样只认三套，空值与脏值归到默认的经典蓝白。
+	switch s.Theme {
+	case "blue", "green", "purple":
+	default:
+		s.Theme = "blue"
 	}
 }
 

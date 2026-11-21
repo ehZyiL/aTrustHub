@@ -73,10 +73,64 @@ func (a *app) appearanceDark(systemDark bool) bool {
 	}
 }
 
-// appearanceTheme 按当前偏好在柔和主题里挑一份。
-func (a *app) appearanceTheme(systemDark bool) *ui.Theme {
-	if a.appearanceDark(systemDark) {
-		return softDark
+// savedTheme 是配置里存的色系，空值或异常值都按默认（经典蓝白）处理。
+func (a *app) savedTheme() string {
+	switch a.cfg.Settings.Theme {
+	case themeGreen, themePurple:
+		return a.cfg.Settings.Theme
+	default:
+		return themeBlue
 	}
-	return softLight
+}
+
+// themePref 是这一帧生效的色系：设置页打开时先按草稿画，便于即时预览。
+func (a *app) themePref() string {
+	if a.settings.open {
+		switch a.settings.theme {
+		case themeGreen, themePurple, themeBlue:
+			return a.settings.theme
+		}
+	}
+	return a.savedTheme()
+}
+
+// appearanceTheme 按「外观模式 × 色系」挑一份预建好的主题。
+func (a *app) appearanceTheme(systemDark bool) *ui.Theme {
+	return appTheme(a.themePref(), a.appearanceDark(systemDark))
+}
+
+// themeCards 是三张色系预览卡：点哪张当场换色，也算一次设置改动。
+func (a *app) themeCards(c *ui.Context) {
+	t := c.Theme()
+	d := &a.settings
+	ui.Text(c, "主题配色").FontSize(11).TextColor(t.TextMuted)
+	ui.Row(c).Gap(8).Wrap().Children(func() {
+		for _, name := range themeNames() {
+			option := name
+			active := d.theme == option
+			card := ui.Column(c).Width(186).Padding(10, 12).Radius(12).Gap(4).
+				Background(t.Surface).Border(1, t.Border).
+				OnClick(func() {
+					d.theme = option
+					a.applySettingsIfChanged()
+					a.invalidate()
+				})
+			if active {
+				card = card.Border(2, t.Accent)
+			}
+			card.Children(func() {
+				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+					// 小圆点用该色系自己的强调色，卡片本身就是预览。
+					ui.Row(c).Size(9, 9).Radius(5).
+						Background(appTheme(option, t.Dark).Accent)
+					ui.Text(c, themeLabel(option)).FontSize(12).Bold()
+					ui.Row(c).Grow(1)
+					if active {
+						ui.Text(c, "✓").FontSize(11).TextColor(t.Accent)
+					}
+				})
+				ui.Text(c, themeBlurb(option)).FontSize(10).TextColor(t.TextMuted).Wrap()
+			})
+		}
+	})
 }

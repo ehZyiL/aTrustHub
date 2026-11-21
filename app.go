@@ -231,7 +231,9 @@ type settingsDraft struct {
 	// mode 是接管方式下拉的绑定值，每帧从真实状态回读。
 	mode string
 	// appearance 是颜色模式下拉的草稿值（跟随系统 / 浅色 / 深色）。
-	appearance    string
+	appearance string
+	// theme 是主题色系的草稿值（blue / green / purple）。
+	theme         string
 	host          string
 	port          string
 	interval      string

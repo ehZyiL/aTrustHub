@@ -54,7 +54,8 @@ func (a *app) noteTraffic() {
 
 // maybeTrimMemory 在状态 ticker 里调：满足条件才修剪，一次隐藏只修一次。
 func (a *app) maybeTrimMemory() {
-	if !a.windowHidden.Load() || a.hiddenSince.IsZero() || a.trimmedThisHide {
+	// 托盘隐藏与最小化都算「不在前台」；只要还在画就不修剪。
+	if a.windowVisible() || a.hiddenSince.IsZero() || a.trimmedThisHide {
 		return
 	}
 	hiddenFor := time.Since(a.hiddenSince)

@@ -124,7 +124,7 @@ const (
 // 没有经过 newApp，所以这里不能依赖构造函数。
 func (a *app) painter() *redrawScheduler {
 	a.redrawOnce.Do(func() {
-		visible := func() bool { return !a.windowHidden.Load() }
+		visible := a.windowVisible
 		a.redrawFast = newRedrawScheduler(redrawFastInterval, visible, a.paint)
 		a.redrawSlow = newRedrawScheduler(redrawSlowInterval, visible, a.paint)
 	})
@@ -155,9 +155,11 @@ func (a *app) invalidateLogSlow() {
 	a.redrawSlow.request()
 }
 
-// windowVisible 是门控信号：OpenClose 藏起来时为 false。
+// windowVisible 是门控信号：藏进托盘、或最小化到任务栏，都算不可见。
+// 最小化在 Linux 上是唯一的「后台常驻」手段——那里没有托盘，
+// 关窗只能退出，所以把挂起渲染绑定到最小化。
 func (a *app) windowVisible() bool {
-	return !a.windowHidden.Load()
+	return !a.windowHidden.Load() && !a.minimized.Load()
 }
 
 // redrawCounts 给测试与排障用。

@@ -51,6 +51,8 @@ func (a *app) showFromTray() {
 	a.windowHidden.Store(false)
 	a.hiddenSince = time.Time{}
 	a.trimmedThisHide = false
+	// 从托盘叫回时，即使底层窗口还处在最小化，也按「回到前台」处理。
+	a.minimized.Store(false)
 	if a.win == nil || a.win.IsDestroyed() {
 		return
 	}
@@ -70,15 +72,43 @@ func (a *app) showFromTray() {
 // syncWindowVisible 在主线程上用框架的 IsVisible() 校正一次门控标记。
 // 不直接在每个事件源里查 IsVisible：那是 onMain 同步调用，
 // 事件循环退出后会一直等，热路径上也不该做线程往返。
+// 最小化的窗口 IsVisible() 仍为 true，所以这条校正不能碰最小化标记。
 func (a *app) syncWindowVisible() {
 	if a.win == nil {
 		return
 	}
-	visible := a.win.IsVisible()
-	if visible && a.windowHidden.Load() {
+	if gateClears(a.win.IsVisible(), a.minimized.Load()) && a.windowHidden.Load() {
 		a.windowHidden.Store(false)
 		a.hiddenSince = time.Time{}
 	}
+}
+
+// gateClears 是「托盘隐藏标记能不能清」的纯判定：窗口真的可见，
+// 而且不是最小化状态。
+func gateClears(isVisible, minimized bool) bool {
+	return isVisible && !minimized
+}
+
+// onWindowMinimized 是最小化时的降占用：停止重绘，并允许一次工作集修剪。
+// Linux 没有托盘，最小化到任务栏就是那里的「后台常驻」。
+func (a *app) onWindowMinimized() {
+	a.minimized.Store(true)
+	if a.hiddenSince.IsZero() {
+		a.hiddenSince = time.Now()
+	}
+	if a.lastTrafficAt.IsZero() {
+		a.lastTrafficAt = a.hiddenSince
+	}
+	a.trimmedThisHide = false
+	a.onWindowHidden()
+}
+
+// onWindowRestored 是还原时的补帧：立即模式界面的点击热区来自上一帧。
+func (a *app) onWindowRestored() {
+	a.minimized.Store(false)
+	a.hiddenSince = time.Time{}
+	a.trimmedThisHide = false
+	a.invalidate()
 }
 
 // onWindowHidden 是各平台的降占用钩子：默认什么都不做，

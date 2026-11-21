@@ -188,6 +188,10 @@ type app struct {
 	// 只由 OnClose / showWindow 两处置位，view() 在主线程上用框架的
 	// IsVisible() 校正一次，避免两边说法不一致。
 	windowHidden atomic.Bool
+	// minimized 是第二个门控信号：窗口最小化（Linux 上就是后台常驻的
+	// 手段，因为没有托盘）。它与 windowHidden 区分开，
+	// 因为最小化的窗口 IsVisible() 仍为 true，不能用它来校正。
+	minimized atomic.Bool
 	// hiddenSince 记录这次隐藏的开始时间，工作集修剪要看它。
 	hiddenSince time.Time
 	// trafficMark/lastTrafficAt 记录流量刻度与最后一次流量的时间。
@@ -590,6 +594,10 @@ func (a *app) createWindow() {
 	}
 	// Closing the window hides it instead of quitting: tunnels, TUN and the
 	// tray/menu bar icon stay alive. Only 退出 really quits.
+	// 窗口生命周期与重绘门控绑在一起：藏进托盘或最小化都停止重绘，
+	// 回到前台/还原时补一帧。Linux 没有托盘，最小化就是那里的后台常驻。
+	a.win.OnMinimize(a.onWindowMinimized)
+	a.win.OnRestore(a.onWindowRestored)
 	a.win.OnClose(func(e *mygo.CloseEvent) {
 		a.tunLogf("OnClose: quitRequested=%v", a.quitRequested)
 		if a.quitRequested {

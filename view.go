@@ -1193,16 +1193,23 @@ func (a *app) pointButtons(c *ui.Context, v vpn.View) {
 
 func (a *app) logPanel(c *ui.Context) {
 	t := c.Theme()
-	entries := a.bus.Tail(200)
+	// 复制拿全部，排版只取最近 60 行：跑流量时日志每秒几十条，
+	// 把 200 行全排版一遍的代价比它看起来贵得多。
+	all := a.bus.Tail(logCopyLimit)
+	entries := lastEntries(all, logRenderLimit)
 	ui.Column(c).Gap(6).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Text(c, "运行日志").FontSize(13).Bold()
-			ui.Text(c, fmt.Sprintf("最近 %d 条", len(entries))).FontSize(11).
+			summary := fmt.Sprintf("最近 %d 条", len(entries))
+			if len(all) > len(entries) {
+				summary = fmt.Sprintf("显示最近 %d 条，共 %d 条", len(entries), len(all))
+			}
+			ui.Text(c, summary).FontSize(11).
 				TextColor(t.TextMuted)
 			ui.Row(c).Grow(1)
-			if ui.Button(c, "复制全部").FontSize(11).Clicked() {
+			if ui.Button(c, "复制全部").Label("复制全部日志").FontSize(11).Clicked() {
 				var b strings.Builder
-				for _, e := range entries {
+				for _, e := range all {
 					fmt.Fprintf(&b, "%s [%s] %s\n", e.At.Format("15:04:05"), e.Source, e.Line)
 				}
 				a.copyText(b.String())
@@ -1226,8 +1233,9 @@ func (a *app) logPanel(c *ui.Context) {
 							FontSize(11).TextColor(t.TextMuted)
 						ui.Text(c, "["+e.Source+"]").Font("monospace").FontSize(11).
 							TextColor(t.Accent)
+						// 单行省略 + 悬停看全文：换行排版在长日志上是主要开销。
 						ui.Text(c, e.Line).Font("monospace").FontSize(11).
-							TextColor(t.Text).Grow(1).Wrap()
+							TextColor(t.Text).Grow(1).Ellipsis("…").Tooltip(e.Line)
 					})
 				}
 			})

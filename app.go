@@ -476,7 +476,7 @@ func (a *app) start() {
 	a.bus.SetSink(a.logFile)
 	a.bus.Add("app", fmt.Sprintf("EasyConnect Hub %s 启动（窗口就绪），数据目录 %s", appBuild, a.dir))
 	log.SetOutput(a.bus.Writer("zju"))
-	a.bus.SetNotify(a.invalidate)
+	a.bus.SetNotify(a.onLogEvent)
 	go a.tailAccessLog()
 	a.mgr.SetDataDir(a.dir)
 	// 上一轮如果被强杀，root helper 可能还占着 127.0.0.1:53。

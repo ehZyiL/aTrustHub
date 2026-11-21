@@ -791,6 +791,20 @@ func (a *app) credentials(id string) (vpn.Credentials, error) {
 		}
 	}
 	creds := vpn.Credentials{Login: cred, TOTP: totp, ExternalLogin: external}
+	// 短信 / 动态口令 / RADIUS 验证码由 zju-connect 的 auth 包主动询问。
+	// 不接这里，它就去读标准输入；GUI 子系统进程（Windows 的
+	// -H windowsgui）根本没有 stdin，登录会永远卡在 read /dev/stdin。
+	codeName := id
+	if point != nil && point.Name != "" {
+		codeName = point.Name
+	}
+	creds.PromptCode = func(ctx context.Context, req vpn.CodeRequest) (string, error) {
+		// 没人理这个弹窗时不要拖到连接的 5 分钟超时：那会把登录信号量
+		// 也一直占着，后面的重试只能干等。
+		ctx, cancel := context.WithTimeout(ctx, loginCodeTimeout)
+		defer cancel()
+		return a.requestAuthentication(ctx, codeName, codeChallenge(req))
+	}
 	if point != nil && point.Protocol == model.ProtocolEasyConnect {
 		name := point.Name
 		creds.Challenge = func(ctx context.Context, ch vpn.Challenge) (string, error) {
@@ -798,6 +812,26 @@ func (a *app) credentials(id string) (vpn.Credentials, error) {
 		}
 	}
 	return creds, nil
+}
+
+// loginCodeTimeout bounds how long a code dialog may stay unanswered before
+// the login gives up. It is shorter than the 5-minute connect deadline on
+// purpose: one abandoned dialog must not hold the login slot for the whole
+// connection attempt. A variable so the guard is testable.
+var loginCodeTimeout = 3 * time.Minute
+
+// codeChallenge turns one login code request into the shape the app's
+// authentication dialog already draws: the same modal asks for EasyConnect
+// captchas and for aTrust SMS/TOTP/RADIUS codes.
+func codeChallenge(req vpn.CodeRequest) vpn.Challenge {
+	kind := "totp"
+	switch req.Kind {
+	case vpn.CodeSMS, vpn.CodeCustomSMS:
+		kind = "sms"
+	case vpn.CodeRADIUS:
+		kind = "radius"
+	}
+	return vpn.Challenge{Kind: kind, Tip: req.Tip}
 }
 
 func (a *app) hasPassword(id string) bool {

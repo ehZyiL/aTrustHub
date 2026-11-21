@@ -20,6 +20,7 @@ import (
 	"time"
 
 	atrustclient "github.com/mythologyli/zju-connect/client/atrust"
+	"github.com/mythologyli/zju-connect/client/atrust/auth"
 
 	"github.com/qy/easyconnect/internal/dnsmapping"
 	"github.com/qy/easyconnect/internal/model"
@@ -58,6 +59,9 @@ type Challenge struct {
 	ID    string
 	Kind  string
 	Image []byte
+	// Tip is what the server said when it sent the code, e.g. "验证码
+	// 已发送到您的手机：138****0000，请查收！". Empty when it said nothing.
+	Tip string
 }
 
 type Credentials struct {
@@ -69,7 +73,21 @@ type Credentials struct {
 	// redirects to. It is what the WeCom (external OAuth2/CAS) mode uses;
 	// the password mode leaves it nil.
 	ExternalLogin func(ctx context.Context, loginURL string) (string, error)
+	// PromptCode 询问登录卡住的验证码，短信与令牌都走这里；为空时没有
+	// 交互窗口，只能在终端输入。
+	PromptCode func(ctx context.Context, req CodeRequest) (string, error)
 }
+
+type CodeRequest = auth.CodeRequest
+
+type CodeKind = auth.CodeKind
+
+const (
+	CodeSMS       = auth.CodeSMS
+	CodeCustomSMS = auth.CodeCustomSMS
+	CodeTOTP      = auth.CodeTOTP
+	CodeRADIUS    = auth.CodeRADIUS
+)
 
 // Session is one logged-in access point.
 type Session interface {

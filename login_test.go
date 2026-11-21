@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qy/easyconnect/internal/model"
+	"github.com/qy/easyconnect/internal/vpn"
 )
 
 func TestCallbackFromURL(t *testing.T) {
@@ -312,5 +315,81 @@ func TestHostSet(t *testing.T) {
 	h.add("")
 	if len(h.hosts) != 1 {
 		t.Fatalf("空主机不应记录：%v", h.hosts)
+	}
+}
+
+// 短信 / 动态口令 / RADIUS 验证码必须走应用内弹窗。GUI 子系统进程没有
+// 标准输入，少了这个回调，zju-connect 的 auth 包会去读 stdin 并永远卡住
+// （Windows 上表现为 read /dev/stdin: The handle is invalid）。
+func TestPasswordCredentialsAskCodesInApp(t *testing.T) {
+	a := testApp(t)
+	a.openNewEditor()
+	a.editor.address = "https://vpn.example.edu.cn"
+	a.editor.authModeLabel = model.AuthModePassword.Label()
+	a.editor.username = "alice"
+	a.editor.cred = "pw-for-test"
+	a.saveEditor()
+	p := a.store.Config().Points[0]
+	creds, err := a.credentials(p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if creds.PromptCode == nil {
+		t.Fatal("凭据没有 PromptCode：验证码会去读不存在的标准输入")
+	}
+}
+
+func TestCodeChallengeKinds(t *testing.T) {
+	cases := []struct {
+		req  vpn.CodeRequest
+		want string
+	}{
+		{vpn.CodeRequest{Kind: vpn.CodeSMS, Tip: "已发送"}, "sms"},
+		{vpn.CodeRequest{Kind: vpn.CodeCustomSMS}, "sms"},
+		{vpn.CodeRequest{Kind: vpn.CodeTOTP}, "totp"},
+		{vpn.CodeRequest{Kind: vpn.CodeRADIUS}, "radius"},
+	}
+	for _, c := range cases {
+		got := codeChallenge(c.req)
+		if got.Kind != c.want {
+			t.Errorf("codeChallenge(%v).Kind = %q，想要 %q", c.req.Kind, got.Kind, c.want)
+		}
+		if got.Tip != c.req.Tip {
+			t.Errorf("codeChallenge(%v).Tip = %q，想要 %q", c.req.Kind, got.Tip, c.req.Tip)
+		}
+	}
+}
+
+// 没人理验证码弹窗时必须按护栏超时收场：不能拖到连接的 5 分钟截止，
+// 也不能把弹窗留在界面上。
+func TestCodePromptGivesUpWhenUnanswered(t *testing.T) {
+	a := testApp(t)
+	a.openNewEditor()
+	a.editor.address = "https://vpn.example.edu.cn"
+	a.editor.authModeLabel = model.AuthModePassword.Label()
+	a.editor.username = "alice"
+	a.editor.cred = "pw-for-test"
+	a.saveEditor()
+	p := a.store.Config().Points[0]
+	creds, err := a.credentials(p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := loginCodeTimeout
+	loginCodeTimeout = 40 * time.Millisecond
+	defer func() { loginCodeTimeout = old }()
+
+	start := time.Now()
+	if _, err := creds.PromptCode(context.Background(), vpn.CodeRequest{Kind: vpn.CodeSMS}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("无人应答时应超时，得到 %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("护栏没有生效，等了 %v", elapsed)
+	}
+	a.authMu.Lock()
+	left := a.authRequest
+	a.authMu.Unlock()
+	if left != nil {
+		t.Fatal("超时后认证弹窗仍挂在界面上")
 	}
 }

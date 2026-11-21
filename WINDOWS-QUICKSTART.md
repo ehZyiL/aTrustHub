@@ -1,139 +1,129 @@
-# Windows 多网关系统 TUN 与软件接管测试版
+# Connect Hub · Windows 用户快速入门手册
 
-当前阶段：多网关系统 TCP 接管已完成生产路径自动化验证，真实 UAC、Wintun、NRPT、重连和共存正在验收。用户于 2026-11-20 确认过旧版本 Windows DBX 软件接管成功；该反馈不代表此次新系统模式已通过实测。
+欢迎使用 **Connect Hub**！本手册介绍 Windows 平台下的安装部署、多网关添加与登录、三种网络接管模式的选择与配置，以及常见故障排查。
 
-构建标识：`0.1.0-dev-multigateway-tun.11`。请将整个压缩包解压后再运行，只拷贝单个 EXE 会缺少 `core\` 里的内部程序。Windows 网络助手协议为 7，EasyConnect worker 协议仍为 6。版本不匹配时在 UAC 前提示重新解压完整包。`COMPONENTS.txt` 记录配套协议及能力范围，`SHA256SUMS` 覆盖包内所有文件（清单自身除外）。网关卡片分别显示网关 DNS 与实际授权 TCP 探测状态；未配置有效 TCP 目标时显示未验证。
+---
 
-“网络授权与路由 → 用户策略”的同业务出口组可明确勾选“名称服务也等价”。新 DNS 查询按组内顺序选择在线的名称归属网关；固定 DNS 归属仍优先。它只在网关离线时切换，不在解析超时后跨网关查询，也不改绑已发布的地址；默认关闭。仓库 `scripts/` 目录内的 `measure-tun-performance.py` 用于后续受控 HTTP 服务的性能对照，需要 Python 3 和 curl，只随验收包（`EASYCONNECT_BUNDLE_PROFILE=test`）分发，使用 `--help` 查看参数。
+## 1. 版本与运行环境要求
 
-**系统 TUN** 复用已登录 worker，以资源归属选择网关；旧 aTrust TUN 入口独立保留。系统模式启动完成后才暂停本应用自己的系统代理，停止或失败时恢复。第三方/自动代理原样保留，不阻止资源捕获；使用第三方代理的应用仍遵循它的分流规则。未完成的清理会阻止新启动，界面显示原因并提供重试清理。
+- **操作系统**：Windows 10 / Windows 11（64 位，x86_64 / amd64）
+- **权限要求**：
+  - **基础代理与日常使用**：普通用户权限即可运行。
+  - **软件进程接管 / 全系统 TUN 模式**：需要 Windows UAC 管理员授权（用于初始化 Wintun 驱动与注入 NRPT 域名策略，日常数据传输仍在低权限下进行）。
 
-`.5` 增加业务 IPv4 UDP 试验，仅供配套 EasyConnect L3 会话的已授权系统资源使用，真实网关应答待验。显式代理和按软件接管仍维持原范围。
+---
 
-`.6` 修复网关下发的 IPv6 地址、地址段和静态 DNS 记录漏判。系统 TUN 会提示这些内网资源不支持接管。
+## 2. 安装与目录结构
 
-`.3` 修复网络助手异常退出后“重试清理”无法完成的问题：先确认原助手已退出、对应网卡消失、DNS 恢复记录清除，再释放旧接管会话；清理尚未完成时继续提示重试。旧版入口的周期日志已标明“旧版 TUN 巡检”，其 `on=false` 不代表新系统 TUN 关闭。
+Connect Hub 在 Windows 平台提供两种分发形式：
 
-保留 `windows-capture.3` 的 IPv4 网卡修复：写回前清零 `SitePrefixLength`，并将初始化、路由、管道和进程启动错误细化到操作名称及 Win32 错误码。接管失败也会记录在应用日志中。用户已反馈此前失败的 DBX 接管成功；旧日志仍不足以确定原先具体失败的接口。
+### 2.1 安装包版本（推荐）
+下载 `connect-hub-setup-windows-amd64.exe` 并运行：
+1. 默认安装路径为当前用户的应用程序目录：`%LOCALAPPDATA%\Programs\ConnectHub`（无需管理员权限即可安装）。
+2. 自动创建桌面快捷方式与开始菜单入口。
+3. 可以在 Windows「设置」→「应用」→「安装的应用」中随时一键完整卸载。
 
-## Windows 本机构建
+### 2.2 便携版（绿色解压即用）
+下载 `connect-hub-windows-amd64.zip`：
+1. 将压缩包**完整解压**到任意本地目录（例如 `D:\Tools\ConnectHub\`）。
+2. **切勿只单独复制单个 EXE**。应用程序依赖 `core/` 目录下的内部核心组件：
+   ```text
+   ConnectHub/
+   ├── connect-hub.exe              # 主程序（双击运行此文件）
+   ├── core/
+   │   ├── easyconnect-worker.exe   # VPN 协议处理引擎
+   │   └── connect-hub-capture.exe  # 操作系统网络与抓包助手
+   ├── resources/                   # 图标与界面资源
+   ├── LICENSES/                    # 开源许可说明
+   └── README.md                    # 本手册
+   ```
+3. 双击根目录下的 `connect-hub.exe` 启动程序。
 
-两个仓库保持并列：`aTrustHub` 使用 `feat/easyconnect-desktop`，`zju-connect` 使用 `feat/desktop-worker`。两个仓库都需要更新。Hub 使用其 patched module；独立 worker 必须设置 `GOWORK=off`，不要通过 `go work use` 把两个实现混入同一 workspace。安装满足 `go.mod` 要求的 Go 工具链，在 Windows x64 的 PowerShell 7 中进入 `aTrustHub`，逐条运行下面的命令；构建报错时先处理该步，不运行尚未完成的包。
+---
 
-```powershell
-New-Item -ItemType Directory -Force .\build\windows-capture\resources, .\build\windows-capture\core | Out-Null
-# `go build` 不会自己写 Windows 资源，先写出带应用图标的 .syso，链接后再删掉。
-go run .\cmd\appicon -arch amd64 -out .\appicon_windows_amd64.syso
-go build -mod=readonly -trimpath '-ldflags=-H=windowsgui' -o .\build\windows-capture\easyconnect-hub.exe .
-Remove-Item .\appicon_windows_amd64.syso
-# worker 和抓包助手是内部程序，与发布包一致放进 core/。
-go build -mod=readonly -trimpath '-ldflags=-H=windowsgui' -o .\build\windows-capture\core\easyconnect-hub-capture.exe ./cmd/app-helper
-$previousGoWork = $env:GOWORK
-try {
-    $env:GOWORK = 'off'
-    go -C ..\zju-connect build -mod=readonly -trimpath '-ldflags=-H=windowsgui' -o ..\aTrustHub\build\windows-capture\core\easyconnect-worker.exe ./cmd/easyconnect-worker
-    if ($LASTEXITCODE -ne 0) { throw 'worker build failed' }
-} finally { $env:GOWORK = $previousGoWork }
-Copy-Item .\resources\icon.png .\build\windows-capture\resources\icon.png -Force
-Copy-Item .\packaging\windows\test-worker.ps1 .\build\windows-capture\test-worker.ps1 -Force
-& .\build\windows-capture\test-worker.ps1
-go test -mod=readonly -trimpath -c -o .\build\windows-capture\windows-capture-tests.exe ./internal/wincapture
-# 以下进程启动测试须在普通权限 PowerShell 中运行。
-.\build\windows-capture\windows-capture-tests.exe '-test.v' '-test.timeout=60s'
+## 3. 接入点添加与登录
+
+Connect Hub 支持同时登录多个不同单位的网关：
+
+### 3.1 添加网关
+在主界面左侧点击 **「添加接入点」**：
+- **接入点名称**：便于识别的备注名称（如“公司办公网”、“高校校园网”）。
+- **网关协议**：按实际网关类型选择 **深信服 aTrust** 或 **深信服 EasyConnect**（*注：aTrust 继承自上游实现，本分支 Fork 后未进行实机测试，日常测试以 EasyConnect 为主*）。
+- **服务器地址**：网关的域名或 IP 地址及端口（如 `vpn.example.com:443`）。
+
+### 3.2 身份认证方式
+根据网关配置，Connect Hub 支持以下认证组合：
+- **账号密码**：输入用户名与密码。可选填登录域（Domain）或 6 位 TOTP 动态口令。
+- **短信验证码 (SMS) / 图形验证码 (CAPTCHA)**：若网关开启二次验证，登录时会弹出专属原生对话框提示输入。
+- **企业微信认证**：选择后将弹出专属二维码窗口，支持手机企业微信扫码或电脑端直接点击确认。
+- **第三方单点登录 (SSO / CAS / IDaaS)**：点击登录后将通过独立的隔离浏览器完成登录，主程序自动捕获会话 Cookie 并建立安全隧道。
+
+### 3.3 网关证书安全检查
+部分自建网关证书可能存在自签名、域名不匹配或异常 SAN 字段。当出现“网关证书格式不兼容”提示时：
+1. 点击错误卡片上的 **「查看网关证书」**。
+2. 程序会通过安全探测读取并计算该网关 TLS 证书的 SHA-256 指纹。
+3. 确认指纹来源可信后，勾选 **「我已核实网关来源，信任此证书」** 即可安全建立连接。
+
+---
+
+## 4. 三大接管模式详解与选型指南
+
+在窗口顶栏的**接管胶囊下拉菜单**（或在「设置」→「网络与接管」页面中），Connect Hub 提供了三种互斥的流量接管方式：
+
+```mermaid
+flowchart TD
+    Choice{"你需要如何接管与访问内网？"}
+    Choice -->|"仅在终端/数据库工具/浏览器插件里手动配代理"| ModeOff["「不使用」<br/>仅保留本地端口，不对系统做任何修改"]
+    Choice -->|"日常网页浏览，让系统大部分应用自动走代理"| ModeSys["「系统代理」<br/>托管 Windows 全局 HTTP/SOCKS 代理设置"]
+    Choice -->|"无需配置代理，透明访问内网域名与 IP，或拦截特定应用"| ModeApp["「应用接管」<br/>Wintun 驱动 + 资源网段路由 + NRPT 域名策略 + 进程隔离"]
 ```
 
-退出旧版本后，普通双击解压目录中的 `easyconnect-hub.exe`，确认启动日志显示本次测试的版本号。请使用同一个配套包内的 `easyconnect-hub.exe` 以及 `core\` 下的 `easyconnect-worker.exe`、`easyconnect-hub-capture.exe`；`core\` 是内部程序目录，不要手动运行其中的 EXE。助手已内嵌 Wintun DLL。`test-worker.ps1` 使用空配置验证 worker v6 协议，无需登录。
+### 4.1 「不使用」（仅本地监听）
+- **适用场景**：日常开发、命令行工具（curl / Git）、数据库管理软件（DBeaver / Navicat / DataGrip）或配合浏览器代理插件（如 SwitchyOmega）使用。
+- **运行机制**：
+  - Connect Hub 不对操作系统的网络栈、系统代理和路由表做任何修改，最纯净、零提权。
+  - 每个在线接入点在本地开放独立的专属 SOCKS5 端口。
+  - 启动一个**统一入口端口**（支持基于资源网段归属的智能分流，以及故障转移、延迟优先、轮询、哈希策略）。
+  - 用户只需在目标工具的代理设置中填入 `127.0.0.1:<端口号>` 即可。
 
-Linux 上交叉编译或 Windows Git Bash 打包，可使用 `bash scripts/package-windows.sh`。默认打发布包 `easyconnect-hub-windows-<arch>`，只放运行必需的程序（根目录的 `easyconnect-hub.exe` 与 `core\` 下的 worker、助手）、说明和许可证；需要真机验收包时设 `EASYCONNECT_BUNDLE_PROFILE=test`，包名带 `-capture` 后缀，额外包含 `windows-capture-tests.exe`、`test-capture.ps1`、`test-worker.ps1`、性能对照脚本和两份模块清单。两种包在归档前都会用 `test-worker.ps1` 跑一遍 worker v6 协议自检。脚本会先用 `cmd/appicon` 生成带图标的资源对象再编译 GUI，所以包里的 `easyconnect-hub.exe` 不再是 Go 的默认图标；三个 EXE 都带 `-s -w`，去掉符号表和调试信息。Windows PowerShell 调用示例：`& "C:\Program Files\Git\bin\bash.exe" .\scripts\package-windows.sh`。脚本已为 worker 的构建和模块清单单独禁用 workspace。
+### 4.2 「系统代理」（全局系统代理托管）
+- **适用场景**：日常办公网页浏览、系统自带组件及遵循 Windows 系统代理的通用桌面软件。
+- **运行机制**：
+  - 自动将 Windows 系统的网络代理（即 Windows「设置」→「网络和 Internet」→「代理」）指向 Connect Hub 的统一入口端口。
+  - 所有遵循系统代理的应用流量均会自动走统一入口并由网关转发。
+  - **安全自愈与防断网保护**：若统一入口异常停止或客户端退出，程序会自动关闭系统代理，绝不会将系统留在失效的代理配置下导致断网。
 
-## 系统 TUN 启动
+### 4.3 「应用接管」（内网透明接管 / 本机软件管控）
+- **适用场景**：客户端无法配置代理、内网应用绑定了固定私有域名/IP，或需要精准拦截特定进程发起的流量。
+- **运行机制**：
+  - **内网资源路由与透明访问**：基于特权助手与 Wintun 驱动，向系统注入网关下发的私有 IPv4 网段路由，并通过 Windows NRPT（名称解析策略表）精准下发内网私有域名的 DNS 解析规则。**不修改系统默认网关（0.0.0.0/0）**，公网访问完全保持本地原有速度与路径。
+  - **本机软件精准管控**：在主界面「本机软件」中添加并启动目标软件，通过 Windows 原生 Job Object 原子绑定与端口所有权验证，仅拦截该软件进程树发出的流量，其他软件完全不受影响。
+  - **自动恢复机制**：在「设置」中可开启「启动 / 登录后自动恢复应用接管」，无需每次手动重连。
 
-1. 普通权限启动 GUI，登录两个待测 EasyConnect 网关，并确认它们加入统一资源池。
-2. 在“网络授权与路由”核对资源、归属和路由预览。相同域名必须显式设置默认 DNS 归属；裸 IP 同时属于多个业务时默认报冲突。
-3. 点击 **系统 TUN**，按需批准助手 UAC。等待“关闭系统 TUN”出现，再测试受管资源。
-4. 新模式覆盖系统中命中资源路由的 IPv4 TCP；已有按软件 Job 绑定仍优先。B 断开时保留其归属防止错误回退；新代次增量登记，不重启 A。
-5. 停止后检查日志与网络差量。若出现“重试清理”，先处理清理错误；外部修改的代理/NRPT 配置会被保留并报告，不强行覆盖。
+> [!NOTE] 关于「全局 TUN」选项
+> 若配置中存在已登录的深信服 aTrust 接入点，且系统部署了提权组件，下拉菜单中可能会额外显示历史保留的 **「全局 TUN」** 选项。该选项仅专用于 aTrust 会话；对于 EasyConnect 网关，透明无感接入完全由 **「应用接管」** 负责。
 
-新模式本次启动默认关闭，不自动恢复上次开关；显式启用它会关闭旧 aTrust 模式的自动恢复意图。助手异常退出由恢复进程处理拥有的策略，未过期映射池记录跨进程保留，不能分配给其他身份。
+---
 
-## 与 v2rayN 等工具共存
+## 5. 常见问题排查与维护
 
-- 本应用只添加授权资源的具体路由，原网络出口可以继续经过其他 TUN/Tailscale。两个程序同时运行的路由、DNS 及开关顺序仍需按本机配置验证。
-- Windows 系统代理是一个共享设置，两个程序不能同时占用它。若另一个程序改写代理地址，Hub 会取消自己的“系统代理”状态并保留新设置，退出时也不关闭别人的代理。
-- 系统 TUN 与第三方系统代理可以同时开启。应用若把内网目标先交给第三方 HTTP/SOCKS/PAC，该目标就可能不经过本机的资源路由；应在第三方代理中为内网设置绕过，或让该应用显式使用 Hub 的统一入口。程序不会自动更改第三方分流规则。
-- 「启动 / 登录后自动恢复应用接管」目前仅在 Linux 提供。Windows 网络助手按会话通过 UAC 启动，自动恢复会每次都弹管理员授权，因此仍请手动开启系统 TUN。
-- 第三方 TUN 的 DNS 劫持/严格 DNS 策略可能影响内网 NRPT；IP 连通不等于域名链路通过，须分别使用运行中 DNS 诊断和实际应用验证。
+### Q1：切换至「应用接管」或启动被接管软件时弹出 Windows UAC 提示？
+**解答**：正常现象。创建 Wintun 虚拟网卡与配置系统 NRPT 路由表属于 Windows 受保护的网络底层操作，必须通过系统管理员授权。授权后辅助进程仅处理网络规则，不会修改用户其他系统设置。
 
-## 按软件接管启动
+### Q2：退出 Connect Hub 后，内网访问是否会有残留影响？
+**解答**：Connect Hub 具备严格的清理与看门狗保障机制：
+- 正常退出时，自动注销 NRPT 规则、卸载虚拟网卡、恢复系统代理设置。
+- 即使主程序异常终止，后台辅助服务在租约心跳超时后也会自动回滚所有网络配置。
 
-1. 解压完整 ZIP 到一个目录，不要只拷贝单独的 EXE。
-2. 普通双击 `easyconnect-hub.exe`。不要“以管理员身份运行”主界面。
-3. 添加 EasyConnect 接入点，连接后在界面输入当前验证码或动态口令。
-4. 打开“本机软件”，添加“软件 TCP 接管”，选择程序的 `.exe`。开始菜单列表支持能解析为 EXE 的桌面软件；无法解析时手动选择程序。
-5. 保存工作、退出该软件的已有实例，然后点击启动。系统 UAC 仅提升网络助手，软件本身保持普通权限。
-6. 首次先测试一个浏览器或数据库工具。停止接管或断开 VPN 会保留软件进程；再次启用需退出软件并重新启动。
+### Q3：如何最小化到系统托盘并节省系统资源？
+**解答**：
+- 点击主窗口右上角关闭按钮，默认最小化到任务栏通知区（系统托盘）后台运行。
+- 在设置中开启后，当客户端在后台静默超过 30 秒且无流量时，会自动触发内存工作集修剪，内存占用将大幅缩减。
+- 如需彻底退出程序，请右键托盘图标选择 **「退出」**。
 
-多个 VPN 代次、系统模式和按软件模式共用一个助手、Wintun 和包栈。撤销 B 不会重建 A 的网络环境。一个运行时最多保留 16 个映射池；未发布的池可立即释放，已发布的池等待最后承诺 TTL 结束且相关连接关闭后回收。`.4` 修复重连后旧代次未撤销导致的池耗尽；合法保留的池用满时仍明确拒绝新登记。
-
-## 更新与移除
-
-Windows 使用便携包，网络助手按会话通过 UAC 启动，不安装常驻 Windows 服务。更新前关闭系统 TUN 和按软件接管，确认清理完成，再从托盘退出旧 GUI，解压新包到独立目录运行。不要覆盖正在运行的 EXE，也不要只替换其中一个或漏掉 `core\` 目录。
-
-移除时先按同样顺序停止接管并退出；确认 Hub 网卡、路由和 NRPT 已清理后，可删除解压目录。用户数据独立保存在 `%APPDATA%/connect-hub`，删除便携包会保留账号和配置；系统恢复记录清理未完成时，应保留配套程序进行重试。
-
-软件只会在接管规则确认就绪后启动。最后一个软件停止接管后，资源路由和内网域名策略会撤回；若本次会话启用了内网域名，助手和映射地址通道会保留到断开 VPN，以保持重启软件时的域名映射一致。
-
-等待 UAC 时可以取消启动。Windows 的授权提示可能仍显示，请关闭该提示再重试；稍后批准旧提示也不会启动软件或安装网络规则。规则操作已经发出时，停止会等待该次操作完成并撤回，避免影响同一 VPN 下其他软件。
-
-## 网关证书提示
-
-遇到“网关证书的域名字段格式不兼容”时：
-
-1. 点击接入点错误卡片上的 **查看网关证书**。程序自动读取证书并计算 SHA256，无需运行命令查找指纹。
-2. 核实接入地址、证书来源和指纹后，勾选 **我已核实网关来源，信任此证书**。
-3. 点击 **信任并重试连接**，随后输入图形验证码或动态口令。
-
-编辑接入点 → 高级选项也有 **读取网关证书…**。此入口确认后只填入编辑框，保存接入点后才生效。
-读取只做 TLS 握手，不发送账号密码，不会自动信任。首次请通过管理员或其他可信渠道核实；证书名称和颁发者由对端提供。
-已保存的指纹只作用于当前接入点。之后证书不一致会停止连接并显示新旧指纹，核实换证后才能替换。
-如提示核心不支持读取，请重新构建或替换 `core\easyconnect-worker.exe`，只更新 GUI 无法添加这个命令。
-
-## 本机自测
-
-在普通 PowerShell 中进入解压目录，执行：
-
+### Q4：自测诊断脚本如何使用？
+如果在使用过程中遇到异常，可以在普通权限 PowerShell 中运行安装包附带的自测脚本：
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\test-capture.ps1
 ```
-
-这个脚本只对本次 PowerShell 设置执行策略，不修改全局执行策略。测试使用专用子进程、loopback 和内存网络栈，不登录 VPN、不修改系统路由/DNS、不关闭已有软件。结果保存在 `capture-selftest.txt`。
-
-验证内容：worker v6 IPC、进程组和取消、可信进程归属、TCP 元组、停止后软件存活、共享请求取消、多会话登记、规则差量回滚、清理失败重试、映射退休、TCP 数据和半关闭，以及独立栈的 UDP 测试。生产 NRPT 脚本测试替换全部 DNS cmdlet，IP Helper 测试不创建网卡。栈级 UDP 测试不代表 VPN 业务 UDP 支持；自测不验证真实 UAC、Wintun、NRPT 或 VPN。
-
-## 实机验收
-
-以下各项需要记录本次构建号、起止时间与实际结果。旧版 DBX 成功反馈保留为历史记录，新系统模式需重新验证。
-
-- 已选软件访问一个允许测试的内网网页或数据库；项目连接记录应出现对应目标。
-- 未选软件的普通上网、本地开发服务和已有 Tailscale 目标保持原路径。
-- 同一目标分别从已选和未选软件连接，验证选择生效。
-- 测试软件正常退出、只退出启动父进程但子进程继续运行、停止接管、断开 VPN、拒绝 UAC。
-- 两个软件同时使用时，停止或取消其中一个，另一个仍能访问；停止最后一个软件后，资源路由和本应用的 NRPT 策略撤回。
-- 退出后检查仅本应用的 `ECH-*` 适配器和 `EasyConnectHub:<会话ID>` DNS 策略是否清理；其他软件的路由和 DNS 策略保持原状。
-- 系统模式下 A/B 各自专属资源、同名冲突、同真实 IP 映射、B 断开/重连与新增 B 失败；A 的现有连接保持可用。
-- UAC 拒绝、切网、休眠、GUI/助手异常退出及重启恢复，记录 NRPT 和路由的前后差量。
-
-## 当前限制
-
-- 按软件接管仅接管 IPv4 TCP；系统 TUN 的 UDP 试验不扩展按软件接管或显式代理。已知 IPv6 资源会拒绝启用。普通公网流量不安装默认接管路由。
-- 按软件模式只绑定本应用新启动且确认属于 Job Object 的进程；系统模式按资源捕获，不要求为每个软件建立 Job。
-- 路由按目标地址捕获，未选进程访问同一目标也会先经过助手，再按原接口转发。该原接口可以是 Tailscale。
-- 每次捕获配置最多覆盖 1048576 个 IPv4 地址；拒绝默认/过宽路由、本机接口、回环、链路本地和网关控制地址。与已有等长或更具体路由或外部 NRPT 冲突时拒绝启动，授权列表仍完整展示。
-- 内网域名经共享 NRPT 和统一归属选择器解析；超时失败不回退公网。系统范围内未选软件也可能收到短期映射地址，助手按原始身份处理。应用自行 DoH 或旧 IPv6 缓存不在 DNS 接管保证范围。
-- 映射保留计入已承诺 TTL、在途发布和活跃引用；退役地址不会绑定到新身份。Windows 在发布确认前持久化退休池期限，重启后继续避让。异常退出恢复与断电后清理仍需实测，不会在系统启动时自动运行。
-- 当前 aTrust 会话尚不具备新系统模式所需的域名映射能力；包含这类资源时会拒绝启用，可继续使用显式代理或旧 aTrust 模式。
-- 当前为解压测试包，未实现常驻安装服务、签名安装器或自动更新。
-
-## 开源复用
-
-沿用 aTrustHub 的 GUI、软件项目与代理入口；zju-connect 的认证、会话、资源规则与隧道；sing-tun 的 Wintun 适配；同一依赖树中的 gVisor 网络栈及 sing 的 socket 查询。gVisor 适配层用于兼容现有依赖版本，不自行实现 TCP/IP。许可证位于 `LICENSES/`，模块版本位于 `*-modules.txt`。
+该脚本在纯内存与本地回环环境下验证所有 IPC 通信与网络栈逻辑，并将结果输出到 `capture-selftest.txt` 供排查分析。

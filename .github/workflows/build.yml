@@ -65,9 +65,22 @@ jobs:
       - name: 校验代码格式（gofmt）
         shell: bash
         run: |
+          set -euo pipefail
           cd connect-hub
           # third_party/ 是上游代码，按上游格式保留，不参与本仓库的格式约束。
-          unformatted=$(gofmt -l . | grep -v '^third_party/' || true)
+          # 用 git 的文件清单做过滤（git 输出的路径始终是正斜杠），而不是过滤
+          # gofmt -l 的输出——Windows 上 gofmt 会输出反斜杠路径，导致过滤失效。
+          files=()
+          while IFS= read -r f; do
+            if [[ $f == third_party/* ]]; then
+              continue
+            fi
+            files+=("$f")
+          done < <(git ls-files -- '*.go')
+          unformatted=""
+          if (( ${#files[@]} > 0 )); then
+            unformatted=$(gofmt -l "${files[@]}" || true)
+          fi
           if [[ -n "$unformatted" ]]; then
             printf 'These files need gofmt -w:\n%s\n' "$unformatted" >&2
             exit 1
@@ -138,9 +151,22 @@ jobs:
       - name: 校验代码格式（gofmt）
         shell: bash
         run: |
+          set -euo pipefail
           cd connect-hub
           # third_party/ 是上游代码，按上游格式保留，不参与本仓库的格式约束。
-          unformatted=$(gofmt -l . | grep -v '^third_party/' || true)
+          # 用 git 的文件清单做过滤（git 输出的路径始终是正斜杠），而不是过滤
+          # gofmt -l 的输出——Windows 上 gofmt 会输出反斜杠路径，导致过滤失效。
+          files=()
+          while IFS= read -r f; do
+            if [[ $f == third_party/* ]]; then
+              continue
+            fi
+            files+=("$f")
+          done < <(git ls-files -- '*.go')
+          unformatted=""
+          if (( ${#files[@]} > 0 )); then
+            unformatted=$(gofmt -l "${files[@]}" || true)
+          fi
           if [[ -n "$unformatted" ]]; then
             printf 'These files need gofmt -w:\n%s\n' "$unformatted" >&2
             exit 1

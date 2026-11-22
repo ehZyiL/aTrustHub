@@ -19,10 +19,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/miekg/dns"
 	"github.com/ehzyil/connect-hub/internal/model"
 	hubproxy "github.com/ehzyil/connect-hub/internal/proxy"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
+	"github.com/miekg/dns"
 	"golang.org/x/net/proxy"
 )
 
@@ -39,29 +39,37 @@ func NewProtocolConnector(options ZJUOptions) Connector {
 
 // workerPath deliberately avoids PATH or the current working directory.
 func workerPath() (string, error) {
-	if configured := os.Getenv("EASYCONNECT_WORKER"); configured != "" {
-		return filepath.Abs(configured)
+	// 新名字优先；EASYCONNECT_WORKER 是改名前的变量，仍接受，免得已经配置好的
+	// 环境失效（与 CONNECT_HUB_HOME / EASYCONNECT_HOME 同样的兼容策略）。
+	for _, key := range []string{"CONNECT_HUB_WORKER", "EASYCONNECT_WORKER"} {
+		if configured := os.Getenv(key); configured != "" {
+			return filepath.Abs(configured)
+		}
 	}
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
-	name := "easyconnect-worker"
+	name, legacy := "connect-hub-worker", "easyconnect-worker"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
+		legacy += ".exe"
 	}
 	// core/ 是当前发布的布局（避免用户直接双击内部程序）；平铺位置留给
-	// 开发构建目录和拆分之前的旧包。
+	// 开发构建目录和拆分之前的旧包。旧文件名放在最后：找到了就交给协议版本
+	// 校验去拒绝，比"文件缺失"更容易看懂。
 	dir := filepath.Dir(exe)
 	for _, path := range []string{
 		filepath.Join(dir, "core", name),
 		filepath.Join(dir, name),
+		filepath.Join(dir, "core", legacy),
+		filepath.Join(dir, legacy),
 	} {
 		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
 			return path, nil
 		}
 	}
-	return "", errors.New("缺少 easyconnect-worker 核心，请解压完整安装包（easyconnect-worker.exe 位于 core 目录），或设置 EASYCONNECT_WORKER")
+	return "", errors.New("缺少 connect-hub-worker 核心，请解压完整安装包（connect-hub-worker.exe 位于 core 目录），或设置 CONNECT_HUB_WORKER")
 }
 
 func NewEasyConnectConnector(path string) Connector {

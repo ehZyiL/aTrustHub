@@ -68,7 +68,7 @@
 go build -mod=readonly -trimpath -o build/core/connect-hub-capture ./cmd/app-helper
 
 # 2. 编译独立协议工作进程 (必须切换 GOWORK=off)
-(cd ../zju-connect && env GOWORK=off go build -mod=readonly -trimpath -o ../aTrustHub/build/core/easyconnect-worker ./cmd/easyconnect-worker)
+(cd ../zju-connect && env GOWORK=off go build -mod=readonly -trimpath -o ../aTrustHub/build/core/connect-hub-worker ./cmd/connect-hub-worker)
 
 # 3. 编译桌面主程序
 go build -mod=readonly -trimpath -o build/connect-hub .

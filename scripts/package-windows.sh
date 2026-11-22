@@ -7,6 +7,12 @@ app_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # 工作树里没有 zju-connect 兄弟目录，允许用环境变量指过去；
 # 默认仍是同级的 ../zju-connect。
 worker_root=${ZJU_CONNECT_ROOT:-$(cd -- "$app_root/../zju-connect" && pwd)}
+# worker 的源码目录改名过（cmd/easyconnect-worker）；固定的 WORKER_REF 可能还停在
+# 旧 commit 上，所以按存在的路径选，产物名始终是新的。
+worker_cmd=./cmd/connect-hub-worker
+if [[ ! -d "$worker_root/cmd/connect-hub-worker" ]]; then
+  worker_cmd=./cmd/easyconnect-worker
+fi
 # 把来源写进包里：否则"这个包是哪份代码打的"只能靠猜。
 repo_branch=$(git -C "$app_root" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
 repo_commit=$(git -C "$app_root" rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -67,7 +73,7 @@ if [[ "$bundle_profile" == test ]]; then
   "$go_tool" list -m all > "$bundle/desktop-modules.txt"
 fi
 cd "$worker_root"
-env GOWORK=off GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags='-H=windowsgui -s -w' -o "$bundle/core/easyconnect-worker.exe" ./cmd/easyconnect-worker
+env GOWORK=off GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags='-H=windowsgui -s -w' -o "$bundle/core/connect-hub-worker.exe" "$worker_cmd"
 if [[ "$bundle_profile" == test ]]; then
   env GOWORK=off "$go_tool" list -m all > "$bundle/worker-modules.txt"
 fi
@@ -101,7 +107,7 @@ Source commit: $repo_commit$repo_dirty
 Worker source commit: $worker_commit
 App build: ${app_build:-unknown}
 Scope: IPv4 TCP and DNS. System IPv4 UDP for eligible L3 sessions is experimental; IPv6 is unsupported.
-Layout: connect-hub.exe at the bundle root; easyconnect-worker.exe and
+Layout: connect-hub.exe at the bundle root; connect-hub-worker.exe and
 connect-hub-capture.exe under core/. Launch only connect-hub.exe;
 the two programs in core/ are internal and start on demand.
 GUI, worker and helper are a matched build from this bundle; do not mix files from other bundles.
@@ -157,7 +163,7 @@ to_win_path() {
 if [[ "$bundle_profile" == test ]]; then
   "$powershell_cmd" -NoProfile -ExecutionPolicy Bypass -File "$(to_win_path "$bundle/test-worker.ps1")"
 else
-  "$powershell_cmd" -NoProfile -ExecutionPolicy Bypass -File "$(to_win_path "$app_root/packaging/windows/test-worker.ps1")" -WorkerPath "$(to_win_path "$bundle/core/easyconnect-worker.exe")"
+  "$powershell_cmd" -NoProfile -ExecutionPolicy Bypass -File "$(to_win_path "$app_root/packaging/windows/test-worker.ps1")" -WorkerPath "$(to_win_path "$bundle/core/connect-hub-worker.exe")"
 fi
 archive_tmp="$app_root/build/.${bundle_name}.zip.tmp.$$"
 trap 'rm -f -- "$archive_tmp"' EXIT

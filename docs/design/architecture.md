@@ -6,7 +6,7 @@
 普通用户权限
 ├── connect-hub（GUI 主程序，单实例）
 │   ├── aTrust 协议栈 —— 进程内（import vendor 化的 zju-connect）
-│   └── EasyConnect —— 子进程 core/easyconnect-worker，stdio JSON-RPC v6
+│   └── EasyConnect —— 子进程 core/connect-hub-worker，stdio JSON-RPC v7
 └── 经提权拉起的网络助手
     ├── Windows: core/connect-hub-capture.exe（UAC），命名管道 v7
     └── Linux:  /usr/local/libexec/connect-hub-capture（systemd），Unix socket v11

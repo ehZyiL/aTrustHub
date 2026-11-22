@@ -12,7 +12,7 @@
 
 | 出处 | 文档说法 | 源代码实际 |
 |---|---|---|
-| `DEVELOPMENT.md` §1 架构图 | aTrust 与 EasyConnect 两条协议栈都在 `easyconnect-worker` 里 | aTrust 在 **GUI 进程内**直接 import（`internal/vpn/zju.go`）；worker 只做 EasyConnect，协议里无协议选择字段 |
+| `DEVELOPMENT.md` §1 架构图 | aTrust 与 EasyConnect 两条协议栈都在 `connect-hub-worker` 里 | aTrust 在 **GUI 进程内**直接 import（`internal/vpn/zju.go`）；worker 只做 EasyConnect，协议里无协议选择字段 |
 | `DEVELOPMENT.md` §4.3 | "Linux（Native TUN + Policy Routing）"属于全局 TUN 的一档 | Linux `supportsElevatedTUN() = false`，**没有**全局 TUN 这一档；Linux 只有"应用接管"（`supportsResourceTUN = true`） |
 | `DEVELOPMENT.md` §3.2 | Linux 助手 socket 在 `/run/connect-hub/helper.sock` | 实际 `/run/connect-hub-capture-<uid>/control.sock`（`capture.SocketPath`），0600 且 chown 到该 UID |
 | `DEVELOPMENT.md` §2 | `go.work` 的 `use` 含 `./tests/e2e` | 该目录**不存在**（曾导致根目录任何 go 命令失败，已修复）；`tests/e2e` 与 harness 已不在仓库 |

@@ -2,10 +2,16 @@ param([string]$WorkerPath)
 
 $ErrorActionPreference = 'Stop'
 if (-not $WorkerPath) {
-    # 新包把 worker 放在 core/；拆分前的包和本机开发目录仍是平铺的。
-    $WorkerPath = Join-Path $PSScriptRoot 'core\easyconnect-worker.exe'
-    if (-not (Test-Path -LiteralPath $WorkerPath -PathType Leaf)) {
-        $WorkerPath = Join-Path $PSScriptRoot 'easyconnect-worker.exe'
+    # 新包把 worker 放在 core/；开发目录仍是平铺的，旧文件名留给改名前的包。
+    foreach ($candidate in 'core\connect-hub-worker.exe', 'connect-hub-worker.exe', 'core\easyconnect-worker.exe', 'easyconnect-worker.exe') {
+        $candidatePath = Join-Path $PSScriptRoot $candidate
+        if (Test-Path -LiteralPath $candidatePath -PathType Leaf) {
+            $WorkerPath = $candidatePath
+            break
+        }
+    }
+    if (-not $WorkerPath) {
+        $WorkerPath = Join-Path $PSScriptRoot 'core\connect-hub-worker.exe'
     }
 }
 if (-not (Test-Path -LiteralPath $WorkerPath -PathType Leaf)) {

@@ -30,7 +30,7 @@ flowchart TB
     end
 
     subgraph Layer2 ["2. 协议核心层 (独立工作进程)"]
-        Worker["VPN 协议核心 (easyconnect-worker)<br/>Stdio IPC v7 · 隔离运行 · 内存优化"]
+        Worker["VPN 协议核心 (connect-hub-worker)<br/>Stdio IPC v7 · 隔离运行 · 内存优化"]
         aTrustProto["aTrust 协议栈<br/>(继承自上游，Fork 后未做实机测试)"]
         EasyConnectProto["EasyConnect 协议栈<br/>(L3/L4 封装、定制 uTLS)"]
     end
@@ -85,7 +85,7 @@ use (
 )
 
 // 关键约束：独立 Worker 与 Hub 的 patched aTrust 共享了部分模块路径。
-// 在编译或测试 zju-connect 目录内的 easyconnect-worker 时，必须使用 GOWORK=off！
+// 在编译或测试 zju-connect 目录内的 connect-hub-worker 时，必须使用 GOWORK=off！
 
 replace (
 	github.com/refraction-networking/utls => ./zju-connect/third_party/utls
@@ -110,7 +110,7 @@ replace (
 - **协议一致性硬约束**：打包脚本中强制执行 `diff`，两端协议定义必须完全一致。
 
 #### 交互流程：
-1. **启动与握手**：主程序拉起 `core/easyconnect-worker`，并监听其 stdout。
+1. **启动与握手**：主程序拉起 `core/connect-hub-worker`，并监听其 stdout。
 2. **连接初始化**：主程序下发 `action: "connect"` 指令，包含目标网关 URL、凭据。
 3. **认证挑战回调**：若需要二次认证（动态口令 TOTP、短信验证码 SMS、图形验证码 CAPTCHA），Worker 发送 `challenge` 消息；主程序弹窗提示用户输入后发送 `response` 消息。
 4. **状态与通道建立**：认证成功后，Worker 在本地随机端口启动专用回环 SOCKS5 代理服务，并向主程序回复带有随机认证 Token 的接入点信息。
@@ -219,11 +219,11 @@ Remove-Item .\appicon_windows_amd64.syso
 # 3. 编译特权抓包助手
 go build -mod=readonly -trimpath -ldflags="-H=windowsgui" -o .\build\debug\core\connect-hub-capture.exe .\cmd\app-helper
 
-# 4. 隔离编译协议核心 easyconnect-worker (必须切换 GOWORK=off)
+# 4. 隔离编译协议核心 connect-hub-worker (必须切换 GOWORK=off)
 $prevGoWork = $env:GOWORK
 try {
     $env:GOWORK = "off"
-    go -C ..\zju-connect build -mod=readonly -trimpath -ldflags="-H=windowsgui" -o ..\aTrustHub\build\debug\core\easyconnect-worker.exe .\cmd\easyconnect-worker
+    go -C ..\zju-connect build -mod=readonly -trimpath -ldflags="-H=windowsgui" -o ..\aTrustHub\build\debug\core\connect-hub-worker.exe .\cmd\connect-hub-worker
 } finally {
     $env:GOWORK = $prevGoWork
 }
@@ -248,7 +248,7 @@ go build -mod=readonly -trimpath -o build/debug/connect-hub .
 go build -mod=readonly -trimpath -o build/debug/core/connect-hub-capture ./cmd/app-helper
 
 # 3. 编译独立 Worker (GOWORK=off)
-(cd ../zju-connect && env GOWORK=off go build -mod=readonly -trimpath -o ../aTrustHub/build/debug/core/easyconnect-worker ./cmd/easyconnect-worker)
+(cd ../zju-connect && env GOWORK=off go build -mod=readonly -trimpath -o ../aTrustHub/build/debug/core/connect-hub-worker ./cmd/connect-hub-worker)
 
 # 4. 拷贝静态资源
 cp resources/icon.png build/debug/resources/
@@ -334,15 +334,15 @@ GitHub Actions 自动化流水线配置在 [aTrustHub/.github/workflows/build.ym
 
 ## 9. 高频开发避坑与排错指南
 
-### 1. `easyconnect-worker` 报错缺少特定 `utls` 符号
+### 1. `connect-hub-worker` 报错缺少特定 `utls` 符号
 - **原因**：在编译 worker 时误加载了根目录的 `go.work`，导致引用了标准版本的 `utls` 而非特定补丁版。
 - **对策**：在编译或测试 `zju-connect` 相关代码时，必须显式附加 `GOWORK=off` 环境变量。
 
-### 2. 界面报错「缺少 easyconnect-worker 核心」
-- **原因**：程序在当前运行路径、可执行文件所在同级目录及 `core/` 子目录下均未找到 `easyconnect-worker(.exe)`。
+### 2. 界面报错「缺少 connect-hub-worker 核心」
+- **原因**：程序在当前运行路径、可执行文件所在同级目录及 `core/` 子目录下均未找到 `connect-hub-worker(.exe)`。
 - **对策**：检查构建目录结构，确保内部程序放置在 `core/` 下；本地调试时可通过环境变量指定：
   ```bash
-  export EASYCONNECT_WORKER=/path/to/easyconnect-worker
+  export CONNECT_HUB_WORKER=/path/to/connect-hub-worker
   ```
 
 ### 3. Windows 提示「网络助手版本不匹配（需要协议 v7）」

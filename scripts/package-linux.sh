@@ -5,6 +5,12 @@ export GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
 
 app_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 worker_root=${ZJU_CONNECT_ROOT:-$(cd -- "$app_root/../zju-connect" && pwd)}
+# worker 的源码目录改名过（cmd/easyconnect-worker）；固定的提交可能还停在旧路径上，
+# 所以按存在的目录选，产物名始终是新的。
+worker_cmd=./cmd/connect-hub-worker
+if [[ ! -d "$worker_root/cmd/connect-hub-worker" ]]; then
+  worker_cmd=./cmd/easyconnect-worker
+fi
 # The two independently built modules must agree before bundling their IPC.
 worker_commit=$(git -C "$worker_root" rev-parse --short HEAD 2>/dev/null || echo unknown)
 go_tool=${GO:-go}
@@ -35,7 +41,7 @@ if [[ "$helper_protocol" != 11 ]]; then
 fi
 "$go_tool" list -m all > "$bundle/desktop-modules.txt"
 cd "$worker_root"
-env GOWORK=off GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/core/easyconnect-worker" ./cmd/easyconnect-worker
+env GOWORK=off GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/core/connect-hub-worker" "$worker_cmd"
 env GOWORK=off "$go_tool" list -m all > "$bundle/worker-modules.txt"
 
 install -m 0644 "$app_root/resources/icon.png" "$bundle/resources/icon.png"
@@ -59,7 +65,7 @@ Worker IPC protocol: 7
 Worker source commit: $worker_commit
 Linux capture helper protocol: $helper_protocol
 Scope: IPv4 TCP and DNS. System IPv4 UDP for eligible L3 sessions is experimental; IPv6 is unsupported.
-Layout: connect-hub at the bundle root; easyconnect-worker and
+Layout: connect-hub at the bundle root; connect-hub-worker and
 core/connect-hub-capture under core/. Launch only connect-hub (or start.sh);
 the two programs in core/ are internal and start on demand.
 The helper's installed name, systemd unit and /run/connect-hub-capture-<uid>
@@ -77,7 +83,7 @@ install -m 0755 "$app_root/packaging/linux/test-worker.sh" "$bundle/test-worker.
 
 printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'bundle_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)' 'cd "$bundle_dir"' 'exec "$bundle_dir/connect-hub" "$@"' > "$bundle/start.sh"
 chmod +x "$bundle/start.sh"
-chmod +x "$bundle/connect-hub" "$bundle/core/easyconnect-worker" "$bundle/core/connect-hub-capture" "$bundle/test-worker.sh" "$bundle/install-capture-helper.sh" "$bundle/uninstall-capture-helper.sh" "$bundle/install-desktop-entry.sh"
+chmod +x "$bundle/connect-hub" "$bundle/core/connect-hub-worker" "$bundle/core/connect-hub-capture" "$bundle/test-worker.sh" "$bundle/install-capture-helper.sh" "$bundle/uninstall-capture-helper.sh" "$bundle/install-desktop-entry.sh"
 
 cd "$bundle"
 find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS

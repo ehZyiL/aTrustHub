@@ -31,7 +31,7 @@ Connect Hub 在 Windows 平台提供两种分发形式：
    ConnectHub/
    ├── connect-hub.exe              # 主程序（双击运行此文件）
    ├── core/
-   │   ├── easyconnect-worker.exe   # VPN 协议处理引擎
+   │   ├── connect-hub-worker.exe   # VPN 协议处理引擎
    │   └── connect-hub-capture.exe  # 操作系统网络与抓包助手
    ├── resources/                   # 图标与界面资源
    ├── LICENSES/                    # 开源许可说明

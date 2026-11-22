@@ -23,7 +23,7 @@ flowchart TD
         Netstack["gVisor 用户态内存网络栈适配层"]
     end
 
-    subgraph WorkerProcess ["VPN 协议核心 (core/easyconnect-worker.exe)"]
+    subgraph WorkerProcess ["VPN 协议核心 (core/connect-hub-worker.exe)"]
         ECWorker["EasyConnect / aTrust 隧道封装 (IPC v7)"]
     end
 

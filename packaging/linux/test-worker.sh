@@ -4,11 +4,14 @@ set -euo pipefail
 bundle_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 worker=${1:-}
 if [[ -z "$worker" ]]; then
-  # 内部程序在 core/ 里；平铺位置留给拆分前的包。
-  worker="$bundle_dir/core/easyconnect-worker"
-  if [[ ! -x "$worker" ]]; then
-    worker="$bundle_dir/easyconnect-worker"
-  fi
+  # 内部程序在 core/ 里；平铺位置留给开发目录，旧文件名留给改名前的包。
+  for candidate in core/connect-hub-worker connect-hub-worker core/easyconnect-worker easyconnect-worker; do
+    if [[ -x "$bundle_dir/$candidate" ]]; then
+      worker="$bundle_dir/$candidate"
+      break
+    fi
+  done
+  worker=${worker:-$bundle_dir/core/connect-hub-worker}
 fi
 test -x "$worker" || { printf 'Worker binary not found: %s\n' "$worker" >&2; exit 1; }
 set +e

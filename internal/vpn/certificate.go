@@ -63,7 +63,7 @@ func probeGatewayCertificate(ctx context.Context, bin, server string, port int) 
 	}
 	var reply workeripc.Message
 	if json.Unmarshal(output, &reply) != nil || reply.Version != workeripc.Version || reply.Session != id || reply.Address != address {
-		return nil, errors.New("证书读取核心未返回兼容应答，请同时更新主程序和 easyconnect-worker")
+		return nil, errors.New("证书读取核心未返回兼容应答，请同时更新主程序和 connect-hub-worker")
 	}
 	if reply.Type == "error" {
 		return nil, errors.New("无法读取网关证书，请检查地址和网络后重试")

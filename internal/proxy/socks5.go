@@ -194,6 +194,24 @@ func (s *Server) untrack(conn net.Conn) {
 	s.mu.Unlock()
 }
 
+// bufferedConn lets the relay keep reading through the handshake's buffer. The
+// bufio.Reader in front of a connection has usually consumed bytes past the
+// request (a pipelined HTTP request, or a client that sends its payload right
+// after CONNECT); reading from the raw conn would drop them.
+type bufferedConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (c bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+func (c bufferedConn) CloseWrite() error {
+	if w, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return w.CloseWrite()
+	}
+	return nil
+}
+
 func (s *Server) logf(format string, args ...any) {
 	if s.opts.Logf != nil {
 		s.opts.Logf(format, args...)
@@ -258,7 +276,10 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 	if first[0] == 0x04 {
-		if s.opts.SOCKSOnly {
+		// SOCKS4 has no authentication field, so it can never satisfy Auth. It
+		// stays available on the unauthenticated loopback listener only.
+		if s.opts.SOCKSOnly || s.opts.Auth != nil {
+			s.logf("socks4: rejected because this listener requires authentication")
 			return
 		}
 		s.handleSOCKS4(conn, br)
@@ -311,7 +332,7 @@ func (s *Server) handle(conn net.Conn) {
 	if err := s.reply(conn, replySuccess); err != nil {
 		return
 	}
-	pipe(conn, remote)
+	pipe(bufferedConn{Conn: conn, r: br}, remote)
 }
 
 func (s *Server) negotiate(conn net.Conn, br *bufio.Reader) error {

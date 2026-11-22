@@ -93,7 +93,7 @@ func (s *Server) handleSOCKS4(conn net.Conn, br *bufio.Reader) {
 		return
 	}
 	_ = conn.SetDeadline(time.Time{})
-	pipe(conn, remote)
+	pipe(bufferedConn{Conn: conn, r: br}, remote)
 }
 
 func (s *Server) replySOCKS4(conn net.Conn, code byte) error {

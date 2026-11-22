@@ -1097,13 +1097,25 @@ func (a *app) maybeRestoreCaptureMode() {
 
 // enableSystemProxyByDefault 打开系统代理，但不覆盖别人已经设好的代理：系统代理
 // 全机只有一份，抢过来等于替用户改掉了他自己的分流。
+//
+// 没接管成功时日志和界面提示都写一次：日志在设置页的「状态与日志」里，而用户这
+// 一刻看的是首屏，只说在日志里，“登录后没接管”就像是本应用没干活。
 func (a *app) enableSystemProxyByDefault(target string) {
 	if systemProxyForeignFn(target) {
-		a.tunLogf("系统代理已被其他软件设置（或无法读取），未自动开启；要接管请在下拉里选「系统代理」")
+		// 带上实测值：否则“已被其他软件设置”无法区分是谁占着、占着哪个地址。
+		// 再点明它是 Windows 全局设置：删掉应用的数据目录不会影响它，不说清用户会
+		// 以为“清空数据 = 恢复默认”，然后觉得提示在胡说。
+		detail := systemProxyStateFn(target)
+		a.tunLogf("系统代理已被其他软件设置，未自动开启（%s；本应用入口 %s）。"+
+			"系统代理是 Windows 全局设置，与数据目录无关；要接管请先关掉占用它的软件，再到下拉里选「系统代理」",
+			detail, target)
+		a.setToast("系统代理是 Windows 全局设置，现被其他软件占用（" + detail +
+			"，本应用入口 " + target + "），本次未自动接管；要接管请先关掉那个软件的系统代理")
 		return
 	}
 	if err := applySystemProxyFn(target, true); err != nil {
 		a.tunLogf("自动开启系统代理失败：%v", err)
+		a.setToast("自动开启系统代理失败：" + err.Error())
 		return
 	}
 	a.sysProxyOn.Store(true)

@@ -102,3 +102,25 @@ func TestCaptureProxyCoexistsWithExternalProxyWithoutChangingIt(t *testing.T) {
 		}
 	}
 }
+
+// 恢复记录可能是旧版本写的（那时还没有 PAC 字段）：描述字段不一致不能当成
+// “外部修改”，否则 TUN 会因为自己的升级而起不来；真正被改过的项仍然要能识别。
+func TestRegistryStateComparisonIgnoresDescriptiveFields(t *testing.T) {
+	live := captureProxySnapshot{Enabled: 0, Server: "socks=127.0.0.1:1080", Fingerprint: "f", PAC: true, Automatic: true}
+	stored := live
+	stored.PAC = false // 旧记录里没有这个字段
+	if !live.sameRegistryState(stored) {
+		t.Fatal("缺少 PAC 字段的旧记录被当成了外部修改")
+	}
+
+	moved := live
+	moved.Server = "127.0.0.1:10808"
+	if live.sameRegistryState(moved) {
+		t.Fatal("代理地址变了却没识别出来")
+	}
+	toggled := live
+	toggled.Enabled = 1
+	if live.sameRegistryState(toggled) {
+		t.Fatal("ProxyEnable 变了却没识别出来（它不在 Fingerprint 里，必须单独比）")
+	}
+}

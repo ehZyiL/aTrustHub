@@ -69,9 +69,12 @@ func TestEnableSystemProxyByDefault(t *testing.T) {
 // 别的程序已经设了系统代理时不抢：全机只有一份设置，抢过来等于替用户改分流。
 func TestEnableSystemProxyByDefaultKeepsForeignProxy(t *testing.T) {
 	a := testApp(t)
-	origApply, origForeign := applySystemProxyFn, systemProxyForeignFn
-	t.Cleanup(func() { applySystemProxyFn, systemProxyForeignFn = origApply, origForeign })
+	origApply, origForeign, origState := applySystemProxyFn, systemProxyForeignFn, systemProxyStateFn
+	t.Cleanup(func() {
+		applySystemProxyFn, systemProxyForeignFn, systemProxyStateFn = origApply, origForeign, origState
+	})
 	systemProxyForeignFn = func(string) bool { return true }
+	systemProxyStateFn = func(string) string { return "ProxyEnable=1，ProxyServer=socks=127.0.0.1:7890" }
 	calls := 0
 	applySystemProxyFn = func(string, bool) error { calls++; return nil }
 
@@ -82,8 +85,17 @@ func TestEnableSystemProxyByDefaultKeepsForeignProxy(t *testing.T) {
 	if a.sysProxyOn.Load() {
 		t.Fatal("没写成功就不能记成已接管")
 	}
-	if logged := tailLog(a.bus.Tail(5)); !strings.Contains(logged, "未自动开启") {
+	logged := tailLog(a.bus.Tail(5))
+	if !strings.Contains(logged, "未自动开启") {
 		t.Errorf("应当记一条原因日志，实际 %q", logged)
+	}
+	// 日志要带实测值，否则排障时无法区分是哪个程序占着系统代理。
+	if !strings.Contains(logged, "socks=127.0.0.1:7890") {
+		t.Errorf("原因日志没有带上实测值，实际 %q", logged)
+	}
+	// 同一个原因也要弹到界面上：用户此刻看的是首屏，不会去开设置页的日志。
+	if !strings.Contains(a.toast, "socks=127.0.0.1:7890") || !strings.Contains(a.toast, "未自动接管") {
+		t.Errorf("应当弹出提示并带上实测值，实际 %q", a.toast)
 	}
 }
 
@@ -101,6 +113,9 @@ func TestEnableSystemProxyByDefaultReportsFailure(t *testing.T) {
 	}
 	if logged := tailLog(a.bus.Tail(5)); !strings.Contains(logged, "自动开启系统代理失败") {
 		t.Errorf("应当记一条失败原因，实际 %q", logged)
+	}
+	if !strings.Contains(a.toast, "自动开启系统代理失败") {
+		t.Errorf("失败也要弹提示，否则用户以为已经接管，实际 %q", a.toast)
 	}
 }
 

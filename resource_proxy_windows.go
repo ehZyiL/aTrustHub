@@ -46,6 +46,7 @@ func captureProxyRegistryOps() captureProxyOps {
 				case "AutoConfigURL":
 					if value != "" {
 						snapshot.Automatic = true
+						snapshot.PAC = true
 					}
 				}
 			}
@@ -86,14 +87,31 @@ func systemProxyOwned(address string) bool {
 }
 
 // systemProxyForeign 报告系统代理被别的程序开着（不是我们写的那个入口）。
-// 只看手动代理：自动检测/PAC 在很多机器上默认就开着，它不阻碍手动代理生效，
-// 把它当成“被占用”会让默认接管永远开不起来。
+// 只有手动代理算数：自动检测（AutoDetect）在很多机器上默认就开着，也不妨碍手动
+// 代理生效；而 PAC 会接管分流，属于别人的策略，不抢——两者分开在
+// proxyForeignReason 里处理。
 func systemProxyForeign(address string) bool {
 	snapshot, err := captureProxyRegistryOps().read()
 	if err != nil {
 		return true // 读不到就别动：宁可不开，也不覆盖别人的设置
 	}
-	return snapshot.Enabled != 0 && !ownsProxy(snapshot, address)
+	return proxyForeignReason(snapshot, address) != ""
+}
+
+// systemProxyState 把系统代理的当前实测值拼成一行，给日志用：
+// “已被其他软件设置”对排障来说信息量为零，得知道占着的是什么地址。
+func systemProxyState(address string) string {
+	snapshot, err := captureProxyRegistryOps().read()
+	if err != nil {
+		return "读不到系统代理设置：" + err.Error()
+	}
+	if reason := proxyForeignReason(snapshot, address); reason != "" {
+		return reason
+	}
+	if snapshot.Enabled == 0 {
+		return "ProxyEnable=0（系统代理已关闭）"
+	}
+	return "ProxyEnable=1，ProxyServer=" + snapshot.Server + "（本应用入口）"
 }
 
 func recoverResourceProxy(dir string) error {

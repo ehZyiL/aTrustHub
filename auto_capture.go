@@ -120,12 +120,12 @@ func (a *app) onlineResourceGateways() autoCaptureTargets {
 }
 
 func (a *app) autoCaptureTunBlocking() bool {
-	if a.tunOn || a.tunPending {
+	if a.tunOn.Load() || a.tunPending.Load() {
 		return true
 	}
 	// On Linux global TUN is not available today, so a stale TunEnabled value
 	// from another platform must not block app capture forever.
-	return supportsElevatedTUN() && a.cfg.Settings.TunEnabled
+	return supportsElevatedTUN() && a.configForBackground().Settings.TunEnabled
 }
 
 // resetAutoCaptureLocked clears the retry budget and cached helper state for a
@@ -247,7 +247,7 @@ func (a *app) setAutoRestoreAppCapture(on bool) error {
 			return a.failAutoRestoreSetting(on, err)
 		}
 	} else {
-		a.cfg.Settings.AutoRestoreAppCapture = on
+		a.mutateConfig(func(cfg *model.Config) { cfg.Settings.AutoRestoreAppCapture = on })
 	}
 	if on {
 		a.autoCapture.mu.Lock()
@@ -272,10 +272,10 @@ func (a *app) failAutoRestoreSetting(on bool, err error) error {
 				return nil
 			})
 		}
-		a.cfg.Settings.AutoRestoreAppCapture = false
+		a.mutateConfig(func(cfg *model.Config) { cfg.Settings.AutoRestoreAppCapture = false })
 		return err
 	}
-	a.cfg.Settings.AutoRestoreAppCapture = false
+	a.mutateConfig(func(cfg *model.Config) { cfg.Settings.AutoRestoreAppCapture = false })
 	a.autoCapture.mu.Lock()
 	a.autoCapture.enabled = false
 	a.autoCapture.mu.Unlock()
@@ -315,7 +315,7 @@ func (a *app) maybeAutoRestoreAppCapture() {
 	a.autoCapture.mu.Lock()
 	enabled := a.autoCapture.enabled
 	a.autoCapture.mu.Unlock()
-	if a.quitRequested || !enabled {
+	if a.quitRequested.Load() || !enabled {
 		return
 	}
 	if ok, _ := autoCaptureSupportedFn(); !ok {
@@ -365,7 +365,7 @@ func (a *app) maybeAutoRestoreAppCapture() {
 	if !next.IsZero() && now.Before(next) {
 		return
 	}
-	if tunBlocking || a.sysProxyOn {
+	if tunBlocking || a.sysProxyOn.Load() {
 		a.waitAutoCapture("全局 TUN 或系统代理正在接管")
 		return
 	}
@@ -386,7 +386,7 @@ func (a *app) maybeAutoRestoreAppCapture() {
 	// Helper readiness is another new opportunity. Reset any earlier failure
 	// (for example the helper was installed after a capture start failed).
 	a.autoCapture.mu.Lock()
-	if !a.autoCapture.enabled || a.quitRequested || a.tunOn || a.tunPending || a.sysProxyOn {
+	if !a.autoCapture.enabled || a.quitRequested.Load() || a.tunOn.Load() || a.tunPending.Load() || a.sysProxyOn.Load() {
 		a.autoCapture.mu.Unlock()
 		return
 	}
@@ -418,7 +418,7 @@ func (a *app) maybeAutoRestoreAppCapture() {
 	run.Start()
 	// The user may have switched modes or cancelled while the helper check and
 	// controller start were in flight. Undo a start that outlived that intent.
-	if !a.autoRestoreEnabled() || a.tunOn || a.tunPending || a.sysProxyOn {
+	if !a.autoRestoreEnabled() || a.tunOn.Load() || a.tunPending.Load() || a.sysProxyOn.Load() {
 		run.Stop()
 	}
 }

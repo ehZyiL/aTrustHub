@@ -2,22 +2,56 @@ package main
 
 import (
 	"runtime"
+	"sync"
 	"testing"
 )
+
+// proxyCalls records every write the app asks for, and keeps the journal
+// directory empty so nothing can reach the real registry from a unit test.
+type proxyCalls struct {
+	mu      sync.Mutex
+	targets []string
+	on      []bool
+	owned   func(string) bool
+}
+
+func (p *proxyCalls) apply(target string, on bool) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.targets = append(p.targets, target)
+	p.on = append(p.on, on)
+	return nil
+}
+
+func (p *proxyCalls) writes() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.targets)
+}
+
+func stubSystemProxySeams(t *testing.T, owned func(string) bool) *proxyCalls {
+	t.Helper()
+	originalOwned, originalApply := systemProxyOwnedFn, applySystemProxyFn
+	p := &proxyCalls{owned: owned}
+	systemProxyOwnedFn = owned
+	applySystemProxyFn = p.apply
+	t.Cleanup(func() {
+		systemProxyOwnedFn, applySystemProxyFn = originalOwned, originalApply
+		setSystemProxyJournalDir("")
+	})
+	return p
+}
 
 func TestExternalProxyReplacementReleasesStaleSwitchAndPreservesSettings(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows shared proxy ownership")
 	}
-	originalOwned, originalApply := systemProxyOwnedFn, applySystemProxyFn
-	t.Cleanup(func() { systemProxyOwnedFn, applySystemProxyFn = originalOwned, originalApply })
-	systemProxyOwnedFn = func(string) bool { return false }
-	writes := 0
-	applySystemProxyFn = func(string, bool) error { writes++; return nil }
+	p := stubSystemProxySeams(t, func(string) bool { return false })
 	for _, action := range []string{"guard", "exit", "toggle"} {
 		t.Run(action, func(t *testing.T) {
 			a := testApp(t)
-			a.sysProxyOn, a.sysProxySwitch = true, true
+			a.sysProxyOn.Store(true)
+			a.sysProxySwitch.Store(true)
 			switch action {
 			case "guard":
 				a.guardSystemProxy()
@@ -26,10 +60,47 @@ func TestExternalProxyReplacementReleasesStaleSwitchAndPreservesSettings(t *test
 			case "toggle":
 				a.toggleSystemProxy()
 			}
-			if a.sysProxyOn || a.sysProxySwitch || writes != 0 {
+			if a.sysProxyOn.Load() || a.sysProxySwitch.Load() || p.writes() != 0 {
 				t.Fatal("stale proxy ownership overwrote external settings")
 			}
 		})
+	}
+}
+
+// A changed aggregate port leaves the registry on the address of the previous
+// configuration. That is still our own value, so it must be re-pointed instead of
+// being released as a third party's setting (which would leave the machine
+// pointing at a dead port).
+func TestChangedPortRepointsOwnStaleAddress(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows shared proxy ownership")
+	}
+	old := "127.0.0.1:1080"
+	p := stubSystemProxySeams(t, func(addr string) bool { return addr == old })
+	a := testApp(t)
+	// The configured entry moved to another port since the journal was written.
+	a.cfg.Settings.AggregatePort = 2080
+	a.sysProxyOn.Store(true)
+	a.sysProxySwitch.Store(true)
+	if err := writeSystemProxyRecord(systemProxyJournalPath(a.dir), systemProxyRecord{
+		Before:    captureProxySnapshot{Enabled: 0},
+		Installed: captureProxySnapshot{Enabled: 1, Server: "socks=" + old},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if a.releaseLostSystemProxy() {
+		t.Fatal("our own previous endpoint was released as a third party's")
+	}
+	if !a.sysProxyOn.Load() || !a.sysProxySwitch.Load() {
+		t.Fatal("ownership was dropped")
+	}
+	want := a.systemProxyAddress()
+	if want == old {
+		t.Fatalf("test setup: configured address equals the stale one (%s)", want)
+	}
+	if p.writes() != 1 || p.targets[0] != want || !p.on[0] {
+		t.Fatalf("writes = %v %v, want one apply of %q", p.targets, p.on, want)
 	}
 }
 

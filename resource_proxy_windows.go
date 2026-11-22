@@ -38,11 +38,15 @@ func captureProxyRegistryOps() captureProxyOps {
 					return snapshot, err
 				}
 				values[name] = []any{value, kind, err == nil}
-				if name == "ProxyServer" {
+				switch name {
+				case "ProxyServer":
 					snapshot.Server = value
-				}
-				if name == "AutoConfigURL" && value != "" {
-					snapshot.Automatic = true
+				case "ProxyOverride":
+					snapshot.Override = value
+				case "AutoConfigURL":
+					if value != "" {
+						snapshot.Automatic = true
+					}
 				}
 			}
 			auto, kind, err := key.GetIntegerValue("AutoDetect")
@@ -92,7 +96,7 @@ func systemProxyForeign(address string) bool {
 	return snapshot.Enabled != 0 && !ownsProxy(snapshot, address)
 }
 
-func recoverResourceProxy(dir, address string) error {
+func recoverResourceProxy(dir string) error {
 	path := filepath.Join(dir, "system-tun-proxy-recovery.json")
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -104,6 +108,12 @@ func recoverResourceProxy(dir, address string) error {
 	var record captureProxyRecovery
 	if len(data) > 16384 || json.Unmarshal(data, &record) != nil || record.Before.Enabled != 1 || record.Installed.Enabled != 0 || record.Before.Fingerprint != record.Installed.Fingerprint {
 		return errors.New("系统 TUN 代理恢复记录无效")
+	}
+	// The address comes from the record itself, so recovery no longer depends on
+	// the aggregate listener being configured or up at this moment.
+	address := proxyAddressFromServer(record.Installed.Server)
+	if address == "" {
+		return errors.New("恢复记录缺少原代理入口地址")
 	}
 	if record.Before.Server != "socks="+address && record.Before.Server != address {
 		return errors.New("旧代理入口已改变，保留关闭状态，请在界面选择代理模式")

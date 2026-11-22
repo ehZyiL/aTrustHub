@@ -101,7 +101,7 @@ func TestEmptyView(t *testing.T) {
 		t.Errorf("系统代理关闭时不该显示统一入口；texts = %s", texts)
 	}
 
-	a.sysProxyOn = true
+	a.sysProxyOn.Store(true)
 	on := strings.Join(ui.NewTester(a.view, 1120, 800).Texts(), "|")
 	if !strings.Contains(on, "统一入口") {
 		t.Errorf("系统代理开启后应当显示统一入口；texts = %s", on)

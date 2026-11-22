@@ -600,7 +600,7 @@ func (a *app) probeHostText(id, host string, ports []int) string {
 	}
 	// 全局 TUN 接管时，本地的拨号在 TUN 栈里就完成了握手，测出来永远是
 	// 「可达 2ms」。这时让 helper 用真实隧道连一次；helper 不支持时退回直连。
-	if a.tunOn && hostInTun(a.tunPoints, id) {
+	if a.tunOn.Load() && hostInTun(a.tunPoints, id) {
 		if point := a.cfg.Find(id); point != nil {
 			for _, p := range ports {
 				addr := net.JoinHostPort(host, strconv.Itoa(p))
@@ -824,6 +824,10 @@ func (a *app) captureModes() []string {
 
 // hasPointWithProtocol 看配置里有没有这个协议的接入点，不看是否在线。
 func (a *app) hasPointWithProtocol(protocol string) bool {
+	// canUseGlobalTUN -> captureSupported -> this runs on the state ticker, so the
+	// read has to take the same lock the UI takes when it saves the configuration.
+	a.cfgMu.RLock()
+	defer a.cfgMu.RUnlock()
 	for _, p := range a.cfg.Points {
 		if p.Protocol == protocol {
 			return true
@@ -878,7 +882,7 @@ func (a *app) persistCaptureMode(mode string) error {
 // 恢复一个从没跑起来的东西；两边都停了就记成「不使用」。
 // 退出过程不记：退出本来就会关代理、停 TUN，记下来会把用户的默认接管清掉。
 func (a *app) rememberCaptureMode(mode string) {
-	if a.quitRequested || a.cfg.Settings.CaptureMode == captureModeID(mode) {
+	if a.quitRequested.Load() || a.cfg.Settings.CaptureMode == captureModeID(mode) {
 		return
 	}
 	if err := a.persistCaptureMode(mode); err != nil {
@@ -892,7 +896,7 @@ func (a *app) rememberCaptureMode(mode string) {
 // 失败也值得下次再试。这是唯一一档记「意图」而不是「结果」的：系统代理失败是
 // 即时可见的，应用接管在启动时没法自动开。
 func (a *app) rememberTunIntent(id string) {
-	if a.quitRequested || id == "" {
+	if a.quitRequested.Load() || id == "" {
 		return
 	}
 	a.persistTunState(true, id)
@@ -938,9 +942,9 @@ func (a *app) captureMode() string {
 	switch {
 	case a.resourceTUNActive():
 		return captureAppCapture
-	case a.tunOn || a.tunPending:
+	case a.tunOn.Load() || a.tunPending.Load():
 		return captureGlobalTUN
-	case a.sysProxyOn:
+	case a.sysProxyOn.Load():
 		return captureSystem
 	}
 	return captureOff
@@ -995,7 +999,7 @@ func (a *app) applyCaptureMode(mode string) {
 	case captureGlobalTUN:
 		// 只能交给 aTrust 点：旧 TUN 组件只读 aTrust 保存的会话。
 		if pid := a.firstOnlineATrustPoint(); pid != "" {
-			a.tunWanted = true
+			a.tunWanted.Store(true)
 			// 选中即记意图：TUN 自己会按限流重试，不依赖这一次能不能起来。
 			a.rememberTunIntent(pid)
 			go a.startTUNSerialized(pid)
@@ -1094,7 +1098,7 @@ func (a *app) statusBanner(c *ui.Context, views []vpn.View) {
 			ui.Text(c, title).FontSize(13).Bold()
 			ui.Text(c, summary).FontSize(11).TextColor(t.TextMuted).
 				Grow(1).MinWidth(0).Ellipsis("…")
-			if a.sysProxyOn {
+			if a.sysProxyOn.Load() {
 				if agg.Running {
 					addr := "socks5://" + displayAddr(agg.Addr)
 					ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
@@ -2001,10 +2005,37 @@ func (a *app) generalSection(c *ui.Context) {
 			a.applySettingsIfChanged()
 		}
 	})
+	if !model.IsLoopbackHost(strings.TrimSpace(d.host)) {
+		ui.Row(c).Gap(12).AlignItems(ui.End).Wrap().Children(func() {
+			ui.Field(c, "代理用户名", func() {
+				e := ui.TextInput(c, &d.proxyUser).Placeholder(model.ProxyUsernameDefault).Width(150)
+				if e.Submitted() || e.PressedOutside() {
+					a.applySettingsIfChanged()
+				}
+			})
+			ui.Field(c, "代理密码", func() {
+				e := ui.TextInput(c, &d.proxyPass).Password().Width(220)
+				if e.Submitted() || e.PressedOutside() {
+					a.applySettingsIfChanged()
+				}
+			})
+			if ui.Button(c, "重新生成").FontSize(11).Clicked() {
+				d.proxyUser = model.ProxyUsernameDefault
+				d.proxyPass = model.NewProxyPassword()
+				a.saveSettings()
+			}
+			if ui.Button(c, "复制密码").FontSize(11).Clicked() {
+				a.copyText(strings.TrimSpace(d.proxyPass))
+			}
+		})
+		ui.Text(c, "局域网访问需要认证：SOCKS5 用这组用户名/密码，HTTP 代理也要同一组；"+
+			"SOCKS4 在需要认证时不可用；密码存在配置文件（仅本用户可读），不进系统凭据库。").
+			FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
+	}
 	a.appearanceFields(c)
 	a.commonSwitches(c)
-	ui.Text(c, "监听 127.0.0.1 只有本机能用；要让局域网里的设备用，"+
-		"改成 0.0.0.0，但 SOCKS5 没有认证，请只在自己信任的网络里这样做。").
+	ui.Text(c, "监听 127.0.0.1 只有本机能用，不需要密码；要让局域网里的设备用，"+
+		"改成 0.0.0.0（或本机的内网地址），此时必须设置代理密码。").
 		FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(560)
 }
 
@@ -2254,7 +2285,7 @@ func (a *app) canLogout(p *model.AccessPoint) bool {
 // askLogout refuses while the global TUN owns the session, then opens the
 // confirmation: forgetting the authentication forces a new QR scan.
 func (a *app) askLogout(v vpn.View) {
-	if a.tunOn {
+	if a.tunOn.Load() {
 		for _, id := range splitIDs(a.tunPoints) {
 			if id == v.ID {
 				a.toast = "这个接入点正被全局 TUN 使用，先关闭 TUN 再退出登录"
@@ -2334,7 +2365,7 @@ func (a *app) quitView(c *ui.Context) {
 			dialogHeader(c, "退出 "+appName, "退出前先确认这几件事")
 			online, _, _ := a.mgr.Counts()
 			line := "退出会断开所有隧道。"
-			if a.tunOn {
+			if a.tunOn.Load() {
 				line += "全局 TUN 会关闭，系统 DNS 与代理恢复原状。"
 			}
 			if online > 0 {
@@ -2529,10 +2560,15 @@ func (a *app) saveEditor() {
 
 	// Secrets first, so that a point is never saved without the creds it
 	// needs when the user typed new ones.
+	// secretWarning 记录"存进了内存但没存进系统凭据库"：不是保存失败，但也不能静默。
+	secretWarning := ""
 	if strings.TrimSpace(d.cred) != "" {
 		if err := a.store.SetPassword(p.ID, d.cred); err != nil {
-			d.err = "保存密码失败：" + err.Error()
-			return
+			if !errors.Is(err, store.ErrSecretNotPersisted) {
+				d.err = "保存密码失败：" + err.Error()
+				return
+			}
+			secretWarning = "系统凭据库不可用：密码只在本次运行有效，重启后需要重新输入"
 		}
 	}
 	if d.clearTOTP {
@@ -2542,8 +2578,11 @@ func (a *app) saveEditor() {
 		}
 	} else if strings.TrimSpace(d.totp) != "" {
 		if err := a.store.SetTOTP(p.ID, strings.TrimSpace(d.totp)); err != nil {
-			d.err = "保存 TOTP 失败：" + err.Error()
-			return
+			if !errors.Is(err, store.ErrSecretNotPersisted) {
+				d.err = "保存 TOTP 失败：" + err.Error()
+				return
+			}
+			secretWarning = "系统凭据库不可用：动态口令密钥只在本次运行有效"
 		}
 	}
 
@@ -2591,6 +2630,9 @@ func (a *app) saveEditor() {
 	}
 	d.open = false
 	a.toast = "已保存「" + p.Name + "」"
+	if secretWarning != "" {
+		a.toast = "已保存「" + p.Name + "」，" + secretWarning
+	}
 }
 
 // detectEditor asks the server which login methods it offers, for the
@@ -2709,21 +2751,21 @@ func (a *app) toggleSystemProxy() bool {
 		a.toast = "系统代理已由其他软件修改，已更新开关状态并保留当前配置"
 		return false
 	}
-	if a.tunOn && !a.sysProxyOn {
+	if a.tunOn.Load() && !a.sysProxyOn.Load() {
 		a.toast = "全局 TUN 已经接管流量，先关掉 TUN 再用系统代理"
-		a.sysProxySwitch = a.sysProxyOn
+		a.sysProxySwitch.Store(a.sysProxyOn.Load())
 		return false
 	}
 	agg := a.mgr.Aggregate()
 	if !agg.Running || agg.Addr == "" {
 		a.toast = "统一入口还没启动"
-		a.sysProxySwitch = a.sysProxyOn
+		a.sysProxySwitch.Store(a.sysProxyOn.Load())
 		return false
 	}
 	// 先确认代理端口真的在监听：指到一个没人听的端口会让整台机器断网。
 	if conn, err := net.DialTimeout("tcp", agg.Addr, 2*time.Second); err != nil {
 		a.toast = "统一入口没有在监听，先别开系统代理"
-		a.sysProxySwitch = a.sysProxyOn
+		a.sysProxySwitch.Store(a.sysProxyOn.Load())
 		return false
 	} else {
 		_ = conn.Close()
@@ -2733,7 +2775,7 @@ func (a *app) toggleSystemProxy() bool {
 		port = port[i+1:]
 	}
 	target := "127.0.0.1:" + port
-	on := !a.sysProxyOn
+	on := !a.sysProxyOn.Load()
 	a.toast = "正在修改系统代理，请授权…"
 	a.invalidate()
 	go func() {
@@ -2743,7 +2785,7 @@ func (a *app) toggleSystemProxy() bool {
 				a.toast = "系统代理设置失败：" + err.Error()
 				return
 			}
-			a.sysProxyOn = on
+			a.sysProxyOn.Store(on)
 			if on {
 				a.toast = "已把系统代理设为 " + target
 			} else {
@@ -2771,6 +2813,8 @@ func (a *app) openSettings() {
 		quitOnClose:           s.QuitOnClose,
 		autoRestoreAppCapture: s.AutoRestoreAppCapture,
 		host:                  s.ListenHost,
+		proxyUser:             s.ProxyUsername,
+		proxyPass:             s.ProxyPassword,
 		port:                  strconv.Itoa(s.AggregatePort),
 		interval:              strconv.Itoa(s.HealthIntervalSec),
 		routing:               s.Routing.Label(),
@@ -2811,6 +2855,16 @@ func (a *app) saveSettings() {
 		d.err = "监听地址不能为空"
 		return
 	}
+	// A LAN listener without credentials would be an open relay, so generate one
+	// instead of refusing the change; the user can copy it from the same panel.
+	if !model.IsLoopbackHost(host) {
+		if strings.TrimSpace(d.proxyUser) == "" {
+			d.proxyUser = model.ProxyUsernameDefault
+		}
+		if strings.TrimSpace(d.proxyPass) == "" {
+			d.proxyPass = model.NewProxyPassword()
+		}
+	}
 	for _, p := range a.cfg.Points {
 		if p.SocksPort == port {
 			d.err = fmt.Sprintf("端口 %d 已被「%s」的独立代理使用", port, p.Name)
@@ -2819,6 +2873,8 @@ func (a *app) saveSettings() {
 	}
 	_, err = a.store.Update(func(cfg *model.Config) error {
 		cfg.Settings.ListenHost = host
+		cfg.Settings.ProxyUsername = strings.TrimSpace(d.proxyUser)
+		cfg.Settings.ProxyPassword = strings.TrimSpace(d.proxyPass)
 		cfg.Settings.AggregatePort = port
 		cfg.Settings.HealthIntervalSec = interval
 		cfg.Settings.Routing = routingFromLabel(d.routing)
@@ -2857,6 +2913,8 @@ func (a *app) settingsDirty() bool {
 	d := &a.settings
 	s := a.cfg.Settings
 	return strings.TrimSpace(d.host) != s.ListenHost ||
+		strings.TrimSpace(d.proxyUser) != s.ProxyUsername ||
+		strings.TrimSpace(d.proxyPass) != s.ProxyPassword ||
 		strings.TrimSpace(d.port) != strconv.Itoa(s.AggregatePort) ||
 		strings.TrimSpace(d.interval) != strconv.Itoa(s.HealthIntervalSec) ||
 		appearanceFromLabel(d.appearance) != a.savedAppearance() ||

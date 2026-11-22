@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -133,6 +134,52 @@ func TestResourceTUNKeepsFailedStartupCleanupForRetry(t *testing.T) {
 		t.Fatal("cleanup retry discarded the original runtime")
 	}
 	c.Close()
+}
+
+// N8: one gateway that cannot be captured must not cancel the ones that can.
+func TestResourceTUNAcceptsUsableSubsetWhenOneGatewayIsSkipped(t *testing.T) {
+	r := &controllerRuntime{done: make(chan struct{})}
+	var started atomic.Int32
+	c := &resourceTUNController{
+		configs: func() ([]localapps.CaptureConfig, error) {
+			return []localapps.CaptureConfig{{Key: "A"}}, partialCaptureError{reasons: []string{"B 不支持严格 VPN 拨号"}}
+		},
+		start: func(context.Context, []localapps.CaptureConfig) (localapps.SystemCapture, error) {
+			started.Add(1)
+			return r, nil
+		},
+		suspendProxy: func() (func() error, error) { return func() error { return nil }, nil },
+	}
+	t.Cleanup(func() { c.Close() })
+	c.Start()
+	waitController(t, c, func(s resourceTUNStatus) bool { return s.Running })
+	if started.Load() != 1 {
+		t.Fatal("the usable subset was not started")
+	}
+	if got := c.View().Error; !strings.Contains(got, "B 不支持严格 VPN 拨号") {
+		t.Fatalf("status does not name the skipped gateway: %q", got)
+	}
+}
+
+// A configuration error that leaves nothing to capture still refuses to start.
+func TestResourceTUNFatalConfigErrorStopsStart(t *testing.T) {
+	var started atomic.Int32
+	c := &resourceTUNController{
+		configs: func() ([]localapps.CaptureConfig, error) {
+			return nil, errors.New("请先登录至少一个加入统一资源池的网关")
+		},
+		start: func(context.Context, []localapps.CaptureConfig) (localapps.SystemCapture, error) {
+			started.Add(1)
+			return &controllerRuntime{done: make(chan struct{})}, nil
+		},
+		suspendProxy: func() (func() error, error) { return func() error { return nil }, nil },
+	}
+	t.Cleanup(func() { c.Close() })
+	c.Start()
+	waitController(t, c, func(s resourceTUNStatus) bool { return !s.Busy && s.Error != "" })
+	if started.Load() != 0 {
+		t.Fatal("a fatal configuration error still started the runtime")
+	}
 }
 
 func TestResourceTUNRetriesProxyRestoreWithoutRepeatingRuntimeStop(t *testing.T) {

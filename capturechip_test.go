@@ -120,8 +120,8 @@ func TestCaptureMenuPromptsForUnreadyMode(t *testing.T) {
 		t.Fatalf("提示应当说明缺 aTrust 会话，实际 %q", reason)
 	}
 	a.applyCaptureMode(captureGlobalTUN)
-	if a.tunOn || a.tunWanted {
-		t.Fatalf("前置不足时不该进入 TUN 状态，tunOn=%v tunWanted=%v", a.tunOn, a.tunWanted)
+	if a.tunOn.Load() || a.tunWanted.Load() {
+		t.Fatalf("前置不足时不该进入 TUN 状态，tunOn=%v tunWanted=%v", a.tunOn.Load(), a.tunWanted.Load())
 	}
 	if !strings.Contains(a.toast, "aTrust") {
 		t.Errorf("预期提示缺少在线 aTrust 接入点，实际 toast=%q", a.toast)
@@ -213,13 +213,13 @@ func TestCaptureRefusalKeepsCurrentMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.cfg = a.store.Config()
-	a.sysProxyOn = true
+	a.sysProxyOn.Store(true)
 	if got := a.captureMode(); got != captureSystem {
 		t.Fatalf("初始接管方式应当为 %q，实际 %q", captureSystem, got)
 	}
 	// 没有在线接入点：应用接管开不了。
 	a.applyCaptureMode(captureAppCapture)
-	if !a.sysProxyOn {
+	if !a.sysProxyOn.Load() {
 		t.Fatal("切换失败不该把系统代理关掉")
 	}
 	if got := a.captureMode(); got != captureSystem {
@@ -241,7 +241,7 @@ func TestToggleSystemProxyReportsRefusal(t *testing.T) {
 		t.Fatal("统一入口没监听时不该发起写入")
 	}
 	// 旧 TUN 还在接管。
-	a.tunOn = true
+	a.tunOn.Store(true)
 	if a.toggleSystemProxy() {
 		t.Fatal("全局 TUN 还在接管时不该发起写入")
 	}
@@ -254,12 +254,12 @@ func TestRememberCaptureMode(t *testing.T) {
 	if defaultMode != model.CaptureModeSystem {
 		t.Fatalf("默认接管方式应为系统代理，实际 %q", defaultMode)
 	}
-	a.quitRequested = true
+	a.quitRequested.Store(true)
 	a.rememberCaptureMode(captureAppCapture)
 	if got := a.store.Config().Settings.CaptureMode; got != defaultMode {
 		t.Errorf("退出过程不该改记住的接管方式，实际 %q", got)
 	}
-	a.quitRequested = false
+	a.quitRequested.Store(false)
 	a.rememberCaptureMode(captureAppCapture)
 	if got := a.store.Config().Settings.CaptureMode; got != model.CaptureModeApp {
 		t.Errorf("生效的档位应当落盘，实际 %q", got)

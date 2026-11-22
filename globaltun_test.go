@@ -119,26 +119,26 @@ func TestSystemProxyGuards(t *testing.T) {
 	a := testApp(t)
 
 	// TUN 开启时，开关不接受打开。
-	a.tunOn = true
-	a.sysProxyOn = false
-	a.sysProxySwitch = true
+	a.tunOn.Store(true)
+	a.sysProxyOn.Store(false)
+	a.sysProxySwitch.Store(true)
 	a.toggleSystemProxy()
-	if a.sysProxySwitch {
+	if a.sysProxySwitch.Load() {
 		t.Error("TUN 开启时不应允许打开系统代理")
 	}
 
 	// 统一入口没在监听时，也不允许打开。
-	a.tunOn = false
-	a.sysProxySwitch = true
+	a.tunOn.Store(false)
+	a.sysProxySwitch.Store(true)
 	a.toggleSystemProxy()
-	if a.sysProxySwitch {
+	if a.sysProxySwitch.Load() {
 		t.Error("统一入口未监听时不应允许打开系统代理")
 	}
 
 	// 已经开着但监听没了：守卫要把它关掉。
-	a.sysProxyOn = true
+	a.sysProxyOn.Store(true)
 	a.guardSystemProxy()
-	if a.sysProxyOn {
+	if a.sysProxyOn.Load() {
 		t.Error("统一入口停止后应当自动关闭系统代理")
 	}
 }
@@ -146,8 +146,8 @@ func TestSystemProxyGuards(t *testing.T) {
 // 退出清理必须清掉控制文件并把 tunOn 复位，否则下次启动以为 TUN 还在。
 func TestTeardownTUNOnExit(t *testing.T) {
 	a := testApp(t)
-	a.tunOn = true
-	a.tunPID = 0
+	a.tunOn.Store(true)
+	a.tunPID.Store(0)
 
 	files := []string{"tun.stop", "tun.pid", "tun.reload", "tun.probe", "tun.probe.result"}
 	for _, name := range files {
@@ -158,7 +158,7 @@ func TestTeardownTUNOnExit(t *testing.T) {
 
 	a.teardownTUNOnExit()
 
-	if a.tunOn {
+	if a.tunOn.Load() {
 		t.Error("退出后 tunOn 应当复位")
 	}
 	for _, name := range files {

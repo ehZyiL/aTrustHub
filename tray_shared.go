@@ -31,7 +31,7 @@ func (a *app) askQuit() {
 
 // doQuit really ends the process.
 func (a *app) doQuit() {
-	a.quitRequested = true
+	a.quitRequested.Store(true)
 	mygo.App.Quit()
 }
 

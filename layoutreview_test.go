@@ -45,7 +45,7 @@ func layoutApp(t *testing.T) *app {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	a.sysProxyOn = true
+	a.sysProxyOn.Store(true)
 	return a
 }
 

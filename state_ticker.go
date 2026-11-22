@@ -14,8 +14,15 @@ import (
 // 重活（reconcileLocalApps / checkTunnels / guardSystemProxy / DNS 自检）
 // 仍在原来的 3 秒巡检里，这里只放必须及时响应的部分。
 func (a *app) startStateTicker() {
-	for range time.Tick(time.Second) {
-		a.maintainState()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.tickersStop:
+			return
+		case <-ticker.C:
+			a.maintainState()
+		}
 	}
 }
 

@@ -73,7 +73,7 @@ func (a *app) hasActiveWork() bool {
 			return true
 		}
 	}
-	if a.tunOn || a.sysProxyOn || a.resourceTUNActive() {
+	if a.tunOn.Load() || a.sysProxyOn.Load() || a.resourceTUNActive() {
 		return true
 	}
 	for _, p := range a.cfg.LocalApps {

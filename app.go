@@ -44,11 +44,16 @@ const appBuild = "0.1.0-dev-multigateway-tun.11"
 var embeddedAppIcon []byte
 
 type app struct {
-	win          *mygo.Window
-	store        *store.Store
-	mgr          *vpn.Manager
-	bus          *vpn.LogBus
+	win   *mygo.Window
+	store *store.Store
+	mgr   *vpn.Manager
+	bus   *vpn.LogBus
+	// cfg is what the UI thread reads and writes. Background loops must use
+	// configForBackground: a whole-struct reassignment while another goroutine
+	// reads a field is a data race, and Settings/Points/LocalApps are big enough
+	// to tear.
 	cfg          model.Config
+	cfgMu        sync.RWMutex
 	local        *localapps.Manager
 	resourceTUN  *resourceTUNController
 	localEditor  localAppDraft
@@ -79,8 +84,9 @@ type app struct {
 	// footer icon sends the browser to a mirror when it did not.
 	ghReachable   bool
 	updateRetried atomic.Bool
-	// sysProxyOn is whether the app turned the macOS system proxy on.
-	sysProxyOn bool
+	// sysProxyOn is whether the app turned the system proxy on. Read by the state
+	// ticker and written by the UI thread, so it is atomic.
+	sysProxyOn atomic.Bool
 	// captureRestored 表示启动后已经试过按记住的接管方式恢复；重试由 3 秒 tick 驱动，
 	// 入口一旦监听就不再重复写系统设置。
 	captureRestored bool
@@ -89,16 +95,19 @@ type app struct {
 	// tray is the notification-area icon that keeps the app alive when the
 	// window is closed (Windows), and quitRequested says a quit is intended.
 	tray          *mygo.Tray
-	quitRequested bool
+	quitRequested atomic.Bool
 	// heartbeatOnce keeps one goroutine refreshing the helper's alive file.
 	heartbeatOnce sync.Once
 	// Global TUN state.
-	tunOn  bool
-	tunPID int
+	// tunOn / tunPending are read by the background loops and written by the UI
+	// thread, so they are atomic; there is no separate mirror to keep in sync.
+	tunOn atomic.Bool
+	// tunPID is read by shutdownHelper, which can run from a worker goroutine.
+	tunPID atomic.Int64
 	tunID  string
 	// tunWanted is the remembered switch position: after a restart, TUN is
 	// resumed for this point once it logs in, so the switch reflects intent.
-	tunWanted      bool
+	tunWanted      atomic.Bool
 	tunResumeTried bool
 	// captureHiddenLog 记录上一次写进运行日志的「被隐藏档位 + 原因」，
 	// 用于去重：同一组原因不重复刷日志。
@@ -136,16 +145,14 @@ type app struct {
 	tunSeq sync.Mutex
 	// Mirrors of the TUN state, so a background goroutine can read it without
 	// hopping to the UI thread (win.Update from a plain goroutine can block).
-	tunOnA      atomic.Bool
-	tunPendingA atomic.Bool
-	tunPointsA  atomic.Value
-	tunIDA      atomic.Value
+	tunPointsA atomic.Value
+	tunIDA     atomic.Value
 	// tunPending is true while a start/stop is in flight, so the switch keeps
 	// the position the user chose until the async result lands.
-	tunPending bool
+	tunPending atomic.Bool
 	// tunSwitch / sysProxySwitch are the switch bindings (see the view).
 	tunSwitch      bool
-	sysProxySwitch bool
+	sysProxySwitch atomic.Bool
 
 	// editor is the add/edit dialog.
 	editor           editorDraft
@@ -217,6 +224,13 @@ type app struct {
 	logViewActive atomic.Bool
 
 	shutdownOnce sync.Once
+	// tickersStop ends the state ticker and the slow maintenance loop; a
+	// time.Tick channel can never be released, so both loops own a ticker they can
+	// stop.
+	tickersStop chan struct{}
+	// loadWarnings holds what loading the configuration had to correct, so
+	// start() can show it once the log sink exists.
+	loadWarnings []string
 }
 
 type editorDraft struct {
@@ -271,9 +285,12 @@ type settingsDraft struct {
 	// theme 是主题色系的草稿值（blue / green / purple）。
 	theme string
 	// quitOnClose 是「关闭主窗口时退出程序」的草稿值（仅 Windows）。
-	quitOnClose   bool
-	host          string
-	port          string
+	quitOnClose bool
+	host        string
+	port        string
+	// proxyUser / proxyPass guard the listeners when host is not loopback.
+	proxyUser     string
+	proxyPass     string
 	interval      string
 	routing       string
 	aggregate     bool
@@ -291,6 +308,12 @@ func main() {
 	// 软内存上限：将异常膨胀线设为 128MB，GOGC 适度设为 80，兼顾 CPU 调度与堆常驻规模。
 	debug.SetMemoryLimit(memoryLimitBytes)
 	debug.SetGCPercent(80)
+	// The proxy watchdog is a child of this same executable: it must run before the
+	// single-instance lock, otherwise it would just wake the running window.
+	if len(os.Args) >= 2 && os.Args[1] == proxyWatchdogFlag {
+		runProxyWatchdog(os.Args[2:])
+		return
+	}
 	if runCaptureLauncher() {
 		return
 	}
@@ -322,7 +345,7 @@ func main() {
 		// Cmd+Q and the Dock's 退出 land here too. Ask once, then let the
 		// confirmed quit through. If a dialog is already open the request came
 		// from the system (logout, shutdown), so do not block it.
-		if !a.quitRequested && !a.quitAsk {
+		if !a.quitRequested.Load() && !a.quitAsk {
 			e.PreventDefault()
 			a.askQuit()
 			return
@@ -368,6 +391,9 @@ func newApp() (*app, error) {
 		icon:      loadAppIcon(),
 		appSwitch: map[string]*bool{},
 		appFilter: "all",
+		// A configuration that had to be corrected (for example a LAN
+		// listener without credentials) is reported in start(), not swallowed.
+		loadWarnings: st.Warnings(),
 	}
 	logPath := os.Getenv("EASYCONNECT_LOG")
 	if logPath == "" {
@@ -387,7 +413,11 @@ func newApp() (*app, error) {
 	if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
 		a.logFile = f
 	}
-	a.cfg = st.Config()
+	a.setConfig(st.Config())
+	a.tickersStop = make(chan struct{})
+	// The system proxy only changes through applySystemProxyFn, and on Windows that
+	// function journals what it replaces into this directory.
+	setSystemProxyJournalDir(dir)
 	a.autoCapture.enabled = a.cfg.Settings.AutoRestoreAppCapture
 	a.local = localapps.NewManager(func() {
 		// 本机项目的流量通知最多 250ms 一次，属事件源：合并后再画，
@@ -395,8 +425,8 @@ func newApp() (*app, error) {
 		a.invalidateCoalesced()
 	}, a.logLocalAccess)
 	a.local.SetErrorHandler(a.logLocalAppError)
-	a.sysProxyOn = systemProxyOwned(a.systemProxyAddress())
-	a.tunWanted = a.cfg.Settings.TunEnabled
+	a.sysProxyOn.Store(systemProxyOwned(a.systemProxyAddress()))
+	a.tunWanted.Store(a.cfg.Settings.TunEnabled)
 	a.bus.Add("app", fmt.Sprintf("Connect Hub %s 启动，数据目录 %s", appBuild, dir))
 	a.mgr = vpn.NewManager(
 		vpn.NewProtocolConnector(vpn.ZJUOptions{
@@ -520,6 +550,10 @@ func (a *app) start() {
 	log.SetFlags(0)
 	a.bus.SetSink(a.logFile)
 	a.bus.Add("app", fmt.Sprintf("Connect Hub %s 启动（窗口就绪），数据目录 %s", appBuild, a.dir))
+	for _, warning := range a.loadWarnings {
+		a.bus.Add("app", "配置："+warning)
+		a.toast = warning
+	}
 	log.SetOutput(a.bus.Writer("zju"))
 	a.bus.SetNotify(a.onLogEvent)
 	go a.tailAccessLog()
@@ -527,15 +561,24 @@ func (a *app) start() {
 	// 上一轮如果被强杀，root helper 可能还占着 127.0.0.1:53。
 	a.cleanupStaleHelper()
 	a.mgr.Start()
-	if runtime.GOOS == "windows" {
-		_, port, err := net.SplitHostPort(a.mgr.Aggregate().Addr)
-		if err == nil {
-			if err := recoverResourceProxy(a.dir, net.JoinHostPort("127.0.0.1", port)); err != nil {
-				a.tunLogf("系统捕获代理恢复：%v", err)
-			} else {
-				a.sysProxyOn = systemProxyOwned(a.systemProxyAddress())
-			}
+	// Recovery runs before the app decides whether it currently owns the system
+	// proxy, and it never depends on the aggregate listener: the recorded address
+	// is read from the record. Both recoveries are idempotent, so a clean start
+	// costs two stat calls.
+	if err := a.recoverSystemProxy(); err != nil {
+		a.tunLogf("系统代理恢复：%v", err)
+		// A value another program owns is normal and self-heals on the next
+		// explicit takeover, so it stays in the log. A record that cannot be read
+		// is worth telling the user about.
+		if !errors.Is(err, errProxyOwnedElsewhere) {
+			a.toast = "上次的系统代理未能恢复：" + err.Error()
 		}
+	}
+	if runtime.GOOS == "windows" {
+		if err := recoverResourceProxy(a.dir); err != nil {
+			a.tunLogf("系统捕获代理恢复：%v", err)
+		}
+		a.sysProxyOn.Store(systemProxyOwned(a.systemProxyAddress()))
 	}
 
 	// 状态机独立于重绘：每秒推进一次 TUN / 代理保活与流量计时，
@@ -548,7 +591,14 @@ func (a *app) start() {
 		last := time.Now()
 		lastDNSCheck := time.Now()
 		dnsFails := 0
-		for range time.Tick(3 * time.Second) {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			select {
+			case <-a.tickersStop:
+				return
+			default:
+			}
 			a.reconcileLocalApps()
 			a.maybeRefreshTUN()
 			a.checkTunnels()
@@ -557,10 +607,10 @@ func (a *app) start() {
 			a.maybeAutoRestoreAppCapture()
 			// TUN 把系统 DNS 指向自己；它一旦不应答，整台机器就上不了网。
 			// 连续两次检查失败就主动关掉 TUN，把网络还给系统。
-			if a.tunOn && time.Since(lastDNSCheck) > 20*time.Second {
+			if a.tunOn.Load() && time.Since(lastDNSCheck) > 20*time.Second {
 				lastDNSCheck = time.Now()
-				if a.tunPoints != "" {
-					name := a.dnsProbeName(firstPointID(a.tunPoints))
+				if snapshot, _ := a.tunPointsA.Load().(string); snapshot != "" {
+					name := a.dnsProbeName(firstPointID(snapshot))
 					if helperAnswersDNS(3*time.Second, name) {
 						dnsFails = 0
 					} else {
@@ -579,7 +629,7 @@ func (a *app) start() {
 			}
 			if time.Since(last) > 60*time.Second {
 				last = time.Now()
-				a.tunLogf("旧版 TUN 巡检：on=%v pending=%v 已建=%q 当前=%q", a.tunOn, a.tunPending, a.tunPoints, a.onlineSnapshot())
+				a.tunLogf("旧版 TUN 巡检：on=%v pending=%v 已建=%q 当前=%q", a.tunOn.Load(), a.tunPending.Load(), func() string { s, _ := a.tunPointsA.Load().(string); return s }(), a.onlineSnapshot())
 				// 重绘统计：验证「隐藏时重绘 0 次」不用靠感觉。
 				fast, slow, draws, coalesced, gated := a.redrawCounts()
 				a.tunLogf("重绘统计：共 %d 帧（快 %d / 慢 %d），合并 %d 条，隐藏丢弃 %d 条",
@@ -628,8 +678,8 @@ func (a *app) createWindow() {
 	a.win.OnMinimize(a.onWindowMinimized)
 	a.win.OnRestore(a.onWindowRestored)
 	a.win.OnClose(func(e *mygo.CloseEvent) {
-		a.tunLogf("OnClose: quitRequested=%v", a.quitRequested)
-		if a.quitRequested {
+		a.tunLogf("OnClose: quitRequested=%v", a.quitRequested.Load())
+		if a.quitRequested.Load() {
 			return
 		}
 		// 托盘可能在上次启动时没建起来（图标缺失、扩展刚装上），关窗前
@@ -642,7 +692,7 @@ func (a *app) createWindow() {
 		// 三种习惯（Linux/Windows 可配 / macOS 隐藏）统一在这里决定。
 		switch closeActionFor(runtime.GOOS, a.cfg.Settings.QuitOnClose, a.hasActiveWork(), a.tray != nil) {
 		case closeQuit:
-			a.quitRequested = true
+			a.quitRequested.Store(true)
 			a.shutdown()
 			mygo.App.Quit()
 		case closeConfirm:
@@ -661,18 +711,24 @@ func (a *app) createWindow() {
 
 func (a *app) shutdown() {
 	a.shutdownOnce.Do(func() {
+		// Stop the background loops first: they read the manager and the data
+		// directory that the rest of this function is about to dismantle.
+		if a.tickersStop != nil {
+			close(a.tickersStop)
+			a.tickersStop = nil
+		}
 		// 先把排队的重绘停掉：窗口马上要销毁，别再排新的帧。
 		a.stopPainting()
 		if a.resourceTUN != nil {
 			if err := a.resourceTUN.Close(); err != nil {
 				a.tunLogf("系统捕获清理未完成：%v", err)
-				a.sysProxyOn = false
+				a.sysProxyOn.Store(false)
 			}
 		}
 		a.closeCaptureSetup()
 		// A real quit: window closes must go through, or macOS cancels the
 		// termination and the process stays alive with no usable UI.
-		a.quitRequested = true
+		a.quitRequested.Store(true)
 		if a.dnsProbe.cancel != nil {
 			a.dnsProbe.cancel()
 		}
@@ -706,7 +762,7 @@ func (a *app) maybeResumeTUN() {
 	if !a.canUseGlobalTUN() {
 		return
 	}
-	if !a.tunWanted || a.tunOn || a.tunPending {
+	if !a.tunWanted.Load() || a.tunOn.Load() || a.tunPending.Load() {
 		return
 	}
 	if time.Now().Before(a.tunResumeAt) {
@@ -715,7 +771,7 @@ func (a *app) maybeResumeTUN() {
 	if a.tunResumeFails >= 3 {
 		return
 	}
-	id := pickResumePoint(a.cfg.Settings.TunPointID, a.mgr.Views())
+	id := pickResumePoint(a.configForBackground().Settings.TunPointID, a.mgr.Views())
 	if id == "" {
 		// 没有在线接入点：把失败计数清零，等下一次登录再试。
 		a.tunResumeFails = 0
@@ -734,7 +790,8 @@ func (a *app) maybeResumeTUN() {
 // QR popup, and third-party SSO resumes the session the browser login
 // saved.
 func (a *app) credentials(id string) (vpn.Credentials, error) {
-	point := a.cfg.Find(id)
+	cfg := a.configForBackground()
+	point := cfg.Find(id)
 	mode := model.AuthModePassword
 	if point != nil && point.AuthMode != "" {
 		mode = model.AuthMode(point.AuthMode)
@@ -765,7 +822,6 @@ func (a *app) credentials(id string) (vpn.Credentials, error) {
 	case model.AuthModeSSO:
 		// 这里没有账号密码：由真正的浏览器走完单点登录并交回授权码，
 		// 登录本身仍由客户端完成，隧道才用得上它自己的设备号与签名。
-		point := a.cfg.Find(id)
 		if browserExecutable() != "" {
 			return vpn.Credentials{ExternalLogin: func(cbCtx context.Context, loginURL string) (string, error) {
 				return a.cdpLoginCallback(cbCtx, point, loginURL)
@@ -860,7 +916,7 @@ func (a *app) saveConfig() error {
 	if err := a.store.Save(); err != nil {
 		return err
 	}
-	a.cfg = a.store.Config()
+	a.setConfig(a.store.Config())
 	a.mgr.Apply(a.cfg)
 	return nil
 }
@@ -893,6 +949,32 @@ func shortText(s string, max int) string {
 	return string([]rune(s)[:max]) + "…"
 }
 
+// setConfig publishes a new configuration. Every writer must go through it so a
+// background reader can take a consistent copy instead of racing a whole-struct
+// reassignment.
+func (a *app) setConfig(cfg model.Config) {
+	a.cfgMu.Lock()
+	a.cfg = cfg
+	a.cfgMu.Unlock()
+}
+
+// configForBackground returns a copy for goroutines that are not the UI thread.
+// It runs at most a few times per second, so the copy is cheap next to the probe
+// or dial it precedes.
+func (a *app) configForBackground() model.Config {
+	a.cfgMu.RLock()
+	defer a.cfgMu.RUnlock()
+	return a.cfg.Clone()
+}
+
+// mutateConfig edits the in-memory configuration under the write lock. It is for
+// the settings the app changes outside Store.Update (auto restore intent).
+func (a *app) mutateConfig(fn func(*model.Config)) {
+	a.cfgMu.Lock()
+	fn(&a.cfg)
+	a.cfgMu.Unlock()
+}
+
 func (a *app) describeProgress() string {
 	online, connecting, total := a.mgr.Counts()
 	switch {
@@ -912,7 +994,7 @@ func (a *app) guardSystemProxy() {
 	if a.resourceTUNActive() {
 		return
 	}
-	if !a.sysProxyOn {
+	if !a.sysProxyOn.Load() {
 		return
 	}
 	if a.releaseLostSystemProxy() {
@@ -926,8 +1008,8 @@ func (a *app) guardSystemProxy() {
 		}
 	}
 	_ = applySystemProxyFn("127.0.0.1:0", false)
-	a.sysProxyOn = false
-	a.sysProxySwitch = false
+	a.sysProxyOn.Store(false)
+	a.sysProxySwitch.Store(false)
 	// 这是本应用自己关的（入口死了），不是用户放弃接管：入口回来后
 	// maybeRestoreCaptureMode 要能把它接回来。用户手动关代理走的是
 	// releaseLostSystemProxy，不会走到这里，所以不会被反复抢回去。
@@ -946,21 +1028,22 @@ func (a *app) maybeRestoreCaptureMode() {
 	}
 	// 记着 TUN 意图时让路：TUN 自带 30 秒/3 次的限流重试，别让系统代理抢在它
 	// 前面接管。这里也不标记已处理——TUN 因为环境原因放弃后，后续还能再判断。
-	if a.cfg.Settings.TunEnabled {
+	cfg := a.configForBackground()
+	if cfg.Settings.TunEnabled {
 		return
 	}
 	// macOS 写系统代理要一次管理员授权，每次启动弹密码不可接受；Linux 没有这一档。
-	if !supportsAutoSystemProxy() || a.cfg.Settings.CaptureMode != model.CaptureModeSystem {
+	if !supportsAutoSystemProxy() || cfg.Settings.CaptureMode != model.CaptureModeSystem {
 		a.captureRestored = true
 		return
 	}
 	// 已经有别的接管方式在负责流量，或者系统代理本来就指着本应用：不用再动。
-	if a.tunOn || a.tunPending || a.resourceTUNActive() || a.sysProxyOn {
+	if a.tunOn.Load() || a.tunPending.Load() || a.resourceTUNActive() || a.sysProxyOn.Load() {
 		a.captureRestored = true
 		return
 	}
 	agg := a.mgr.Aggregate()
-	if !a.cfg.Settings.AggregateEnabled {
+	if !cfg.Settings.AggregateEnabled {
 		a.captureRestored = true
 		a.tunLogf("未自动开启系统代理：统一入口已在设置里关闭")
 		return
@@ -1000,7 +1083,7 @@ func (a *app) enableSystemProxyByDefault(target string) {
 		a.tunLogf("自动开启系统代理失败：%v", err)
 		return
 	}
-	a.sysProxyOn = true
+	a.sysProxyOn.Store(true)
 	a.tunLogf("网络接管：已按默认设置开启系统代理 %s", target)
 	a.invalidateCoalesced()
 }
@@ -1020,7 +1103,7 @@ func firstPointID(snapshot string) string {
 func (a *app) teardownTUNOnExit() {
 	pidPath := filepath.Join(a.dir, "tun.pid")
 	_, pidErr := os.Stat(pidPath)
-	if !a.tunOn && pidErr != nil && a.tunPID <= 0 {
+	if !a.tunOn.Load() && pidErr != nil && a.tunPID.Load() <= 0 {
 		// 没开过 TUN，但上一次可能被强杀留下了 DNS 劫持，仍然兜底一次。
 		return
 	}
@@ -1029,8 +1112,8 @@ func (a *app) teardownTUNOnExit() {
 		a.tunLogf("退出：helper 未在 6 秒内退出，强制结束后重置 DNS")
 	}
 	// helper 被强杀时来不及恢复 DNS，这里再兜底一次。
-	a.tunOn = false
-	a.tunPID = 0
+	a.tunOn.Store(false)
+	a.tunPID.Store(0)
 	for _, name := range []string{"tun.stop", "tun.pid", "tun.reload", "tun.probe", "tun.probe.result"} {
 		_ = os.Remove(filepath.Join(a.dir, name))
 	}
@@ -1040,7 +1123,7 @@ func (a *app) teardownTUNOnExit() {
 // disableSystemProxyOnExit turns the system proxy off before quitting, retrying
 // once because a failed revert leaves the machine with no usable network.
 func (a *app) disableSystemProxyOnExit() {
-	if !a.sysProxyOn {
+	if !a.sysProxyOn.Load() {
 		return
 	}
 	if a.releaseLostSystemProxy() {
@@ -1048,7 +1131,7 @@ func (a *app) disableSystemProxyOnExit() {
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		if err := applySystemProxyFn("127.0.0.1:0", false); err == nil {
-			a.sysProxyOn = false
+			a.sysProxyOn.Store(false)
 			a.tunLogf("退出：已关闭系统代理")
 			return
 		} else {

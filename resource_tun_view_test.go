@@ -31,7 +31,7 @@ func TestSystemTUNControlVisibleForEasyConnectAndSeparateFromLegacy(t *testing.T
 	}
 	// 没有在线网关时切换会被拒绝：不拆当前模式，也不能打开旧 TUN 移交。
 	a.applyCaptureMode(captureAppCapture)
-	if a.tunOn || a.tunWanted {
+	if a.tunOn.Load() || a.tunWanted.Load() {
 		t.Fatal("new capture enabled legacy handoff")
 	}
 	if !strings.Contains(a.toast, "没有在线接入点") {

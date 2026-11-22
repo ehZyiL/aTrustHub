@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/egoist/mygo/ui"
@@ -88,6 +89,9 @@ func (a *app) setupResourceTUN() {
 func (a *app) resourceCaptureConfigs() ([]localapps.CaptureConfig, error) {
 	cfg := a.store.Config()
 	var result []localapps.CaptureConfig
+	// skipped 记录“这个网关本次不能接管”的原因。一个网关不可用（旧核心、会话已结束、
+	// 资源解析失败）不能让其余网关一起放弃；全部不可用时才返回真的错误。
+	var skipped []string
 	online := 0
 	for _, gateway := range a.mgr.ResourceGateways() {
 		if gateway.Excluded {
@@ -100,12 +104,14 @@ func (a *app) resourceCaptureConfigs() ([]localapps.CaptureConfig, error) {
 		var connection vpn.AppConnection
 		if gateway.Online {
 			if !gateway.Strict {
-				return nil, fmt.Errorf("%s 不支持严格 VPN 拨号", gateway.Name)
+				skipped = append(skipped, gateway.Name+" 不支持严格 VPN 拨号，需要更新配套核心")
+				continue
 			}
 			var err error
 			connection, err = a.mgr.LocalAppConnection(gateway.ID)
 			if err != nil {
-				return nil, err
+				skipped = append(skipped, gateway.Name+"："+err.Error())
+				continue
 			}
 			online++
 		} else {
@@ -123,11 +129,13 @@ func (a *app) resourceCaptureConfigs() ([]localapps.CaptureConfig, error) {
 		}
 		domains, err := localapps.DNSDomains(connection.Resources)
 		if err != nil {
-			return nil, fmt.Errorf("%s：%w", gateway.Name, err)
+			skipped = append(skipped, gateway.Name+"："+err.Error())
+			continue
 		}
 		networks, err := localapps.CaptureNetworks(connection.Resources)
 		if err != nil {
-			return nil, fmt.Errorf("%s：%w", gateway.Name, err)
+			skipped = append(skipped, gateway.Name+"："+err.Error())
+			continue
 		}
 		if len(domains) == 0 && len(networks) == 0 {
 			continue
@@ -141,9 +149,25 @@ func (a *app) resourceCaptureConfigs() ([]localapps.CaptureConfig, error) {
 		return nil, errors.New("请先登录至少一个加入统一资源池的网关")
 	}
 	if len(result) == 0 {
+		if len(skipped) > 0 {
+			return nil, errors.New(strings.Join(skipped, "；"))
+		}
 		return nil, errors.New("没有可接管的网络资源")
 	}
+	if len(skipped) > 0 {
+		// The controller starts the capture and shows the reason; it does not
+		// treat the whole takeover as failed.
+		return result, partialCaptureError{reasons: skipped}
+	}
 	return result, nil
+}
+
+// partialCaptureError means some gateways could not be captured while others
+// can. The controller keeps the usable subset and reports the rest.
+type partialCaptureError struct{ reasons []string }
+
+func (e partialCaptureError) Error() string {
+	return "部分网关未接管：" + strings.Join(e.reasons, "；")
 }
 
 func supportsResourceTUN() bool { return runtime.GOOS == "windows" || runtime.GOOS == "linux" }

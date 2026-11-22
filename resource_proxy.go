@@ -11,6 +11,7 @@ import (
 type captureProxySnapshot struct {
 	Enabled     uint64
 	Server      string
+	Override    string
 	Fingerprint string
 	Automatic   bool
 }
@@ -18,7 +19,11 @@ type captureProxyRecovery struct{ Before, Installed captureProxySnapshot }
 type captureProxyOps struct {
 	read       func() (captureProxySnapshot, error)
 	setEnabled func(uint64) error
-	notice     func(string)
+	// setProxy writes the manual proxy address and its bypass list. Only the
+	// system-proxy journal needs it; the resource-TUN journal never rewrites an
+	// address, so it leaves this nil.
+	setProxy func(server, override string) error
+	notice   func(string)
 }
 
 func ownsProxy(snapshot captureProxySnapshot, address string) bool {

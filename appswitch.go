@@ -40,7 +40,7 @@ func (a *app) setAppEnabled(pointID, appID string, enabled bool) {
 		return
 	}
 	if !changed {
-		a.cfg = a.store.Config()
+		a.setConfig(a.store.Config())
 		return
 	}
 	// Update 只改内存：落盘必须显式 Save，否则重启就回到旧状态。
@@ -51,7 +51,7 @@ func (a *app) setAppEnabled(pointID, appID string, enabled bool) {
 	if a.appSwitch != nil {
 		delete(a.appSwitch, pointID+"/"+appID)
 	}
-	if a.tunOn {
+	if a.tunOn.Load() {
 		a.win.Update(func() {
 			// An empty snapshot is what the refresh path reads as "rebuild me".
 			a.tunPoints = ""
@@ -59,9 +59,9 @@ func (a *app) setAppEnabled(pointID, appID string, enabled bool) {
 		})
 	}
 	if enabled {
-		a.toast = fmt.Sprintf("已恢复「%s」的隧道代理（%s），全局 TUN 稍后自动更新", appName, name)
+		a.toast = fmt.Sprintf("已恢复「%s」的隧道代理（%s），新连接立即可用", appName, name)
 	} else {
-		a.toast = fmt.Sprintf("已停用「%s」的隧道代理（%s）：它的地址不再进隧道；该接入点重新登录后其独立 SOCKS 通道同步生效", appName, name)
+		a.toast = fmt.Sprintf("已停用「%s」的隧道代理（%s）：它的地址不再进隧道，新的连接立即生效；已建立的连接会自然结束", appName, name)
 	}
 	a.invalidate()
 }
@@ -106,7 +106,7 @@ func (a *app) setAllAppsEnabled(pointID string, enabled bool) {
 	}
 	// 批量改了状态，让每个开关按记录重建。
 	a.appSwitch = map[string]*bool{}
-	if a.tunOn {
+	if a.tunOn.Load() {
 		a.win.Update(func() {
 			a.tunPoints = ""
 			a.tunMirror()

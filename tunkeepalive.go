@@ -119,11 +119,12 @@ func (a *app) keepAliveTarget(id string) string {
 // nothing under TUN (the local stack completes the handshake), so the helper
 // dials through the aTrust session instead; only a real failure counts.
 func (a *app) checkTunnels() {
-	if !a.tunOn || a.tunPoints == "" {
+	if !a.tunOn.Load() || a.tunPoints == "" {
 		return
 	}
 	// 0 turns the health check off; honour it for TUN probes as well.
-	if a.cfg.Settings.HealthIntervalSec <= 0 {
+	cfg := a.configForBackground()
+	if cfg.Settings.HealthIntervalSec <= 0 {
 		return
 	}
 	if !a.keepAlive.shouldRun(time.Now()) {
@@ -131,7 +132,7 @@ func (a *app) checkTunnels() {
 	}
 	for _, id := range splitIDs(a.tunPoints) {
 		target := a.keepAliveTarget(id)
-		point := a.cfg.Find(id)
+		point := cfg.Find(id)
 		if target == "" || point == nil {
 			continue
 		}
@@ -188,12 +189,12 @@ func (a *app) rebuildTUNAfterTunnelFailure(id, reason string) {
 	go func() {
 		a.tunSeq.Lock()
 		defer a.tunSeq.Unlock()
-		if !a.tunOn && !a.tunPending {
+		if !a.tunOn.Load() && !a.tunPending.Load() {
 			return
 		}
 		a.tunLogf("重建 TUN：%s", reason)
 		a.win.Update(func() {
-			a.tunPending = true
+			a.tunPending.Store(true)
 			a.toast = "检测到隧道失效，正在重建全局 TUN…"
 			a.tunMirror()
 		})
@@ -202,11 +203,11 @@ func (a *app) rebuildTUNAfterTunnelFailure(id, reason string) {
 		// the helper never starts from a stale SID.
 		a.mgr.SetTunServed(nil)
 		a.win.Update(func() {
-			a.tunOn = false
-			a.tunPID = 0
-			a.tunPending = false
+			a.tunOn.Store(false)
+			a.tunPID.Store(0)
+			a.tunPending.Store(false)
 			a.tunPoints = ""
-			a.tunWanted = true
+			a.tunWanted.Store(true)
 			a.tunResumeAt = time.Time{}
 			a.tunResumeFails = 0
 			a.tunMirror()

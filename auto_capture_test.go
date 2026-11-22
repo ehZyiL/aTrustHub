@@ -13,6 +13,23 @@ import (
 	"github.com/ehzyil/connect-hub/internal/model"
 )
 
+// waitLogged waits for a line instead of sampling once: the log entry is written
+// a few instructions after the state it describes becomes observable, so a single
+// Tail right after waitAutoPhase can legitimately miss it.
+func waitLogged(t *testing.T, a *app, needle string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if strings.Contains(tailLog(a.bus.Tail(60)), needle) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%q was not logged: %s", needle, tailLog(a.bus.Tail(60)))
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func autoOnlineTargets(ids ...string) autoCaptureTargets {
 	return autoCaptureTargets{count: len(ids), signature: strings.Join(ids, "\x00")}
 }
@@ -84,6 +101,11 @@ func waitAutoPhase(t *testing.T, a *app, want autoCapturePhase) {
 }
 
 func TestAutoRestoreSettingDefaultAndPersistence(t *testing.T) {
+	// This case is about persisting and arming the intent, not about whether the
+	// platform can capture at all: on Windows supportsAutoRestoreAppCapture()
+	// reports false, and without the stub the assertion below would depend on
+	// the host OS instead of on the code under test.
+	forceAutoCaptureSupported(t)
 	if model.DefaultSettings().AutoRestoreAppCapture {
 		t.Fatal("auto restore must default to off")
 	}
@@ -277,9 +299,7 @@ func TestAutoCaptureStartsWhenConditionsAreReady(t *testing.T) {
 	a.maybeAutoRestoreAppCapture()
 	waitController(t, c, func(s resourceTUNStatus) bool { return s.Running })
 	waitAutoPhase(t, a, autoCaptureRunning)
-	if !strings.Contains(tailLog(a.bus.Tail(30)), "自动恢复应用接管已就绪") {
-		t.Fatalf("success was not logged: %s", tailLog(a.bus.Tail(30)))
-	}
+	waitLogged(t, a, "自动恢复应用接管已就绪")
 	if got := a.autoCaptureStatusLine(); !strings.Contains(got, "已生效") {
 		t.Fatalf("status = %q", got)
 	}
@@ -416,10 +436,7 @@ func TestAutoCaptureBacksOffThenPausesAndRearmsOnLogin(t *testing.T) {
 	if starts.Load() != 3 {
 		t.Fatalf("starts = %d, want 3", starts.Load())
 	}
-	if !strings.Contains(tailLog(a.bus.Tail(30)), "自动恢复应用接管已暂停") {
-		t.Fatalf("pause was not logged: %s", tailLog(a.bus.Tail(30)))
-	}
-
+	waitLogged(t, a, "自动恢复应用接管已暂停")
 	// The retry button is a fresh opportunity even after the budget ran out.
 	a.retryAutoCapture()
 	a.maybeAutoRestoreAppCapture()
@@ -490,11 +507,11 @@ func TestUncheckingAutoRestoreDoesNotStopRunningCapture(t *testing.T) {
 func TestAutoCaptureDoesNotStartWhileTunIsActive(t *testing.T) {
 	a := testApp(t)
 	setAutoRestoreSetting(t, a, true)
-	a.tunOn = true
+	a.tunOn.Store(true)
 	autoCaptureOnlineFn = func(*app) autoCaptureTargets { return autoOnlineTargets("A#1") }
 	autoCaptureHelperReadyFn = func(context.Context) error { return nil }
 	t.Cleanup(func() {
-		a.tunOn = false
+		a.tunOn.Store(false)
 		autoCaptureOnlineFn = func(a *app) autoCaptureTargets { return a.onlineResourceGateways() }
 		autoCaptureHelperReadyFn = autoCaptureHelperReady
 	})
@@ -552,11 +569,11 @@ func TestAutoCaptureOwnsFailureResult(t *testing.T) {
 func TestAutoCaptureRearmsAfterTunStops(t *testing.T) {
 	a := testApp(t)
 	setAutoRestoreSetting(t, a, true)
-	a.tunOn = true
+	a.tunOn.Store(true)
 	autoCaptureOnlineFn = func(*app) autoCaptureTargets { return autoOnlineTargets("A#1") }
 	autoCaptureHelperReadyFn = func(context.Context) error { return nil }
 	t.Cleanup(func() {
-		a.tunOn = false
+		a.tunOn.Store(false)
 		autoCaptureOnlineFn = func(a *app) autoCaptureTargets { return a.onlineResourceGateways() }
 		autoCaptureHelperReadyFn = autoCaptureHelperReady
 	})
@@ -573,7 +590,7 @@ func TestAutoCaptureRearmsAfterTunStops(t *testing.T) {
 	if starts.Load() != 0 {
 		t.Fatal("capture started while global TUN was active")
 	}
-	a.tunOn = false
+	a.tunOn.Store(false)
 	a.maybeAutoRestoreAppCapture()
 	waitController(t, c, func(s resourceTUNStatus) bool { return s.Running })
 	waitAutoPhase(t, a, autoCaptureRunning)

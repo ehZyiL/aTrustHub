@@ -57,6 +57,15 @@ func (c *resourceTUNController) begin(ctx context.Context) {
 	c.operation.Lock()
 	defer c.operation.Unlock()
 	configs, err := c.configs()
+	// A gateway that cannot be captured must not cancel the ones that can: the
+	// usable subset still gets installed and the reason is reported in the
+	// status line instead of failing the whole takeover.
+	partialNote := ""
+	var partial partialCaptureError
+	if err != nil && errors.As(err, &partial) {
+		err = nil
+		partialNote = partial.Error()
+	}
 	var run localapps.SystemCapture
 	var restore func() error
 	if err == nil && ctx.Err() == nil {
@@ -96,7 +105,7 @@ func (c *resourceTUNController) begin(ctx context.Context) {
 	}
 	c.mu.Lock()
 	c.current, c.restore = run, restore
-	c.status = resourceTUNStatus{Running: true}
+	c.status = resourceTUNStatus{Running: true, Error: partialNote}
 	c.mu.Unlock()
 	c.notify()
 	go c.monitor(ctx, run)
@@ -122,15 +131,26 @@ func (c *resourceTUNController) monitor(ctx context.Context, run localapps.Syste
 			return
 		case <-tick.C:
 			configs, err := c.configs()
+			// Same rule as begin: an uncapturable gateway degrades the status
+			// line, it does not stop reconciling the rest.
+			note := ""
+			var partial partialCaptureError
+			if err != nil && errors.As(err, &partial) {
+				err = nil
+				note = partial.Error()
+			}
 			if err == nil {
 				err = run.Reconcile(ctx, configs)
 			}
 			if ctx.Err() != nil {
 				return
 			}
-			message := ""
+			message := note
 			if err != nil {
-				message = "部分资源未接管：" + err.Error()
+				if message != "" {
+					message += "；"
+				}
+				message += "部分资源未接管：" + err.Error()
 			}
 			c.mu.Lock()
 			changed := c.current == run && c.status.Error != message

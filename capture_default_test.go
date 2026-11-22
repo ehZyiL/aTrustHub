@@ -61,7 +61,7 @@ func TestEnableSystemProxyByDefault(t *testing.T) {
 	if len(applied) != 1 || applied[0] != target {
 		t.Fatalf("应当写入一次「指向统一入口并开启」，实际 %v", applied)
 	}
-	if !a.sysProxyOn {
+	if !a.sysProxyOn.Load() {
 		t.Fatal("开启后应当记住系统代理由本应用负责")
 	}
 }
@@ -79,7 +79,7 @@ func TestEnableSystemProxyByDefaultKeepsForeignProxy(t *testing.T) {
 	if calls != 0 {
 		t.Fatalf("第三方代理在用时不该写系统代理，实际写了 %d 次", calls)
 	}
-	if a.sysProxyOn {
+	if a.sysProxyOn.Load() {
 		t.Fatal("没写成功就不能记成已接管")
 	}
 	if logged := tailLog(a.bus.Tail(5)); !strings.Contains(logged, "未自动开启") {
@@ -96,7 +96,7 @@ func TestEnableSystemProxyByDefaultReportsFailure(t *testing.T) {
 	applySystemProxyFn = func(string, bool) error { return errors.New("注册表拒绝写入") }
 
 	a.enableSystemProxyByDefault("127.0.0.1:1080")
-	if a.sysProxyOn {
+	if a.sysProxyOn.Load() {
 		t.Fatal("写入失败时不能记成已接管")
 	}
 	if logged := tailLog(a.bus.Tail(5)); !strings.Contains(logged, "自动开启系统代理失败") {
@@ -169,12 +169,12 @@ func TestGuardSystemProxyAllowsLaterRestore(t *testing.T) {
 		}
 		return nil
 	}
-	a.sysProxyOn = true
+	a.sysProxyOn.Store(true)
 	a.captureRestored = true
 
 	a.guardSystemProxy()
 
-	if a.sysProxyOn {
+	if a.sysProxyOn.Load() {
 		t.Fatal("入口没在监听时应当关掉系统代理")
 	}
 	if closes != 1 {
@@ -188,12 +188,12 @@ func TestGuardSystemProxyAllowsLaterRestore(t *testing.T) {
 // 选中「全局 TUN」时就记下意图（不等启动成功）：TUN 自己有限流重试。
 func TestRememberTunIntent(t *testing.T) {
 	a := testApp(t)
-	a.quitRequested = true
+	a.quitRequested.Store(true)
 	a.rememberTunIntent("A")
 	if a.store.Config().Settings.TunEnabled {
 		t.Error("退出过程不该记 TUN 意图")
 	}
-	a.quitRequested = false
+	a.quitRequested.Store(false)
 	a.rememberTunIntent("A")
 	s := a.store.Config().Settings
 	if !s.TunEnabled || s.TunPointID != "A" {

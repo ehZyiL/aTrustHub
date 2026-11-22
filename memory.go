@@ -109,7 +109,7 @@ func (a *app) trafficTotal() int64 {
 			n += v.Total
 		}
 	}
-	for _, p := range a.cfg.LocalApps {
+	for _, p := range a.configForBackground().LocalApps {
 		c := a.localView(p.ID).Connections
 		n += int64(c.Opened) + int64(c.Sent>>10) + int64(c.Received>>10)
 	}

@@ -124,12 +124,13 @@ func splitIDs(snapshot string) []string {
 // tunConfigFor builds the helper configuration from the online access points.
 func (a *app) tunConfigFor() (tunConfigFile, error) {
 	cfg := tunConfigFile{DNSBind: "127.0.0.1:53"}
+	points := a.configForBackground()
 	rangeIdx := 0
 	for _, view := range a.mgr.Views() {
 		if view.State != vpn.StateOnline {
 			continue
 		}
-		point := a.cfg.Find(view.ID)
+		point := points.Find(view.ID)
 		if point == nil {
 			continue
 		}
@@ -184,7 +185,7 @@ func (a *app) startGlobalTUN(id string) {
 	succeeded := false
 	defer func() {
 		if !succeeded && a.win != nil {
-			a.win.Update(func() { a.tunPending = false })
+			a.win.Update(func() { a.tunPending.Store(false) })
 		}
 	}()
 	if online, _, _ := a.mgr.Counts(); online == 0 {
@@ -227,9 +228,9 @@ func (a *app) startGlobalTUN(id string) {
 	}
 	a.tunLogf("startGlobalTUN: %d 个接入点，配置 %s", len(cfg.Points), cfgPath)
 
-	if a.sysProxyOn {
+	if a.sysProxyOn.Load() {
 		_ = applySystemProxyFn("127.0.0.1:0", false)
-		a.sysProxyOn = false
+		a.sysProxyOn.Store(false)
 	}
 	logPath := filepath.Join(a.dir, "tun.log")
 	pidPath := filepath.Join(a.dir, "tun.pid")
@@ -288,9 +289,9 @@ func (a *app) startGlobalTUN(id string) {
 			tail = extra + " ｜ " + tail
 		}
 		a.win.Update(func() {
-			a.tunOn = false
-			a.tunPID = 0
-			a.tunPending = false
+			a.tunOn.Store(false)
+			a.tunPID.Store(0)
+			a.tunPending.Store(false)
 			a.toast = "全局 TUN 启动失败：" + tail
 		})
 		return
@@ -303,10 +304,10 @@ func (a *app) startGlobalTUN(id string) {
 		_ = a.shutdownHelper(6 * time.Second)
 		a.mgr.SetTunServed(nil)
 		a.win.Update(func() {
-			a.tunOn = false
-			a.tunPID = 0
-			a.tunPending = false
-			a.tunWanted = false
+			a.tunOn.Store(false)
+			a.tunPID.Store(0)
+			a.tunPending.Store(false)
+			a.tunWanted.Store(false)
 			a.tunPoints = ""
 			a.tunMirror()
 			a.toast = "全局 TUN 启动失败：DNS 未能就绪（可能有残留的旧进程占用 53 端口）"
@@ -314,11 +315,11 @@ func (a *app) startGlobalTUN(id string) {
 		return
 	}
 	a.win.Update(func() {
-		a.tunOn = true
+		a.tunOn.Store(true)
 		a.tunID = id
-		a.tunPID = pid
-		a.tunWanted = true
-		a.tunPending = false
+		a.tunPID.Store(int64(pid))
+		a.tunWanted.Store(true)
+		a.tunPending.Store(false)
 		a.tunPoints = a.onlineSnapshot()
 		a.tunMirror()
 	})
@@ -361,8 +362,8 @@ func (a *app) onlineSnapshot() string {
 // tunMirror copies the UI-owned TUN state into the atomics that background
 // goroutines read.
 func (a *app) tunMirror() {
-	a.tunOnA.Store(a.tunOn)
-	a.tunPendingA.Store(a.tunPending)
+	// tunOn / tunPending are atomic already; only the snapshot strings still need
+	// publishing for the background readers.
 	a.tunPointsA.Store(a.tunPoints)
 	a.tunIDA.Store(a.tunID)
 }
@@ -372,7 +373,7 @@ func (a *app) maybeRefreshTUN() {
 		return
 	}
 	snap, _ := a.tunPointsA.Load().(string)
-	if !a.tunOnA.Load() || a.tunPendingA.Load() {
+	if !a.tunOn.Load() || a.tunPending.Load() {
 		return
 	}
 	now := a.onlineSnapshot()
@@ -387,7 +388,7 @@ func (a *app) maybeRefreshTUN() {
 	go func() {
 		defer a.tunGate.Store(false)
 		time.Sleep(3 * time.Second)
-		if !a.tunOnA.Load() || a.tunPendingA.Load() {
+		if !a.tunOn.Load() || a.tunPending.Load() {
 			return
 		}
 		if a.onlineSnapshot() == a.tunPointsA.Load().(string) {
@@ -403,19 +404,19 @@ func (a *app) maybeRefreshTUN() {
 			a.mgr.SetTunServed(splitIDs(nowSnap))
 			go a.win.Update(func() {
 				a.tunPoints = nowSnap
-				a.tunPending = false
+				a.tunPending.Store(false)
 			})
 			a.tunSeq.Unlock()
 			return
 		}
 		// Points were removed, or extending failed: rebuild from scratch.
 		a.tunLogf("TUN 刷新：改为整体重建（%v）", err)
-		a.tunPendingA.Store(true)
-		a.tunOnA.Store(false)
+		a.tunPending.Store(true)
+		a.tunOn.Store(false)
 		go a.win.Update(func() {
-			a.tunPending = true
-			a.tunOn = false
-			a.tunPID = 0
+			a.tunPending.Store(true)
+			a.tunOn.Store(false)
+			a.tunPID.Store(0)
 		})
 		_ = a.shutdownHelper(3 * time.Second)
 		a.startGlobalTUN(a.tunID)
@@ -532,10 +533,10 @@ func (a *app) stopGlobalTUN() {
 	// Back to the point's own tunnel.
 	a.mgr.SetTunServed(nil)
 	a.win.Update(func() {
-		a.tunOn = false
-		a.tunPID = 0
-		a.tunPending = false
-		a.tunWanted = false
+		a.tunOn.Store(false)
+		a.tunPID.Store(0)
+		a.tunPending.Store(false)
+		a.tunWanted.Store(false)
 		a.tunPoints = ""
 		a.tunMirror()
 		a.tunResumeTried = true
@@ -569,7 +570,7 @@ func (a *app) shutdownHelper(wait time.Duration) bool {
 	stopPath := filepath.Join(a.dir, "tun.stop")
 	pidPath := filepath.Join(a.dir, "tun.pid")
 	_ = os.WriteFile(stopPath, []byte("stop\n"), 0o644)
-	pid := a.tunPID
+	pid := int(a.tunPID.Load())
 	if pid <= 0 {
 		if b, err := os.ReadFile(pidPath); err == nil {
 			pid, _ = strconv.Atoi(strings.TrimSpace(string(b)))
@@ -692,7 +693,8 @@ func helperAnswersDNS(wait time.Duration, name string) bool {
 // table even when its tunnel resolution is broken.
 func (a *app) dnsProbeName(id string) string {
 	// 接入点自己的主机名一定能通过它解析，先用它，避不开时就退回应用域名。
-	if p := a.cfg.Find(id); p != nil && isProbeName(p.Server) {
+	points := a.configForBackground()
+	if p := points.Find(id); p != nil && isProbeName(p.Server) {
 		return p.Server
 	}
 	for _, entry := range a.allApps() {

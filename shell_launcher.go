@@ -194,7 +194,8 @@ func (a *app) envStrip(c *ui.Context) {
 	ui.Divider(c)
 	ui.Row(c).AlignItems(ui.Center).Gap(14).Padding(2, 4).Children(func() {
 		listening := agg.Running && agg.Addr != ""
-		if listening || a.sysProxyOn.Load() {
+		// 在访问日志页保留入口状态，便于排查为什么没有访问记录。
+		if a.tab == 2 || listening || a.sysProxyOn.Load() {
 			ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
 				ui.Text(c, "统一入口").FontSize(12).Bold()
 				switch {
@@ -202,6 +203,8 @@ func (a *app) envStrip(c *ui.Context) {
 					addr := "socks5://" + displayAddr(agg.Addr)
 					ui.Text(c, addr).Font("monospace").FontSize(12).TextColor(t.TextMuted)
 					iconButton(c, copyIcon, "复制统一入口地址", func() { a.copyText(addr) })
+				case !a.cfg.Settings.AggregateEnabled:
+					ui.Text(c, "已关闭").FontSize(12).TextColor(t.TextMuted)
 				case agg.Error != "":
 					ui.Text(c, "监听失败").FontSize(12).TextColor(t.Danger).Tooltip(agg.Error)
 				default:

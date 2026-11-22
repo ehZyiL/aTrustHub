@@ -79,6 +79,9 @@ func TestLayoutShots(t *testing.T) {
 	a.openSettingsAt(settingAbout)
 	shot("20-settings-about", 0, false, 1120, 780)
 	a.settings.open = false
+	a.quitAsk = true
+	shot("29-dialog-quit-dark", 0, true, 720, 520)
+	a.quitAsk = false
 
 	// 接管胶囊展开的样子：就地切换不进设置页，也留一条进设置的深链接。
 	a.captureMenuOpen = true

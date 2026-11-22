@@ -1243,7 +1243,7 @@ func (a *app) pointFacts(c *ui.Context, v vpn.View) {
 		if v.Failed > 0 {
 			meta(c, t, "失败", fmt.Sprintf("%d 次", v.Failed))
 		}
-		if v.InPool {
+		if v.InPool && !a.simpleMode() {
 			meta(c, t, "统一入口", "参与分流")
 		}
 		if v.MonitorOn {
@@ -2108,9 +2108,12 @@ func (a *app) captureSection(c *ui.Context) {
 				FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(620)
 		}
 	}
-	agg := a.mgr.Aggregate()
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
 		ui.Text(c, "当前接管："+a.captureMode()).FontSize(11).TextColor(t.TextMuted)
+		if a.simpleMode() {
+			return
+		}
+		agg := a.mgr.Aggregate()
 		ui.Row(c).Grow(1)
 		if agg.Running {
 			addr := "socks5://" + displayAddr(agg.Addr)
@@ -2326,7 +2329,6 @@ func (a *app) quitView(c *ui.Context) {
 	open := a.quitAsk
 	ui.Modal(c, &open, func() {
 		ui.Column(c).Width(dialogNarrow).Gap(10).Children(func() {
-			dialogHeader(c, "退出 "+appName, "退出前先确认这几件事")
 			online, _, _ := a.mgr.Counts()
 			line := "退出会断开所有隧道。"
 			if a.tunOn.Load() {
@@ -2335,7 +2337,7 @@ func (a *app) quitView(c *ui.Context) {
 			if online > 0 {
 				line += fmt.Sprintf("当前有 %d 个接入点在线。", online)
 			}
-			ui.Text(c, line).FontSize(13).TextColor(t.Text).Wrap()
+			dialogHeader(c, "退出 "+appName+"？", line)
 			ui.Text(c, "退出后数据库转发和软件接管会停止。软件窗口保留；停止接管的软件新连接恢复系统网络。").
 				FontSize(11).TextColor(t.TextMuted).Wrap()
 			dialogFooter(c, func() {

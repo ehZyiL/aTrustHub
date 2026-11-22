@@ -193,8 +193,10 @@ func (a *app) simpleHero(c *ui.Context, v vpn.View) {
 		a.pointAlerts(c, v)
 		a.pointFacts(c, v)
 	})
-	a.simpleEntryStatus(c, v)
 	a.simpleCaptureSelector(c)
+	if mode := a.captureMode(); v.State == vpn.StateOnline && mode != captureOff && !a.tunPending.Load() {
+		ui.Text(c, mode+"生效中").FontSize(11).TextColor(t.Success)
+	}
 }
 
 // simpleCaptureSelector 是卡片内紧凑优雅的接管方式分段切换器。
@@ -226,41 +228,6 @@ func (a *app) simpleCaptureSelector(c *ui.Context) {
 				})
 			}
 		})
-	})
-}
-
-// simpleEntryStatus shows the entry address or active capture mode.
-// 系统代理生效时，系统所有软件均已走代理，无需展示独立代理地址与代理浏览器；
-// 只有不使用接管时，才提供专用代理浏览器与 SOCKS5 复制。
-func (a *app) simpleEntryStatus(c *ui.Context, v vpn.View) {
-	t := c.Theme()
-	curCapture := a.captureMode()
-	isIntercepted := curCapture != captureOff
-	agg := a.mgr.Aggregate()
-
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-		if v.State == vpn.StateOnline {
-			if isIntercepted {
-				ui.Text(c, "✓ "+curCapture+"生效中，浏览器可直接访问内网").
-					FontSize(11).TextColor(t.Success)
-			} else if agg.Running && agg.Addr != "" {
-				addr := "socks5://" + displayAddr(agg.Addr)
-				pill := ui.Row(c).Padding(3, 8).Radius(6).Background(t.SurfaceHover).
-					Border(1, t.Border).Gap(6).AlignItems(ui.Center)
-				pill.Children(func() {
-					ui.Text(c, addr).Font("monospace").FontSize(11).TextColor(t.Text)
-					iconButton(c, copyIcon, "复制代理地址", func() { a.copyText(addr) })
-				})
-			}
-		} else if agg.Running && agg.Addr != "" && !isIntercepted {
-			addr := "socks5://" + displayAddr(agg.Addr)
-			ui.Text(c, addr).Font("monospace").FontSize(11).TextColor(t.TextMuted)
-		} else if agg.Error != "" {
-			ui.Text(c, "入口未启动："+agg.Error).FontSize(11).TextColor(t.Danger).
-				MaxWidth(220).Ellipsis("…").Tooltip(agg.Error)
-		} else {
-			ui.Text(c, "入口未启动").FontSize(11).TextColor(t.TextMuted)
-		}
 	})
 }
 

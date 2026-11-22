@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"path/filepath"
 	"strings"
@@ -559,6 +560,61 @@ func TestAccessLogFiltersAndClearsAccessOnly(t *testing.T) {
 	remaining := a.bus.Tail(0)
 	if len(remaining) != 1 || remaining[0].Source != "app" || !tt.HasText("还没有访问记录") {
 		t.Fatalf("清空访问记录时应保留运行日志：%+v", remaining)
+	}
+}
+
+func TestAccessLogKeepsUnifiedEntryVisible(t *testing.T) {
+	a := testApp(t)
+	a.tab = 2
+	for i := 0; i < 40; i++ {
+		a.bus.Add(vpn.AccessFail, fmt.Sprintf("reports.example.test:443 · 失败记录 %d", i))
+	}
+	tt := ui.NewTester(a.view, 720, 520)
+	checkFooter := func() {
+		t.Helper()
+		rect, ok := tt.Find("统一入口")
+		if !ok || rect.Y < 480 || rect.Y+rect.H > 520 {
+			t.Fatalf("统一入口应固定在窗口底部：找到了 %v，位置 %+v", ok, rect)
+		}
+	}
+	checkFooter()
+	if !tt.HasText("未启动") {
+		t.Fatal("未监听时仍应说明入口状态")
+	}
+	tt.Scroll(350, 300, 0, 600)
+	checkFooter()
+
+	a.cfg.Settings.AggregatePort = freePorts(t, 1)[0]
+	a.mgr.Apply(a.cfg)
+	a.mgr.Start()
+	tt.Frame()
+	checkFooter()
+	if addr := a.mgr.Aggregate().Addr; addr == "" || !tt.HasText("socks5://"+addr) {
+		t.Fatal("监听后应展示可用的入口地址")
+	}
+
+	a.cfg.Settings.AggregateEnabled = false
+	a.mgr.Apply(a.cfg)
+	tt.Frame()
+	checkFooter()
+	if !tt.HasText("已关闭") {
+		t.Fatal("禁用统一入口时仍应说明入口状态")
+	}
+}
+
+func TestQuitConfirmationCanBeCancelled(t *testing.T) {
+	a := testApp(t)
+	a.openSettingsAt(settingAbout)
+	a.quitAsk = true
+	tt := ui.NewTester(a.view, 720, 520)
+	if !tt.HasText("退出会断开所有隧道") || !tt.HasText("确认退出") {
+		t.Fatal("退出确认应展示退出影响和确认按钮")
+	}
+	if err := tt.Click("取消"); err != nil {
+		t.Fatal(err)
+	}
+	if a.quitAsk || a.quitRequested.Load() || !a.settings.open {
+		t.Fatal("取消退出后应留在原页面")
 	}
 }
 

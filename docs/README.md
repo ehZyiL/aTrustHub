@@ -58,6 +58,7 @@ docs/
 | 启动后自动恢复系统代理 | ✅ | ❌ | ❌（需管理员授权，故意关闭） |
 | 全局 TUN（旧，仅 aTrust 会话） | ✅ | ❌ `supportsElevatedTUN=false` | ✅ |
 | 应用接管（新，worker 驱动的资源 TUN） | ✅ | ✅ | ❌ `supportsResourceTUN=false` |
+| 启动后自动恢复应用接管（开关） | ❌（启动助手每次要过 UAC，`supportsAutoRestoreAppCapture=false`） | ✅（systemd 常驻助手） | ❌（无应用接管） |
 
 两个容易搞错的点：
 

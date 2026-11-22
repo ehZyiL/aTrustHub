@@ -24,11 +24,11 @@ flowchart TD
     end
 
     subgraph WorkerProcess ["VPN 协议核心 (core/easyconnect-worker.exe)"]
-        ECWorker["EasyConnect / aTrust 隧道封装 (IPC v6)"]
+        ECWorker["EasyConnect / aTrust 隧道封装 (IPC v7)"]
     end
 
     GUI <-->|"受限命名管道 (IPC v7)"| PipeServer
-    GUI <-->|"标准输入输出 (IPC v6)"| ECWorker
+    GUI <-->|"标准输入输出 (IPC v7)"| ECWorker
     LocalApps -->|"PROC_THREAD_ATTRIBUTE_JOB_LIST"| TargetApp["目标被接管应用 (如 DBX / 浏览器)"]
     TargetApp -.->|"TCP 连接"| WintunMgr
     WintunMgr <-->|"IP 包数据流"| Netstack
@@ -138,7 +138,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\test-capture.ps1
 ```
 
 - **验证范围**：
-  - Worker IPC v6 单行 JSON 协议一致性；
+  - Worker IPC v7 单行 JSON 协议一致性；
   - Job Object 原子创建与子进程跟踪；
   - `winiphlpapi` TCP 状态表所有权判定与二义性剔除；
   - SOCKS 握手重组、数据完整性与 TCP 半关闭（Half-Close）传输；

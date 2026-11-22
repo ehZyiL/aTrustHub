@@ -46,8 +46,8 @@ connect-hub-linux-amd64/
 ├── start.sh                   # 启动包装脚本（支持单实例唤醒）
 ├── install-desktop-entry.sh   # 桌面图标与菜单注册脚本
 ├── core/
-│   ├── easyconnect-worker     # VPN 协议引擎 (IPC v6)
-│   └── connect-hub-capture    # 操作系统特权助手 (IPC v10)
+│   ├── easyconnect-worker     # VPN 协议引擎 (IPC v7)
+│   └── easyconnect-hub-capture # 操作系统特权助手 (IPC v10；安装后位于 /usr/local/libexec/)
 ├── share/icons/hicolor/       # 各尺寸高清应用图标
 ├── resources/                 # 运行时静态资源
 ├── LICENSES/                  # 开源协议清单

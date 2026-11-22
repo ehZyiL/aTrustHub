@@ -1,0 +1,71 @@
+# Connect Hub 文档（核实版）
+
+本目录只收**已对源码逐条核实的结论**，不收历史过程记录。
+
+历史过程记录（19 份带日期的验收/实施记录）仍留在仓库外的 `easy-connect/docs/`，
+它们没有搬进来，原因是：内容大量互相覆盖、协议版本号已过期、部分结论与当前代码相反。
+这些记录的**每一条错误与过期项**已整理到 [review/errata.md](review/errata.md)，
+需要追溯现场证据时去原始文件，需要判断"现在到底是不是这样"时看本目录。
+
+## 核实基线
+
+| 项 | 值 | 出处 |
+|---|---|---|
+| Worker IPC | **v7** | `internal/workeripc/protocol.go` `Version = 7` |
+| Windows 提权助手 | **v7** | `internal/wincapture/protocol.go` `ProtocolVersion = 7` |
+| Linux 提权助手 | **v10** | `internal/capture/protocol_linux.go` `ProtocolVersion = 10` |
+| Hub 模块 | `GO 1.27.3` | `aTrustHub/go.mod` |
+| 应用构建标识 | `0.1.0-dev-multigateway-tun.11` | `app.go` `appBuild` |
+
+任何给出不同协议号的文档（v3/v4/v5/v8/v9 等）都已过期，不要据此排障。
+
+## 目录结构
+
+```text
+docs/
+├── README.md            本文件：索引、核实基线、平台能力矩阵
+├── design/              设计（已核实）—— 回答“具体怎么实现的”
+│   ├── architecture.md  进程模型、构建上下文、模块边界、运行时约定
+│   ├── networking.md    四种接管方式、路由与 DNS 归属、范围边界
+│   └── recovery.md      退出顺序、事务日志、生效时机、硬杀矩阵、已知缺口
+├── review/
+│   └── errata.md        旧文档勘误 —— 回答“旧说法哪里不对”
+├── roadmap.md           未完成事项 —— 回答“还差什么”（拆成代码可判定 / 待实机）
+└── assets/              README 引用的 4 张界面截图
+```
+
+分类原则：按“打开它要回答什么问题”分——**怎么实现**（design）/**哪里不对**（review）/**还差什么**（roadmap）/**素材**（assets）。
+
+## 文档地图
+
+| 文档 | 回答什么问题 |
+|---|---|
+| [design/architecture.md](design/architecture.md) | 进程怎么分、谁提权、内核源码有几个真源、模块边界、平台能力 |
+| [design/networking.md](design/networking.md) | 四种网络接管方式各自怎么实现、路由与 DNS 归属怎么判、范围边界到哪 |
+| [design/recovery.md](design/recovery.md) | 正常退出与硬杀分别会清理什么、事务日志在哪、还剩哪些洞 |
+| [review/errata.md](review/errata.md) | 旧文档哪些说法与代码不符、错在哪 |
+| [roadmap.md](roadmap.md) | 哪些"未完成"是代码可判定的、哪些只能等实机 |
+
+## 平台能力矩阵（已核实）
+
+判定来源：`platform_{windows,linux,darwin}.go`、`resource_tun.go`、`view.go` `captureSupported`。
+
+| 能力 | Windows | Linux | macOS |
+|---|---|---|---|
+| 独立 SOCKS5/HTTP 端口（每接入点） | ✅ | ✅ | ✅ |
+| 统一入口（聚合代理，默认 1080） | ✅ | ✅ | ✅ |
+| 系统代理托管（手动切档） | ✅ | ❌ 不提供 | ✅ |
+| 启动后自动恢复系统代理 | ✅ | ❌ | ❌（需管理员授权，故意关闭） |
+| 全局 TUN（旧，仅 aTrust 会话） | ✅ | ❌ `supportsElevatedTUN=false` | ✅ |
+| 应用接管（新，worker 驱动的资源 TUN） | ✅ | ✅ | ❌ `supportsResourceTUN=false` |
+
+两个容易搞错的点：
+
+1. **Linux 没有"全局 TUN"这一档**，但**有**"应用接管"。旧文档里"Linux 的 TUN"与"Linux 无 TUN"两种说法都只对了一半。
+2. **macOS 有全局 TUN，没有应用接管**。这与"Linux/Windows 才有应用接管"的直觉相反。
+
+## 写作约定
+
+- 每条结论后给代码位置；只有代码能证明的才写成结论。
+- 只能靠实机验证的（UAC、Wintun、NRPT、systemd-resolved 宿主行为等）一律标 **待实机**，不写成"已支持"。
+- 协议号、文件名、路径必须能在本仓库里 `rg` 到，否则不写。

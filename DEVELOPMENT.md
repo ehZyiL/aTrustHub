@@ -30,7 +30,7 @@ flowchart TB
     end
 
     subgraph Layer2 ["2. 协议核心层 (独立工作进程)"]
-        Worker["VPN 协议核心 (easyconnect-worker)<br/>Stdio IPC v6 · 隔离运行 · 内存优化"]
+        Worker["VPN 协议核心 (easyconnect-worker)<br/>Stdio IPC v7 · 隔离运行 · 内存优化"]
         aTrustProto["aTrust 协议栈<br/>(继承自上游，Fork 后未做实机测试)"]
         EasyConnectProto["EasyConnect 协议栈<br/>(L3/L4 封装、定制 uTLS)"]
     end
@@ -41,7 +41,7 @@ flowchart TB
         LinuxNet["Linux 协议栈<br/>cgroups · iptables · 原生 TUN"]
     end
 
-    GUI <-->|"Stdio JSON-RPC (v6)"| Worker
+    GUI <-->|"Stdio JSON-RPC (v7)"| Worker
     GUI <-->|"命名管道 / 本地 Socket"| Helper
     Worker -->|"加密 TLS / UDP 隧道"| Gateways["远程网关 (aTrust / EasyConnect)"]
     Helper -->|"分流注入与路由拦截"| WinNet
@@ -101,7 +101,7 @@ replace (
 
 ## 3. 核心进程与 IPC 通信规范
 
-### 3.1 Worker IPC 协议（当前版本：v6）
+### 3.1 Worker IPC 协议（当前版本：v7）
 
 - **载体**：标准输入输出（`stdin` / `stdout`），以单行 JSON 格式交互。
 - **两端代码**：
@@ -124,7 +124,7 @@ replace (
   - **安全校验**：助手在接受连接时主动校验连接端进程 PID 与可执行文件签名/路径，阻断仿冒攻击；会话 Token 在内存中协商，不写磁盘。
 - **Linux 平台（协议版本：v10）**：
   - 代码位置：[aTrustHub/internal/capture/protocol_linux.go](file:///d:/Programming/Projects/Go/easy-connect/aTrustHub/internal/capture/protocol_linux.go)
-  - **载体**：Unix Domain Socket（`/run/connect-hub/helper.sock` 或用户专用运行时目录）。
+  - **载体**：Unix Domain Socket（`/run/easyconnect-hub-capture-<uid>/control.sock`，权限 0600 且 owner 为该 UID）。
   - **身份凭据**：通过 64 字节随机 Token 进行双向握手确认，防止未授权租约操作。
 
 ---
@@ -245,7 +245,7 @@ mkdir -p build/debug/resources build/debug/core
 
 # 2. 编译主程序与助手
 go build -mod=readonly -trimpath -o build/debug/connect-hub .
-go build -mod=readonly -trimpath -o build/debug/core/connect-hub-capture ./cmd/app-helper
+go build -mod=readonly -trimpath -o build/debug/core/easyconnect-hub-capture ./cmd/app-helper
 
 # 3. 编译独立 Worker (GOWORK=off)
 (cd ../zju-connect && env GOWORK=off go build -mod=readonly -trimpath -o ../aTrustHub/build/debug/core/easyconnect-worker ./cmd/easyconnect-worker)
@@ -287,7 +287,7 @@ diff -u <(sed -e 's/\r$//' -e 's/^package desktop$/package workeripc/' ../zju-co
 ./core/connect-hub-capture.exe --protocol-version
 
 # 校验 Linux 助手协议版本 (当前预期为 10)
-./core/connect-hub-capture --protocol-version
+./core/easyconnect-hub-capture --protocol-version
 ```
 
 ---
@@ -355,4 +355,4 @@ GitHub Actions 自动化流水线配置在 [aTrustHub/.github/workflows/build.ym
     ```powershell
     Get-DnsClientNrptRule | Where-Object { $_.Comment -like "*ConnectHub*" } | Remove-DnsClientNrptRule -Force
     ```
-  - Linux：执行 `sudo systemctl stop connect-hub-helper` 或清理 `/run/connect-hub/`。
+  - Linux：执行 `sudo systemctl stop 'easyconnect-hub-capture@<uid>.service'` 或清理 `/run/easyconnect-hub-capture-<uid>/`。

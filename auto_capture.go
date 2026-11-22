@@ -198,6 +198,34 @@ func (a *app) retryAutoCapture() {
 	a.armAutoCapture("retry")
 }
 
+// noticeAppCaptureNotRestored 说清「上次用的是应用接管、这次为什么没接管」。
+// 应用接管要拉起提权助手，不能在启动时静默开启，所以默认不自动恢复；但静默
+// 地停在「不使用」会让人以为它自己会回来，所以要明确提示一次（不改变任何行为）。
+func (a *app) noticeAppCaptureNotRestored(cfg model.Config) {
+	if cfg.Settings.CaptureMode != model.CaptureModeApp || cfg.Settings.AutoRestoreAppCapture {
+		return
+	}
+	if a.quitRequested.Load() || a.captureMode() == captureAppCapture {
+		return
+	}
+	a.setToast("上次使用的是「应用接管」，本次未自动接管；勾选「启动 / 登录后自动恢复应用接管」后，下次会自动接管。")
+	a.tunLogf("上次使用的是应用接管，但「自动恢复应用接管」未勾选：本次不自动接管（在接管方式下拉里可重新打开）")
+}
+
+// rememberAppCaptureIntent 是「用户手动选中应用接管」时的意图记录：下次启动
+// 按这个意图自动恢复。只在用户显式选这一档时调用，不在自动恢复流程里调用，
+// 所以不会把用户手动取消的勾选又勾回去（取消勾选走 clearAutoRestoreAppCapture）。
+func (a *app) rememberAppCaptureIntent() {
+	if a.quitRequested.Load() {
+		return
+	}
+	if err := a.setAutoRestoreAppCapture(true); err != nil {
+		a.tunLogf("记住「下次启动自动恢复应用接管」失败：%v", err)
+		return
+	}
+	a.tunLogf("已记下「下次启动自动恢复应用接管」，可在接管设置里取消勾选")
+}
+
 func (a *app) autoRestoreEnabled() bool {
 	a.autoCapture.mu.Lock()
 	defer a.autoCapture.mu.Unlock()

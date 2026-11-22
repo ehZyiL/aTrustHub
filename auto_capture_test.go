@@ -714,3 +714,122 @@ func TestSettingsPageShowsAutoRestoreCheckbox(t *testing.T) {
 		t.Fatal("clicking the checkbox did not arm auto restore")
 	}
 }
+
+// onlineGatewayApp 让管理器里真的有一个在线接入点：应用接管的前置条件就是
+// 「至少一个网关在线」。端口必须自选，否则开着应用跑测试会撞上 1080/1081。
+func onlineGatewayApp(t *testing.T) *app {
+	t.Helper()
+	a := testApp(t)
+	ports := freePorts(t, 2)
+	var id string
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Settings.AggregatePort = ports[0]
+		id = cfg.Add(model.AccessPoint{
+			Name: "网关", Server: "gw.example", Port: 443, Username: "u",
+			AuthMode: string(model.AuthModePassword), InPool: true, SocksPort: ports[1],
+		}).ID
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg = a.store.Config()
+	a.mgr.Apply(a.cfg)
+	if err := a.store.SetPassword(id, "pw"); err != nil {
+		t.Fatal(err)
+	}
+	a.mgr.Connect(id)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if online, _, _ := a.mgr.Counts(); online >= 1 {
+			return a
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("接入点没有上线，应用接管的前置条件不成立")
+	return nil
+}
+
+// stampResourceTUN 装一个假的应用接管控制器，避免测试真的去拉起提权助手。
+func stampResourceTUN(t *testing.T, a *app) *resourceTUNController {
+	t.Helper()
+	r := &controllerRuntime{done: make(chan struct{})}
+	a.resourceTUN = &resourceTUNController{
+		configs: func() ([]localapps.CaptureConfig, error) { return nil, nil },
+		start: func(context.Context, []localapps.CaptureConfig) (localapps.SystemCapture, error) {
+			return r, nil
+		},
+		suspendProxy: func() (func() error, error) { return func() error { return nil }, nil },
+	}
+	t.Cleanup(func() { a.resourceTUN.Close() })
+	return a.resourceTUN
+}
+
+// D：用户手动选中「应用接管」，就把「下次启动自动恢复」的意图记下来。
+// 否则重启后会静默回到「不使用」，与用户的显式选择相反。
+func TestManualAppCaptureSelectionRemembersAutoRestore(t *testing.T) {
+	a := onlineGatewayApp(t)
+	ctrl := stampResourceTUN(t, a)
+	if a.autoRestoreEnabled() || a.store.Config().Settings.AutoRestoreAppCapture {
+		t.Fatal("默认状态应当是「不自动恢复」")
+	}
+
+	a.applyCaptureMode(captureAppCapture)
+
+	if !a.store.Config().Settings.AutoRestoreAppCapture {
+		t.Error("手动选中应用接管后，设置里应当记下「下次自动恢复」")
+	}
+	if !a.autoRestoreEnabled() {
+		t.Error("意图记下后，本次运行也要进入自动恢复状态")
+	}
+	waitLogged(t, a, "已记下")
+	waitController(t, ctrl, func(s resourceTUNStatus) bool { return s.Running })
+}
+
+// 用户显式取消勾选后再手动选回应用接管：最近一次显式意图优先，重新记下。
+// 这跟「取消勾选只影响以后」是同一套语义，必须写死，免得以后被改成静默忽略。
+func TestManualAppCaptureSelectionOverridesUncheckedIntent(t *testing.T) {
+	a := onlineGatewayApp(t)
+	stampResourceTUN(t, a)
+	if err := a.setAutoRestoreAppCapture(false); err != nil {
+		t.Fatal(err)
+	}
+	if a.autoRestoreEnabled() {
+		t.Fatal("取消勾选后不该还开着自动恢复")
+	}
+
+	a.applyCaptureMode(captureAppCapture)
+
+	if !a.store.Config().Settings.AutoRestoreAppCapture || !a.autoRestoreEnabled() {
+		t.Error("再次手动选中应用接管应当重新记下自动恢复意图")
+	}
+}
+
+// B 的另一半：提示不能只闪一下 toast，设置页那一栏要能一直看到原因。
+func TestSettingsShowsAppCaptureNotRestoredHint(t *testing.T) {
+	a := testApp(t)
+	forceAutoCaptureSupported(t)
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Settings.CaptureMode = model.CaptureModeApp
+		cfg.Settings.AutoRestoreAppCapture = false
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg = a.store.Config()
+	a.openSettingsAt(settingNetwork)
+	tt := ui.NewTester(a.view, 1120, 800)
+	tt.Frame()
+	texts := strings.Join(tt.Texts(), "|")
+	if !strings.Contains(texts, "上次使用的是「应用接管」，本次未自动接管") {
+		t.Fatalf("设置页缺少「未自动接管」的说明: %s", texts)
+	}
+
+	// 勾选自动恢复后这句说明就该消失：它描述的是「没有恢复」这个状态。
+	if err := a.setAutoRestoreAppCapture(true); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if got := strings.Join(tt.Texts(), "|"); strings.Contains(got, "本次未自动接管") {
+		t.Fatalf("勾选后说明应当消失: %s", got)
+	}
+}

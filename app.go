@@ -1036,7 +1036,8 @@ func (a *app) guardSystemProxy() {
 
 // maybeRestoreCaptureMode 在启动后按记住的接管方式接管系统代理。默认（也是首次运行）
 // 是系统代理：统一入口一开始监听就把它指过去。全局 TUN 有自己的 tunEnabled 恢复路径；
-// 应用接管的自动恢复由 auto_capture.go 的独立开关负责，不在这里处理。
+// 应用接管的自动恢复由 auto_capture.go 的独立开关负责，不在这里处理——但这里负责
+// 说清楚「上次用的是应用接管、这次为什么不接管」（否则会静默停在「不使用」）。
 func (a *app) maybeRestoreCaptureMode() {
 	if a.captureRestored {
 		return
@@ -1047,8 +1048,15 @@ func (a *app) maybeRestoreCaptureMode() {
 	if cfg.Settings.TunEnabled {
 		return
 	}
+	// 这一档的自动恢复只认「上次生效的就是系统代理」。其它档位在这里让路，
+	// 但要先把话说明白：只提示一次，不改变任何接管行为。
+	if cfg.Settings.CaptureMode != model.CaptureModeSystem {
+		a.noticeAppCaptureNotRestored(cfg)
+		a.captureRestored = true
+		return
+	}
 	// macOS 写系统代理要一次管理员授权，每次启动弹密码不可接受；Linux 没有这一档。
-	if !supportsAutoSystemProxy() || cfg.Settings.CaptureMode != model.CaptureModeSystem {
+	if !supportsAutoSystemProxy() {
 		a.captureRestored = true
 		return
 	}

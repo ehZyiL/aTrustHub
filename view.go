@@ -1011,6 +1011,10 @@ func (a *app) applyCaptureMode(mode string) {
 		// 这样一次手动重试不会被上一轮失败预算挡住。
 		if a.autoRestoreEnabled() {
 			a.armAutoCapture("manual")
+		} else {
+			// 用户显式选过这一档，就把「下次启动自动恢复」记下来：重启后
+			// 静默回到「不使用」说不通。开关仍可在设置里取消勾选。
+			a.rememberAppCaptureIntent()
 		}
 		a.setupResourceTUN()
 		if a.resourceTUN != nil {
@@ -2127,6 +2131,13 @@ func (a *app) captureSection(c *ui.Context) {
 				"手动切换接管方式或取消接管会同时关闭本项。取消勾选只影响以后，"+
 				"不会停止当前正在运行的接管。").
 				FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(620)
+			// 上次用的是应用接管、本次却没有自动接管：把原因写在用户看得见的地方，
+			// 而不是让人对着一个「不使用」猜。
+			if a.cfg.Settings.CaptureMode == model.CaptureModeApp &&
+				!a.cfg.Settings.AutoRestoreAppCapture && a.captureMode() == captureOff {
+				ui.Text(c, "上次使用的是「应用接管」，本次未自动接管；勾选上面的选项后，下次启动或登录时会自动接管。").
+					FontSize(11).TextColor(t.Warning).Wrap().MaxWidth(620)
+			}
 			if line := a.autoCaptureStatusLine(); line != "" {
 				color := t.TextMuted
 				if a.autoCapturePaused() {

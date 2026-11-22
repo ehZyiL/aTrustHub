@@ -240,6 +240,81 @@ func TestMaybeRestoreCaptureModeYieldsToTunIntent(t *testing.T) {
 	}
 }
 
+// 上一次生效的是应用接管、但自动恢复没勾选：启动后不能静默停在「不使用」。
+// 除非明确提示一次，否则用户会以为它自己会回来；但提示不能改变任何接管行为。
+func TestMaybeRestoreCaptureModeNoticesAppCaptureNotRestored(t *testing.T) {
+	a := testApp(t)
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Settings.CaptureMode = model.CaptureModeApp
+		cfg.Settings.AutoRestoreAppCapture = false
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg = a.store.Config()
+	origApply := applySystemProxyFn
+	t.Cleanup(func() { applySystemProxyFn = origApply })
+	calls := 0
+	applySystemProxyFn = func(string, bool) error { calls++; return nil }
+
+	a.maybeRestoreCaptureMode()
+
+	if calls != 0 {
+		t.Fatalf("应用接管不该被写成系统代理，实际写了 %d 次", calls)
+	}
+	if !strings.Contains(a.toast, "应用接管") {
+		t.Errorf("应当提示上次用的是应用接管，实际 toast=%q", a.toast)
+	}
+	if got := tailLog(a.bus.Tail(5)); !strings.Contains(got, "自动恢复应用接管") {
+		t.Errorf("提示也要进运行日志，实际 %q", got)
+	}
+	if a.captureMode() != captureOff {
+		t.Errorf("提示不能顺手打开任何接管，实际 %q", a.captureMode())
+	}
+	if !a.captureRestored {
+		t.Error("提示过就应当标记，避免每轮 tick 重复提示")
+	}
+}
+
+// 自动恢复已经勾选时不要多嘴：下一个 tick 的 maybeAutoRestoreAppCapture 会
+// 自己接管（或报道失败原因）。
+func TestMaybeRestoreCaptureModeStaysQuietWhenAppRestoreEnabled(t *testing.T) {
+	a := testApp(t)
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Settings.CaptureMode = model.CaptureModeApp
+		cfg.Settings.AutoRestoreAppCapture = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg = a.store.Config()
+
+	a.maybeRestoreCaptureMode()
+
+	if a.toast != "" {
+		t.Errorf("勾选了自动恢复就不该提示，实际 toast=%q", a.toast)
+	}
+	if got := tailLog(a.bus.Tail(5)); strings.Contains(got, "本次不自动接管") {
+		t.Errorf("不该记「不自动接管」，实际 %q", got)
+	}
+}
+
+// 系统代理档位本来就跳过应用接管的提示。
+func TestMaybeRestoreCaptureModeNoAppNoticeForSystem(t *testing.T) {
+	a := testApp(t)
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Settings.CaptureMode = model.CaptureModeSystem
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg = a.store.Config()
+	a.maybeRestoreCaptureMode()
+	if strings.Contains(a.toast, "应用接管") {
+		t.Errorf("系统代理档位不该提应用接管，实际 toast=%q", a.toast)
+	}
+}
+
 func tailLog(entries []vpn.LogEntry) string {
 	lines := make([]string, 0, len(entries))
 	for _, entry := range entries {

@@ -171,27 +171,16 @@ func (a *app) simpleEmpty(c *ui.Context) {
 	})
 }
 
-// simpleHero 是那张核心卡片：状态、地址、动作、接管方式展示。
+// simpleHero 复用列表卡片的接入点信息和操作。
 func (a *app) simpleHero(c *ui.Context, v vpn.View) {
 	t := c.Theme()
-	card := ui.Column(c).Padding(18).Gap(12).Radius(14).Background(t.Surface).
+	card := ui.Column(c).Padding(14).Gap(5).Radius(8).Background(t.Surface).
 		Border(1, t.Border).OnClick(func() { a.openEditor(v) })
 	if card.Hovered() {
 		card.Background(t.SurfaceHover)
 	}
 	card.Children(func() {
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Row(c).Size(10, 10).Radius(5).Background(stateColor(t, v.State))
-			ui.Column(c).Gap(2).Grow(1).MinWidth(0).Children(func() {
-				ui.Text(c, v.Name).FontSize(17).Bold().Ellipsis("…")
-				ui.Text(c, addrOf(v)).Font("monospace").FontSize(11).
-					TextColor(t.TextMuted).Ellipsis("…")
-			})
-			a.stateBadge(c, v.State)
-			a.pointAction(c, v)
-		})
-		a.pointAlerts(c, v)
-		a.pointFacts(c, v)
+		a.pointHeading(c, v)
 	})
 	a.simpleCaptureSelector(c)
 	if mode := a.captureMode(); v.State == vpn.StateOnline && mode != captureOff && !a.tunPending.Load() {

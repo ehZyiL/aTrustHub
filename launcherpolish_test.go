@@ -29,13 +29,13 @@ func TestEnvStripIsRuntimeOnly(t *testing.T) {
 	}
 }
 
-func TestPointCardShowsDiagnosticsAndOpensEditor(t *testing.T) {
+func TestPointCardKeepsDiagnosticsInEditor(t *testing.T) {
 	a := layoutApp(t)
 	tt := ui.NewTester(a.view, 880, 600)
 	tt.Frame()
 	_, hasEditButton := tt.Find("编辑 公司主网关")
-	if !tt.HasText("HTTP / SOCKS5") || tt.HasText("连接与诊断") || hasEditButton {
-		t.Fatal("卡片应直接显示代理信息，且没有诊断或编辑按钮")
+	if tt.HasText("HTTP / SOCKS5") || tt.HasText("连接详情") || tt.HasText("连接与诊断") || hasEditButton {
+		t.Fatal("首页卡片应可直接点击，连接详情和代理地址留在编辑器里")
 	}
 	browser, hasBrowser := tt.Find("代理浏览器 公司主网关")
 	disconnect, hasDisconnect := tt.Find("断开 公司主网关")
@@ -60,6 +60,15 @@ func TestPointCardShowsDiagnosticsAndOpensEditor(t *testing.T) {
 	tt.Frame()
 	if !a.editor.open || a.editor.editingID != a.cfg.Points[0].ID {
 		t.Fatal("点击卡片应该打开对应接入点的编辑器")
+	}
+	if !tt.HasText("连接详情") || tt.HasText("HTTP / SOCKS5") {
+		t.Fatal("正常在线的接入点应当先显示编辑项，连接详情默认收起")
+	}
+	if err := tt.Click("查看详情"); err != nil {
+		t.Fatal(err)
+	}
+	if !tt.HasText("HTTP / SOCKS5") {
+		t.Fatal("展开在线连接详情应当保留代理地址")
 	}
 }
 
@@ -127,9 +136,10 @@ func TestUseProtocolGroups(t *testing.T) {
 func TestQuickEntryActionDoesNotOpenEntry(t *testing.T) {
 	opened, acted := false, false
 	entry := quickTile{
-		label: "公司主网关",
-		hint:  "aTrust · 在线",
-		open:  func() { opened = true },
+		label:  "公司主网关",
+		hint:   "aTrust",
+		status: "在线",
+		open:   func() { opened = true },
 		action: tileAction{
 			label: "断开",
 			run:   func() { acted = true },

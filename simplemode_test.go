@@ -145,6 +145,10 @@ func TestSettingsNormalizeKeepsSimpleMode(t *testing.T) {
 // 顶栏在简单模式下收成纯单页，不需要顶部分段 Tab。
 func TestPageNavSimpleMode(t *testing.T) {
 	a := testApp(t)
+	_, tt := frames(t, a, 880, 560)
+	if _, ok := tt.Find("页面导航"); !ok {
+		t.Fatal("完整模式应渲染导航容器")
+	}
 	pages := a.pages()
 	if len(pages) != 4 || pages[0].Label != "接入点" || pages[3].Tab != 3 {
 		t.Fatalf("完整模式应当是四段 0..3，实际 %+v", pages)
@@ -153,6 +157,10 @@ func TestPageNavSimpleMode(t *testing.T) {
 	pages = a.pages()
 	if len(pages) != 0 {
 		t.Fatalf("简单模式为纯单页，顶栏无需导航分段，实际 %+v", pages)
+	}
+	tt.Frame()
+	if _, ok := tt.Find("页面导航"); ok {
+		t.Fatal("简单模式不应保留空的导航容器")
 	}
 }
 

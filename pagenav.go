@@ -50,11 +50,15 @@ func (a *app) goTab(page int) {
 // pageNav 是顶栏的分段导航。每一段都是一次显式的切页动作，所以即使点的
 // 是当前页，也能从设置页回到该页——ui.Segmented 绑定同一个值时不会报变化。
 func (a *app) pageNav(c *ui.Context) {
+	pages := a.pages()
+	if len(pages) == 0 {
+		return
+	}
 	t := c.Theme()
 	track := ui.Row(c).Padding(3).Radius(8).Background(t.SurfaceHover).
-		Border(1, t.Border).Gap(2)
+		Border(1, t.Border).Gap(2).Label("页面导航")
 	track.Children(func() {
-		for _, ref := range a.pages() {
+		for _, ref := range pages {
 			page := ref.Tab
 			label := ref.Label
 			active := !a.settings.open && a.tab == page

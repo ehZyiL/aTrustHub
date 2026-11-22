@@ -623,8 +623,10 @@ func TestAccessLogKeepsUnifiedEntryVisible(t *testing.T) {
 func TestQuitConfirmationCanBeCancelled(t *testing.T) {
 	a := testApp(t)
 	a.openSettingsAt(settingAbout)
-	a.quitAsk = true
 	tt := ui.NewTester(a.view, 720, 520)
+	if err := tt.Click("退出 " + appName); err != nil {
+		t.Fatal(err)
+	}
 	if !tt.HasText("退出会断开所有隧道") || !tt.HasText("确认退出") {
 		t.Fatal("退出确认应展示退出影响和确认按钮")
 	}

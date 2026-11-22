@@ -78,10 +78,11 @@ func TestLayoutShots(t *testing.T) {
 	shot("19-settings-logs", 0, false, 1120, 780)
 	a.openSettingsAt(settingAbout)
 	shot("20-settings-about", 0, false, 1120, 780)
-	a.settings.open = false
 	a.quitAsk = true
+	shot("31-dialog-quit", 0, false, 720, 520)
 	shot("29-dialog-quit-dark", 0, true, 720, 520)
 	a.quitAsk = false
+	a.settings.open = false
 
 	// 接管胶囊展开的样子：就地切换不进设置页，也留一条进设置的深链接。
 	a.captureMenuOpen = true
@@ -107,11 +108,15 @@ func TestLayoutShots(t *testing.T) {
 		a.openEditor(v)
 		shot("14-dialog-point-editor", 0, false, 1120, 780)
 		shot("17-dialog-point-editor-min", 0, false, 880, 560)
+		a.editor.detailsOpen = true
+		shot("33-dialog-point-details", 0, false, 880, 560)
 		a.editor.open = false
 	}
 	a.bus.ClearAccess()
 	a.sysProxyOn.Store(false)
 	a.mgr.Start()
 	shot("30-access-empty", 2, false, 880, 560)
+	a.cfg.Settings.SimpleMode = true
+	shot("32-simple-multi", 0, false, 720, 520)
 	t.Logf("shots dir: %s", out)
 }

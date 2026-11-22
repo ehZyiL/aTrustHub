@@ -120,7 +120,6 @@ func TestAccessPointActionsFitMinimumWindow(t *testing.T) {
 	for _, label := range []string{
 		"＋ 添加接入点",
 		"打开常用入口 公司主网关",
-		"HTTP / SOCKS5",
 		"代理浏览器 公司主网关",
 		"断开 公司主网关",
 		"登录 办公网线路",
@@ -132,8 +131,9 @@ func TestAccessPointActionsFitMinimumWindow(t *testing.T) {
 	}
 	tt.Scroll(400, 370, 0, 240)
 	tt.Frame()
-	if r, ok := tt.Find("登录 浙江大学网关"); !ok || r.W <= 0 || r.H <= 0 {
-		t.Errorf("滚动后应能操作靠后的接入点：found=%v rect=%+v", ok, r)
+	footer, hasFooter := tt.Find("统一入口")
+	if r, ok := tt.Find("登录 浙江大学网关"); !ok || r.W <= 0 || r.H <= 0 || !hasFooter || r.Y+r.H > footer.Y {
+		t.Errorf("滚动后应能操作靠后的接入点：found=%v rect=%+v footer=%+v", ok, r, footer)
 	}
 }
 
@@ -142,9 +142,9 @@ func TestSettingsPageFitsWindow(t *testing.T) {
 	a := layoutApp(t)
 	sections := map[int][]string{
 		settingGeneral: {"设置", "显示与主题", "颜色模式", "主题配色", "经典蓝白", "极客森绿", "柔和紫灰"},
-		settingNetwork: {"网络与接管", "接管方式", "当前接管：系统代理"},
+		settingNetwork: {"网络与接管", "选择接管方式", "状态与日志", "当前接管：系统代理"},
 		settingLogs:    {"日志", "运行日志", "打开 TUN 日志"},
-		settingAbout:   {"关于", "版本", "项目主页", "打开数据目录"},
+		settingAbout:   {"关于", "版本与链接", "项目主页", "打开数据目录", "退出应用"},
 	}
 	for _, size := range []struct{ w, h int }{{1120, 780}, {880, 560}} {
 		for section, want := range sections {

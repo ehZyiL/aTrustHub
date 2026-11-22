@@ -242,6 +242,7 @@ type editorDraft struct {
 	certificateAddress     string
 	certificateAcceptedPin string
 	advanced               bool
+	detailsOpen            bool
 	open                   bool
 	editingID              string
 	name                   string

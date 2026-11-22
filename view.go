@@ -1040,8 +1040,7 @@ func (a *app) statusBanner(c *ui.Context, views []vpn.View) {
 			connecting++
 		case vpn.StateOnline:
 			online++
-			if v.TunnelState != "" || (v.MonitorOn && v.Alive == "已失效") ||
-				v.DNSProbe.State == "failed" || v.TCPProbe.State == "failed" {
+			if pointNeedsAttention(v) {
 				attention++
 			}
 		case vpn.StateError:
@@ -1168,31 +1167,42 @@ func (a *app) pointCard(c *ui.Context, v vpn.View) {
 		a.revealPointID = ""
 	}
 	card.Children(func() {
-		header := ui.Row(c).AlignItems(ui.Center).Gap(8)
-		header.Children(func() {
-			ui.Column(c).Gap(2).Grow(1).MinWidth(0).Children(func() {
-				ui.Text(c, v.Name).FontSize(14).Bold().Ellipsis("…").Tooltip(v.Name)
-				addr := addrOf(v)
-				if sub := a.subtitleOf(v); sub != "" {
-					addr += " · " + sub
-				}
-				ui.Text(c, addr).Font("monospace").FontSize(12).
-					TextColor(t.TextMuted).Ellipsis("…").Tooltip(addr)
-			})
-			a.stateBadge(c, v.State)
-			a.pointAction(c, v)
-		})
-		a.pointAlerts(c, v)
-		a.pointFacts(c, v)
+		a.pointHeading(c, v)
 	})
 }
 
-func (a *app) pointAlerts(c *ui.Context, v vpn.View) {
+func (a *app) pointHeading(c *ui.Context, v vpn.View) {
 	t := c.Theme()
-	if v.State == vpn.StateError && v.Error != "" {
-		ui.Text(c, v.Error).FontSize(13).TextColor(t.Danger).Wrap()
+	addr := addrOf(v)
+	if !a.simpleMode() {
+		if sub := a.subtitleOf(v); sub != "" {
+			addr += " · " + sub
+		}
 	}
-	if v.TunnelState != "" && v.State != vpn.StateError {
+	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+		ui.Column(c).Gap(2).Grow(1).MinWidth(0).Children(func() {
+			ui.Text(c, v.Name).FontSize(14).Bold().Ellipsis("…").Tooltip(v.Name)
+			ui.Text(c, addr).Font("monospace").FontSize(12).
+				TextColor(t.TextMuted).Ellipsis("…").Tooltip(addr)
+		})
+		stateBadge(c, v.State.Label(), stateColor(t, v.State))
+		a.pointAction(c, v)
+	})
+	if v.State == vpn.StateError && v.Error != "" {
+		ui.Text(c, v.Error).FontSize(12).TextColor(t.Danger).Ellipsis("…").Tooltip(v.Error)
+	} else if v.State == vpn.StateOnline && pointNeedsAttention(v) {
+		ui.Text(c, "连接异常 · 点击卡片查看详情").FontSize(12).TextColor(t.Warning)
+	}
+}
+
+func pointNeedsAttention(v vpn.View) bool {
+	return v.TunnelState != "" || (v.MonitorOn && v.Alive == "已失效") ||
+		v.DNSProbe.State == "failed" || v.TCPProbe.State == "failed"
+}
+
+func pointAlerts(c *ui.Context, v vpn.View) {
+	t := c.Theme()
+	if v.TunnelState != "" {
 		colour := t.Warning
 		label := "隧道保活探测失败"
 		if v.TunnelFails > 0 {
@@ -1208,28 +1218,19 @@ func (a *app) pointAlerts(c *ui.Context, v vpn.View) {
 		}
 		ui.Text(c, text).FontSize(13).TextColor(colour).Wrap()
 	}
-	if v.State == vpn.StateOnline {
-		if v.DNSProbe.State == "failed" {
-			ui.Text(c, healthProbeText("DNS", v.DNSProbe)).FontSize(12).TextColor(t.Warning).Wrap()
-		}
-		if v.TCPProbe.State == "failed" {
-			ui.Text(c, healthProbeText("TCP", v.TCPProbe)).FontSize(12).TextColor(t.Warning).Wrap()
-		}
+	if v.DNSProbe.State == "failed" {
+		ui.Text(c, healthProbeText("DNS", v.DNSProbe)).FontSize(12).TextColor(t.Warning).Wrap()
+	}
+	if v.TCPProbe.State == "failed" {
+		ui.Text(c, healthProbeText("TCP", v.TCPProbe)).FontSize(12).TextColor(t.Warning).Wrap()
 	}
 }
 
 func (a *app) pointFacts(c *ui.Context, v vpn.View) {
 	t := c.Theme()
-	if v.State != vpn.StateOnline {
-		return
-	}
 	ui.Row(c).GapX(14).GapY(4).Wrap().Children(func() {
 		if v.ClientIP != "" {
 			meta(c, t, "隧道 IP", v.ClientIP)
-		}
-		if v.SocksPort > 0 && !a.simpleMode() {
-			addr := "127.0.0.1:" + strconv.Itoa(v.SocksPort)
-			meta(c, t, "HTTP / SOCKS5", addr)
 		}
 		meta(c, t, "连接", fmt.Sprintf("%d 当前 / %d 累计", v.Active, v.Total))
 		if len(v.Apps) > 0 {
@@ -1324,7 +1325,6 @@ func (a *app) logPanel(c *ui.Context) {
 	entries := lastEntries(all, logRenderLimit)
 	ui.Column(c).Gap(6).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-			ui.Text(c, "运行日志").FontSize(13).Bold()
 			summary := fmt.Sprintf("最近 %d 条", len(entries))
 			if len(all) > len(entries) {
 				summary = fmt.Sprintf("显示最近 %d 条，共 %d 条", len(entries), len(all))
@@ -1456,9 +1456,9 @@ func (a *app) accessSection(c *ui.Context) {
 
 func logLabel(open bool) string {
 	if open {
-		return "收起日志"
+		return "收起运行日志"
 	}
-	return "运行日志"
+	return "查看运行日志"
 }
 
 // metaCopy draws "key value" with the copy glyph right next to the value: a
@@ -1481,12 +1481,11 @@ func meta(c *ui.Context, t *ui.Theme, key, value string) {
 	})
 }
 
-// stateBadge draws the access point state as a tinted pill: the same hue as
+// stateBadge draws a status as a tinted pill: the same hue as
 // the status dot, at a tenth of its strength, so it never shouts.
-func (a *app) stateBadge(c *ui.Context, state vpn.State) {
+func stateBadge(c *ui.Context, label string, colour ui.Color) {
 	t := c.Theme()
-	colour := stateColor(t, state)
-	ui.Badge(c, state.Label()).
+	ui.Badge(c, label).
 		Background(t.Surface.Mix(colour, 0.14)).
 		TextColor(colour)
 }
@@ -1804,7 +1803,7 @@ func (a *app) editorView(c *ui.Context) {
 			dialogFooter(c, func() {
 				if d.editingID != "" {
 					if ui.Button(c, "删除此接入点").FontSize(11).Background(t.Danger).
-						TextColor(textOnFill).FontSize(11).
+						TextColor(t.AccentText).
 						Label("删除接入点 " + d.name).Clicked() {
 						a.deleting = d.editingID
 						d.open = false
@@ -1824,8 +1823,10 @@ func (a *app) editorView(c *ui.Context) {
 
 func (a *app) pointTools(c *ui.Context, v vpn.View) {
 	t := c.Theme()
-	if v.Protocol == model.ProtocolEasyConnect && vpn.IsGatewayCertificateError(v.Error) {
+	if v.State == vpn.StateError && v.Error != "" {
 		ui.Text(c, v.Error).FontSize(12).TextColor(t.Danger).Wrap()
+	}
+	if v.Protocol == model.ProtocolEasyConnect && vpn.IsGatewayCertificateError(v.Error) {
 		if ui.Button(c, "查看网关证书").Label("查看网关证书 " + v.Name).FontSize(12).Clicked() {
 			a.openEditorCertificate()
 		}
@@ -1834,7 +1835,21 @@ func (a *app) pointTools(c *ui.Context, v vpn.View) {
 		return
 	}
 	ui.Column(c).Padding(10, 12).Gap(6).Radius(8).Background(t.Background).Children(func() {
-		ui.Text(c, "在线操作").FontSize(13).Bold()
+		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+			ui.Text(c, "连接详情").FontSize(13).Bold().Grow(1)
+			label := "查看详情"
+			if a.editor.detailsOpen {
+				label = "收起详情"
+			}
+			if ui.Button(c, label).FontSize(12).Clicked() {
+				a.editor.detailsOpen = !a.editor.detailsOpen
+			}
+		})
+		if !a.editor.detailsOpen {
+			return
+		}
+		pointAlerts(c, v)
+		a.pointFacts(c, v)
 		ui.Row(c).GapX(8).GapY(6).AlignItems(ui.Center).Wrap().Children(func() {
 			if v.SocksPort > 0 && !a.simpleMode() {
 				addr := "127.0.0.1:" + strconv.Itoa(v.SocksPort)
@@ -1882,7 +1897,7 @@ const (
 	settingAbout
 )
 
-// settingsPage 是整页设置：顶部多 tab，内容区随分区切换，底部固定保存。
+// settingsPage 是整页设置：顶部切换分区，改动即时生效。
 // 原来散在页脚与顶栏的东西——版本、数据目录、运行日志、退出、接管开关——
 // 全部收进这里，主界面因此只剩导航与内容。
 func (a *app) settingsPage(c *ui.Context) {
@@ -1890,12 +1905,17 @@ func (a *app) settingsPage(c *ui.Context) {
 	d := &a.settings
 	ui.Column(c).Grow(1).MinHeight(0).Gap(10).Children(func() {
 		pageBar(c, "设置", "", func() {
-			ui.Text(c, "改动即时生效").FontSize(12).TextColor(t.TextMuted)
+			if d.section == settingGeneral || d.section == settingNetwork {
+				ui.Text(c, "改动即时生效").FontSize(12).TextColor(t.TextMuted)
+			}
 			if ui.Button(c, "返回").Label("关闭设置").FontSize(12).Clicked() {
 				d.open = false
 			}
 		})
-		ui.Segmented(c, &d.section, "通用", "网络与接管", "日志", "关于").Label("设置分类")
+		ui.Row(c).Children(func() {
+			ui.Segmented(c, &d.section, "通用", "网络与接管", "日志", "关于").
+				Label("设置分类").Background(t.SurfaceHover).Radius(8)
+		})
 		ui.Divider(c)
 		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(6, 2, 6, 0).Children(func() {
 			ui.Column(c).Padding(0, 12, 0, 0).Gap(10).Children(func() {
@@ -2067,17 +2087,29 @@ func (a *app) commonSwitches(c *ui.Context) {
 
 // captureSection 是「网络与接管」：接管方式是一个下拉，状态与诊断在下面。
 func (a *app) captureSection(c *ui.Context) {
+	settingsGroup(c, "接管方式", func() { a.captureSettings(c) })
+	settingsGroup(c, "状态与日志", func() { a.captureStatusGroup(c) })
+}
+
+func (a *app) captureSettings(c *ui.Context) {
 	t := c.Theme()
 	d := &a.settings
 	// 下拉反映真实状态；用户改选时由 applyCaptureMode 负责先关掉其他方式。
 	d.mode = a.captureMode()
 	d.autoRestoreAppCapture = a.cfg.Settings.AutoRestoreAppCapture
-	ui.Field(c, "接管方式", func() {
-		sel := ui.Select(c, &d.mode, a.captureModes()).Width(180)
-		if sel.Changed() {
-			a.applyCaptureMode(d.mode)
-		}
-	})
+	if ui.Select(c, &d.mode, a.captureModes()).Label("选择接管方式").Width(180).Changed() {
+		a.applyCaptureMode(d.mode)
+	}
+	description := "系统网络保持原样。登录后仍可从接入点打开代理浏览器。"
+	switch a.captureMode() {
+	case captureSystem:
+		description = "使用系统代理设置的应用会通过代理访问网络。"
+	case captureGlobalTUN:
+		description = "使用 aTrust 会话接管整机 IPv4 TCP 流量。"
+	case captureAppCapture:
+		description = "仅接管在线接入点授权的网段和域名，公网默认路由保持原样。支持 IPv4 TCP，UDP 为试验功能。"
+	}
+	ui.Text(c, description).FontSize(12).TextColor(t.TextMuted).Wrap().MaxWidth(560)
 	if supportsResourceTUN() {
 		if ok, reason := autoCaptureSupportedFn(); ok {
 			if ui.Checkbox(c, &d.autoRestoreAppCapture,
@@ -2088,9 +2120,7 @@ func (a *app) captureSection(c *ui.Context) {
 					a.toast = "保存自动恢复设置失败：" + err.Error()
 				}
 			}
-			ui.Text(c, "网络助手就绪且至少一个网关在线时自动开启；"+
-				"手动切换接管方式或取消接管会同时关闭本项。取消勾选只影响以后，"+
-				"不会停止当前正在运行的接管。").
+			ui.Text(c, "网络助手就绪且有网关在线时自动恢复。手动切换或取消接管会关闭此选项；取消勾选只影响下次恢复。").
 				FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(620)
 			if line := a.autoCaptureStatusLine(); line != "" {
 				color := t.TextMuted
@@ -2109,8 +2139,12 @@ func (a *app) captureSection(c *ui.Context) {
 				FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(620)
 		}
 	}
+}
+
+func (a *app) captureStatusGroup(c *ui.Context) {
+	t := c.Theme()
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-		ui.Text(c, "当前接管："+a.captureMode()).FontSize(11).TextColor(t.TextMuted)
+		ui.Text(c, "当前接管："+a.captureMode()).FontSize(12).TextColor(t.TextMuted)
 		if a.simpleMode() {
 			return
 		}
@@ -2126,69 +2160,65 @@ func (a *app) captureSection(c *ui.Context) {
 			ui.Text(c, "统一入口未监听").FontSize(11).TextColor(t.TextMuted)
 		}
 	})
-	ui.Text(c, "系统代理只写系统代理设置，认它的软件才走代理；"+
-		"全局 TUN 用 aTrust 会话在网络层接管整机 IPv4 TCP，只支持 aTrust 接入点；"+
-		"应用接管用在线会话在网络层接管各接入点授权的 IP 网段与域名（IPv4 TCP，UDP 试验），"+
-		"公网默认路由不动。三者互斥，同一时间只能开一个；选择会记住，首次运行默认开启系统代理。"+
-		"勾选「自动恢复」后，启动或登录后条件满足时会自动切回应用接管。").
-		FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(620)
-	ui.Divider(c)
 	a.captureStatus(c)
 }
 
 // logsSection 是「日志」：运行日志开关与访问日志页入口。
 func (a *app) logsSection(c *ui.Context) {
 	t := c.Theme()
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "运行日志").FontSize(13).Bold()
-		ui.Row(c).Grow(1)
-		if ui.Button(c, logLabel(a.logsOpen)).FontSize(11).Clicked() {
-			a.logsOpen = !a.logsOpen
-		}
-		if ui.Button(c, "访问日志页").FontSize(11).Clicked() {
-			a.settings.open = false
-			a.tab = 2
+	settingsGroup(c, "运行日志", func() {
+		ui.Row(c).Gap(8).Wrap().Children(func() {
+			if ui.Button(c, logLabel(a.logsOpen)).FontSize(12).Clicked() {
+				a.logsOpen = !a.logsOpen
+			}
+			if ui.Button(c, "访问日志页").FontSize(12).Clicked() {
+				a.goTab(2)
+			}
+		})
+		if a.logsOpen {
+			a.logPanel(c)
+		} else {
+			ui.Text(c, "查看登录、断开、接管与连接失败的记录。").FontSize(12).TextColor(t.TextMuted).Wrap()
 		}
 	})
-	if a.logsOpen {
-		a.logPanel(c)
-	} else {
-		ui.Text(c, "运行日志记录登录、断开、接管与连接失败；打开后可复制或清空。").
-			FontSize(11).TextColor(t.TextMuted)
-	}
-	ui.Divider(c)
-	ui.Text(c, "TUN 与接管日志").FontSize(13).Bold()
-	ui.Text(c, "应用接管（系统 TUN）的详细日志单独存放，排查接管问题时先看这里。").
-		FontSize(11).TextColor(t.TextMuted)
-	if ui.Button(c, "打开 TUN 日志").FontSize(11).Clicked() {
-		a.openTUNLog()
-	}
+	settingsGroup(c, "TUN 与接管日志", func() {
+		ui.Text(c, "排查应用接管和 TUN 的启动、运行或清理问题。").FontSize(12).TextColor(t.TextMuted).Wrap()
+		ui.Row(c).Children(func() {
+			if ui.Button(c, "打开 TUN 日志").FontSize(12).Clicked() {
+				a.openTUNLog()
+			}
+		})
+	})
 }
 
 // aboutSection 是「关于」：版本、更新、项目主页、数据目录与退出。
 func (a *app) aboutSection(c *ui.Context) {
 	t := c.Theme()
-	ui.Field(c, "版本", func() { ui.Text(c, appName+" "+appBuild).FontSize(13) })
-	ui.Row(c).Gap(8).Wrap().Children(func() {
-		if ui.Button(c, "项目主页").FontSize(11).Clicked() {
-			a.openProject()
-		}
-		if ui.Button(c, "打开数据目录").FontSize(11).Clicked() {
-			if err := mygo.Shell.OpenPath(a.dir); err != nil {
-				a.toast = "打不开数据目录：" + err.Error()
+	settingsGroup(c, "版本与链接", func() {
+		ui.Text(c, appName+" "+appBuild).FontSize(13).TextColor(t.TextMuted).Wrap()
+		ui.Row(c).Gap(8).Wrap().Children(func() {
+			if ui.Button(c, "项目主页").FontSize(12).Clicked() {
+				a.openProject()
 			}
-		}
-		if a.update != nil {
-			if ui.PrimaryButton(c, "下载 v"+a.update.Version).FontSize(11).Clicked() {
+			if ui.Button(c, "打开数据目录").FontSize(12).Clicked() {
+				if err := mygo.Shell.OpenPath(a.dir); err != nil {
+					a.toast = "打不开数据目录：" + err.Error()
+				}
+			}
+			if a.update != nil && ui.PrimaryButton(c, "下载 v"+a.update.Version).FontSize(12).Clicked() {
 				a.openUpdate()
 			}
-		}
+		})
 	})
-	ui.Divider(c)
-	ui.Text(c, "退出会断开所有隧道；正在接管时请先关闭接管再退出。").FontSize(11).TextColor(t.TextMuted)
-	if ui.Button(c, "退出 "+appName).FontSize(11).Background(t.Danger).TextColor(textOnFill).Clicked() {
-		a.askQuit()
-	}
+	settingsGroup(c, "退出应用", func() {
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "彻底退出程序，托盘图标也会关闭。").
+				FontSize(12).TextColor(t.TextMuted).Grow(1).MinWidth(0).Wrap()
+			if ui.Button(c, "退出 "+appName).FontSize(12).Shrink(0).Clicked() {
+				a.quitAsk = true
+			}
+		})
+	})
 }
 
 func (a *app) deleteView(c *ui.Context) {
@@ -2299,7 +2329,7 @@ func (a *app) logoutView(c *ui.Context) {
 					a.logoutAsk = ""
 				}
 				if ui.Button(c, "确认退出登录").FontSize(11).Background(t.Danger).
-					TextColor(textOnFill).Clicked() {
+					TextColor(t.AccentText).Clicked() {
 					id := a.logoutAsk
 					a.logoutAsk = ""
 					go func() {
@@ -2339,7 +2369,7 @@ func (a *app) quitView(c *ui.Context) {
 				line += fmt.Sprintf("当前有 %d 个接入点在线。", online)
 			}
 			dialogHeader(c, "退出 "+appName+"？", line)
-			ui.Text(c, "退出后数据库转发和软件接管会停止。软件窗口保留；停止接管的软件新连接恢复系统网络。").
+			ui.Text(c, "正在运行的转发和接管会停止，已打开的软件窗口会保留。").
 				FontSize(11).TextColor(t.TextMuted).Wrap()
 			dialogFooter(c, func() {
 				ui.Row(c).Grow(1)
@@ -2347,7 +2377,7 @@ func (a *app) quitView(c *ui.Context) {
 					a.quitAsk = false
 				}
 				if ui.Button(c, "确认退出").FontSize(11).Background(t.Danger).
-					TextColor(textOnFill).Clicked() {
+					TextColor(t.AccentText).Clicked() {
 					a.quitAsk = false
 					a.doQuit()
 				}
@@ -2398,6 +2428,7 @@ func (a *app) openEditor(v vpn.View) {
 		certificateAddress:     net.JoinHostPort(p.Server, strconv.Itoa(p.Port)),
 		certificateAcceptedPin: p.CertificateSHA256,
 		open:                   true,
+		detailsOpen:            pointNeedsAttention(v),
 		editingID:              p.ID,
 		protocol:               protocolLabel(p.Protocol),
 		healthTarget:           p.HealthTarget,

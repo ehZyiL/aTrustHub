@@ -18,6 +18,7 @@ type tileAction struct {
 type quickTile struct {
 	label  string
 	hint   string
+	status string
 	open   func()
 	action tileAction
 }
@@ -32,8 +33,9 @@ func (a *app) quickTiles() []quickTile {
 		id := v.ID
 		name := v.Name
 		tiles = append(tiles, quickTile{
-			label: name,
-			hint:  protocolLabel(v.Protocol) + " · 在线",
+			label:  name,
+			hint:   protocolLabel(v.Protocol),
+			status: v.State.Label(),
 			open: func() {
 				a.revealPointID = id
 				a.goTab(0)
@@ -52,9 +54,10 @@ func (a *app) quickTiles() []quickTile {
 		appID := app.ID
 		appName := app.Name
 		tile := quickTile{
-			label: appName,
-			hint:  localModeLabel(app.Mode) + " · 运行中",
-			open:  func() { a.goTab(3) },
+			label:  appName,
+			hint:   localModeLabel(app.Mode),
+			status: "运行中",
+			open:   func() { a.goTab(3) },
 		}
 		// 浏览器在独立窗口里关。
 		if app.Mode != model.LocalAppBrowser {
@@ -86,38 +89,30 @@ func quickLaunch(c *ui.Context, tiles []quickTile) {
 
 func quickEntry(c *ui.Context, tile quickTile) {
 	t := c.Theme()
-	ui.Row(c).Width(218).Radius(8).Background(t.Surface).Border(1, t.Border).
+	ui.Row(c).Width(248).Radius(8).Background(t.Surface).Border(1, t.Border).
 		AlignItems(ui.Center).Children(func() {
-		open := ui.ButtonBase(c).Grow(1).MinWidth(0).Padding(7, 9).Gap(8).
+		open := ui.ButtonBase(c).Grow(1).MinWidth(0).Padding(8, 10).Gap(8).
 			Radius(7).AlignItems(ui.Center).Cursor(ui.CursorPointer).
 			Label("打开常用入口 " + tile.label).Tooltip(tile.label)
 		if open.Hovered() || open.Pressed() {
 			open.Background(t.SurfaceHover)
 		}
 		open.Children(func() {
-			ui.Row(c).Size(7, 7).Shrink(0).Radius(3.5).Background(t.Success)
 			ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
 				ui.Text(c, tile.label).FontSize(13).Bold().Ellipsis("…")
 				ui.Text(c, tile.hint).FontSize(11).TextColor(t.TextMuted).Ellipsis("…")
 			})
-			ui.Text(c, "›").FontSize(15).TextColor(t.TextMuted)
+			stateBadge(c, tile.status, t.Success)
 		})
 		if open.Clicked() {
 			tile.open()
 		}
 		if action := tile.action; action.run != nil {
-			ui.Row(c).Size(1, 22).Shrink(0).Background(t.Border)
-			button := ui.ButtonBase(c).Padding(8, 10).Radius(7).Cursor(ui.CursorPointer).
-				Label("常用入口：" + action.label + " " + tile.label)
-			if button.Hovered() || button.Pressed() {
-				button.Background(t.SurfaceHover)
-			}
-			button.Children(func() {
-				ui.Text(c, action.label).FontSize(12).TextColor(t.TextMuted)
+			ui.Row(c).Padding(0, 8, 0, 0).Children(func() {
+				if ui.Button(c, action.label).Label("常用入口：" + action.label + " " + tile.label).FontSize(12).Clicked() {
+					action.run()
+				}
 			})
-			if button.Clicked() {
-				action.run()
-			}
 		}
 	})
 }
@@ -259,7 +254,7 @@ func (a *app) launcherBody(c *ui.Context) {
 				}
 			})
 			ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(6, 2, 6, 0).Children(func() {
-				ui.Column(c).Padding(0, 2, 0, 4).Gap(10).Children(func() {
+				ui.Column(c).Padding(0, 10, 0, 4).Gap(10).Children(func() {
 					quickLaunch(c, a.quickTiles())
 					if len(views) == 0 {
 						a.emptyState(c)

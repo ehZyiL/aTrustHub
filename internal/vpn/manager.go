@@ -223,9 +223,13 @@ type Manager struct {
 type endpoint struct {
 	cfg model.AccessPoint
 
-	state           State
-	errMsg          string
-	info            SessionInfo
+	state  State
+	errMsg string
+	info   SessionInfo
+	// rawResources is what the session reported, before the user's "停用应用"
+	// switches are applied. Keeping it means a switch can be honoured without
+	// logging in again, and that the mapping identity stays stable.
+	rawResources    *workeripc.ResourceSnapshot
 	knownResources  *workeripc.ResourceSnapshot
 	resourceVersion string
 	sess            Session
@@ -344,6 +348,11 @@ func (m *Manager) Apply(cfg model.Config) {
 		oldCfg := ep.cfg
 		ep.cfg = p
 		ep.info.HealthTarget = p.HealthTarget
+		// "停用应用" takes effect for new decisions right away; a running
+		// connection keeps going until it closes on its own.
+		if ep.rawResources != nil && !sameStrings(oldCfg.DisabledApps, p.DisabledApps) {
+			ep.publishResourcesLocked()
+		}
 		if ep.state != StateOffline && needsRestart(oldCfg, p) {
 			restarts = append(restarts, p.ID)
 			m.stopEndpointLocked(p.ID, &closes)
@@ -386,6 +395,29 @@ func (m *Manager) Apply(cfg model.Config) {
 	m.changed()
 }
 
+// publishResourcesLocked rebuilds the snapshot the UI, the routing layer and the
+// capture path read, applying the user's "停用应用" switches. The resource version
+// stays derived from what the session reported: it identifies the mapping pool
+// and the routing generation, so a toggle must not look like a new session (that
+// would break the DNS mapping pool binding).
+func (ep *endpoint) publishResourcesLocked() {
+	ep.info.Resources = filterDisabledAppsSnapshot(ep.rawResources, ep.cfg.DisabledApps)
+	ep.resourceVersion = resourceVersion(ep.rawResources)
+}
+
+// sameStrings reports whether two string lists hold the same values in order.
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func needsRestart(a, b model.AccessPoint) bool {
 	return a.Server != b.Server || a.Port != b.Port ||
 		a.Username != b.Username || a.AuthMode != b.AuthMode ||
@@ -411,6 +443,7 @@ func (m *Manager) stopEndpointLocked(id string, closes *[]closeLater) {
 	ep.state = StateOffline
 	ep.errMsg = ""
 	ep.info = SessionInfo{}
+	ep.rawResources = nil
 	ep.tunnelState = ""
 	ep.tunnelErr = ""
 	ep.tunnelFails = 0
@@ -659,8 +692,9 @@ func (m *Manager) connect(id string, gen int) {
 	if cur.cfg.HealthTarget != "" {
 		cur.info.HealthTarget = cur.cfg.HealthTarget
 	}
+	cur.rawResources = cur.info.Resources
+	cur.publishResourcesLocked()
 	cur.knownResources = rememberResources(cur.knownResources, cur.info.Resources)
-	cur.resourceVersion = resourceVersion(cur.info.Resources)
 	cur.tunnelState = ""
 	cur.tunnelErr = ""
 	cur.tunnelFails = 0
@@ -885,12 +919,26 @@ func (m *Manager) DisconnectAll() {
 	}
 }
 
+// settingsProxyAuth returns the credential a listener must ask for, or nil when
+// it stays on loopback. A LAN listener never starts without credentials:
+// Settings.Validate rejects that combination and loading a configuration falls
+// back to loopback, so this cannot silently become an open relay.
+func settingsProxyAuth(s model.Settings) *proxy.Auth {
+	user, pass, ok := s.ProxyAuth()
+	if !ok {
+		return nil
+	}
+	return &proxy.Auth{Username: user, Credential: pass}
+}
+
 func (m *Manager) newProxy(cfg model.AccessPoint, ep *endpoint, dial func(context.Context, string, string) (net.Conn, error)) (*proxy.Server, error) {
 	m.mu.RLock()
 	host := m.settings.ListenHost
+	auth := settingsProxyAuth(m.settings)
 	m.mu.RUnlock()
 	p := proxy.New(proxy.Options{
 		Addr: net.JoinHostPort(host, fmt.Sprint(cfg.SocksPort)),
+		Auth: auth,
 		Dial: dial,
 		OnConnect: func() {
 			ep.total.Add(1)
@@ -936,38 +984,28 @@ func (m *Manager) restartAggregate() {
 	if !settings.AggregateEnabled {
 		return
 	}
-	// A port another program holds must not disable the aggregate: walk to
-	// the next free one and report where it ended up.
-	var p *proxy.Server
-	var lastErr error
-	chosen := ""
-	for i := 0; i <= 20; i++ {
-		port := settings.AggregatePort + i
-		addr := net.JoinHostPort(settings.ListenHost, fmt.Sprint(port))
-		cand := proxy.New(proxy.Options{
-			Addr: addr,
-			Dial: m.Dial,
-			Logf: func(format string, args ...any) {
-				m.logf("[统一入口] "+format, args...)
-			},
-		})
-		if err := cand.Start(); err != nil {
-			lastErr = err
-			continue
-		}
-		p = cand
-		chosen = addr
-		break
-	}
-	if p == nil {
+	auth := settingsProxyAuth(settings)
+	// D2: a taken port is reported, never silently walked to the next free one.
+	// The system proxy, the settings page and every tool that points at this
+	// entry use the configured port; moving it behind the user's back leaves all
+	// of them pointing at the wrong place.
+	addr := net.JoinHostPort(settings.ListenHost, fmt.Sprint(settings.AggregatePort))
+	p := proxy.New(proxy.Options{
+		Addr: addr,
+		Auth: auth,
+		Dial: m.Dial,
+		Logf: func(format string, args ...any) {
+			m.logf("[统一入口] "+format, args...)
+		},
+	})
+	if err := p.Start(); err != nil {
 		m.mu.Lock()
-		m.aggregateErr = lastErr.Error()
+		m.aggregateErr = fmt.Sprintf("统一入口 %s 无法监听：%v", addr, err)
 		m.mu.Unlock()
-		m.logf("统一入口监听失败：%v（端口可能被旧实例或别的程序占用，可在设置里换端口）", lastErr)
+		m.logf("统一入口 %s 监听失败：%v（端口可能被旧实例或别的程序占用，请在设置里换一个端口）", addr, err)
 		m.changed()
 		return
 	}
-	addr := chosen
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -976,9 +1014,6 @@ func (m *Manager) restartAggregate() {
 	}
 	m.aggregate = p
 	m.mu.Unlock()
-	if addr != net.JoinHostPort(settings.ListenHost, fmt.Sprint(settings.AggregatePort)) {
-		m.logf("统一入口原端口被占用，改用 %s", addr)
-	}
 	m.logf("统一入口在 %s 监听，分流模式：%s", addr, settings.Routing.Label())
 	m.changed()
 }

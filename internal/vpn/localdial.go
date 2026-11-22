@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/miekg/dns"
 	"github.com/ehzyil/connect-hub/internal/dnsmapping"
 	"github.com/ehzyil/connect-hub/internal/netpolicy"
 	"github.com/ehzyil/connect-hub/internal/routing"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
+	"github.com/miekg/dns"
 	"net"
 	"net/netip"
 	"sync"
@@ -48,6 +48,9 @@ func (m *Manager) LocalAppConnection(id string) (AppConnection, error) {
 		return connection, errors.New("请先登录所选 VPN 接入点")
 	}
 	gen, sess := ep.gen, ep.sess
+	// The user's 停用应用 switches travel with the connection, so the capture path
+	// honours them exactly like the aggregate proxy does.
+	disabled := append([]string(nil), ep.cfg.DisabledApps...)
 	m.mu.RUnlock()
 	connection.Key = fmt.Sprintf("%p/%d", ep, gen)
 	active := func() bool {
@@ -57,11 +60,13 @@ func (m *Manager) LocalAppConnection(id string) (AppConnection, error) {
 		return !m.closed && cur == ep && cur.gen == gen && cur.state == StateOnline && cur.sess != nil
 	}
 	connection.Active = active
-	connection.Resources = sess.Info().Resources
-	connection.Resources = cloneResources(connection.Resources)
+	raw := cloneResources(sess.Info().Resources)
+	connection.Resources = filterDisabledAppsSnapshot(raw, disabled)
 	connection.ReservedPools = m.mappings.Reservations(connection.Key)
 	connection.AliasNetworks = m.aliasNetworks()
-	identity := dnsmapping.Identity{Key: connection.Key, GatewayID: id, Generation: gen, Version: resourceVersion(connection.Resources)}
+	// The mapping identity follows the session snapshot, not the filtered view:
+	// otherwise a switch would look like a new pool binding.
+	identity := dnsmapping.Identity{Key: connection.Key, GatewayID: id, Generation: gen, Version: resourceVersion(raw)}
 	connection.Identity = identity
 	connection.MappingPrefix = func() (string, error) { return m.mappings.Prefix(identity) }
 	connection.CheckPublication = func(prefix string) error {

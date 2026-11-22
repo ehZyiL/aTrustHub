@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	zcclient "github.com/mythologyli/zju-connect/client"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
+	zcclient "github.com/mythologyli/zju-connect/client"
 )
 
 func cloneResources(in *workeripc.ResourceSnapshot) *workeripc.ResourceSnapshot {
@@ -118,44 +118,48 @@ func networkResources(ips []zcclient.IPResource, domains zcclient.DomainResource
 	return s
 }
 
+// filterDisabledAppsSnapshot drops the rules that belong to applications the
+// user switched off. The application id travels inside the snapshot (worker
+// protocol v7), so this one function covers every protocol: aTrust in-process and
+// the EasyConnect worker alike.
+//
+// A rule without an app id is kept: dropping what cannot be attributed would
+// silently take tunnel access away from applications the user never touched.
+func filterDisabledAppsSnapshot(snapshot *workeripc.ResourceSnapshot, disabled []string) *workeripc.ResourceSnapshot {
+	if snapshot == nil || len(disabled) == 0 {
+		return snapshot
+	}
+	off := make(map[string]bool, len(disabled))
+	for _, id := range disabled {
+		if id != "" {
+			off[id] = true
+		}
+	}
+	if len(off) == 0 {
+		return snapshot
+	}
+	out := *snapshot
+	keptIP := make([]workeripc.IPRule, 0, len(snapshot.IPRules))
+	for _, rule := range snapshot.IPRules {
+		if !off[rule.AppID] {
+			keptIP = append(keptIP, rule)
+		}
+	}
+	out.IPRules = keptIP
+	keptDomain := make([]workeripc.DomainRule, 0, len(snapshot.DomainRules))
+	for _, rule := range snapshot.DomainRules {
+		if !off[rule.AppID] {
+			keptDomain = append(keptDomain, rule)
+		}
+	}
+	out.DomainRules = keptDomain
+	return &out
+}
+
 func cloneSessionInfo(in SessionInfo) SessionInfo {
 	in.Resources = cloneResources(in.Resources)
 	in.Apps = cloneApps(in.Apps)
 	in.NodeGroups = append([]string(nil), in.NodeGroups...)
 	in.BestNodes = cloneMap(in.BestNodes)
 	return in
-}
-
-// dropDisabledApps removes the addresses of applications the user took out of
-// the tunnel. Their IP ranges can clash with the local network or with another
-// access point, and then the only fix is not to route them at all.
-func dropDisabledApps(disabled []string, ips []zcclient.IPResource, domains zcclient.DomainResources) ([]zcclient.IPResource, zcclient.DomainResources) {
-	if len(disabled) == 0 {
-		return ips, domains
-	}
-	off := make(map[string]bool, len(disabled))
-	for _, id := range disabled {
-		off[id] = true
-	}
-	keptIP := make([]zcclient.IPResource, 0, len(ips))
-	for _, r := range ips {
-		if !off[r.AppID] {
-			keptIP = append(keptIP, r)
-		}
-	}
-	keptDomain := zcclient.DomainResources{}
-	for name, list := range domains {
-		keep := make([]zcclient.DomainResource, 0, len(list))
-		for _, r := range list {
-			if !off[r.AppID] {
-				keep = append(keep, r)
-			}
-		}
-		// A domain whose every entry was disabled must not be answered at
-		// all, so it is left out instead of registered with an empty list.
-		if len(keep) > 0 {
-			keptDomain[name] = keep
-		}
-	}
-	return keptIP, keptDomain
 }

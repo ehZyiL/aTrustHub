@@ -182,11 +182,10 @@ func connectZJU(ctx context.Context, opts ZJUOptions, point model.AccessPoint, c
 
 	ipResources, _ := client.IPResources()
 	domainResources, _ := client.DomainResources()
-	if skipped := len(point.DisabledApps); skipped > 0 {
-		before := len(ipResources)
-		ipResources, domainResources = dropDisabledApps(point.DisabledApps, ipResources, domainResources)
-		zjuLog.Printf("已按设置停用 %d 个应用：%d 条 IP 资源 → %d 条", skipped, before, len(ipResources))
-	}
+	// "停用应用" is applied once, in Manager.publishResources: keeping it here too
+	// would mean two places to change and a resource list the UI cannot explain.
+	// The application id now travels with every rule, so the Hub filters both
+	// protocols without logging in again.
 	dnsResource, _ := client.DNSResource()
 	dnsServers, _ := client.DNSServers()
 

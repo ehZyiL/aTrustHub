@@ -63,6 +63,15 @@ func testApp(t *testing.T) *app {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 界面用例的基线是完整模式：简单模式是空配置的默认值（见
+	// model.DefaultSettings），而这里绝大多数用例按完整模式的四页布局写断言。
+	// 需要简单模式的用例自己调 setSimpleMode，见 simplemode_test.go。
+	if _, err := st.Update(func(cfg *model.Config) error {
+		cfg.Settings.SimpleMode = false
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	a := &app{
 		store: st,
 		dir:   dir,

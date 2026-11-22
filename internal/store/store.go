@@ -118,6 +118,11 @@ func loadConfig(path string) (model.Config, []string, error) {
 		cfg.Settings.ListenHost = "127.0.0.1"
 	}
 	cfg.Normalize()
+	// 简单模式只有一个代理地址：手写或旧版本留下的配置可能还带着没进统一入口的
+	// 接入点，而简单模式下界面又不提供那个勾选框，启动时收敛一次（幂等）。
+	if cfg.Settings.SimpleMode {
+		cfg.ConvergeSimple()
+	}
 	// Auto-login is opt-in. Earlier builds switched it on for every access
 	// point, so clear it once here and remember that we did.
 	if !cfg.Settings.AutoLoginOptIn {

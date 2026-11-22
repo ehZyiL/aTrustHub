@@ -9,11 +9,14 @@ package main
 //   3. 日志与诊断入口不能消失（失败列表和设置页的日志分区都还在）。
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/store"
 	"github.com/ehzyil/connect-hub/internal/vpn"
 )
 
@@ -74,24 +77,80 @@ func frames(t *testing.T, a *app, w, h int) (string, *ui.Tester) {
 	return strings.Join(tt.Texts(), "|"), tt
 }
 
-// 默认不是简单模式；用户选了之后 Normalize 不能把它清掉。
+// 首次运行默认就是简单模式；用户关掉之后 Normalize 也不能把它打开。
 func TestSimpleModeDefaults(t *testing.T) {
 	s := model.DefaultSettings()
-	if s.SimpleMode {
-		t.Error("首次运行不该默认进简单模式：它要由用户显式选择")
-	}
-	s.SimpleMode = true
-	s.Normalize()
 	if !s.SimpleMode {
-		t.Error("Normalize 不该清掉用户选中的简单模式")
+		t.Error("首次运行应当默认进简单模式")
 	}
 	var zero model.Settings
 	zero.Normalize()
-	if zero.SimpleMode {
-		t.Error("空设置应当归到默认值（非简单模式）")
+	if !zero.SimpleMode {
+		t.Error("空设置应当归到默认值（简单模式）")
 	}
 	if zero.AggregatePort != 1080 {
 		t.Errorf("空设置应当归到默认端口，实际 %d", zero.AggregatePort)
+	}
+	// 关掉之后必须留住：完整模式用户的设置里带着别的字段，不能被打回默认值。
+	off := model.DefaultSettings()
+	off.SimpleMode = false
+	off.Normalize()
+	if off.SimpleMode {
+		t.Error("Normalize 不该把用户关掉的简单模式重新打开")
+	}
+}
+
+// 新安装（还没有 config.json）进来就是简单模式；已经存过完整模式设置的旧配置
+// 保持原样——默认值只对「还没做选择」的配置生效。
+func TestFirstRunEntersSimpleMode(t *testing.T) {
+	st, err := store.Open(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Config().Settings.SimpleMode {
+		t.Error("没有配置文件的首次运行应当进简单模式")
+	}
+
+	dir := t.TempDir()
+	legacy := `{"version":1,"settings":{"listenHost":"127.0.0.1","aggregatePort":1080,` +
+		`"routing":"latency","aggregateEnabled":true,"healthIntervalSec":60,` +
+		`"autoReconnect":true,"secretStore":"file","captureMode":"system"}}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old, err := store.Open(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.Config().Settings.SimpleMode {
+		t.Error("存过的完整模式配置不该被迁进简单模式")
+	}
+}
+
+// 简单模式的配置在启动时收敛一次：接入点都并进统一入口、统一入口保持开启，
+// 但每个点的独立端口原样留着（改它会触发隧道重建）。
+func TestSimpleModeConvergesOnLoad(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"version":1,"settings":{"simpleMode":true,"aggregatePort":1080,` +
+		`"aggregateEnabled":false,"routing":"latency"},"points":[` +
+		`{"id":"A","name":"A","server":"vpn.example","port":443,` +
+		`"username":"a","inPool":false,"socksPort":1081}]}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := st.Config()
+	if !cfg.Settings.AggregateEnabled {
+		t.Error("简单模式下统一入口必须保持开启：它是唯一的代理地址")
+	}
+	if len(cfg.Points) != 1 || !cfg.Points[0].InPool {
+		t.Errorf("简单模式下接入点应当并进统一入口，实际 %+v", cfg.Points)
+	}
+	if got := cfg.Points[0].SocksPort; got != 1081 {
+		t.Errorf("收敛不该改独立端口（会触发隧道重建），实际 %d", got)
 	}
 }
 
@@ -240,7 +299,7 @@ func TestSimpleModeClampsTab(t *testing.T) {
 func TestSimpleModePersists(t *testing.T) {
 	a := testApp(t)
 	if a.simpleMode() {
-		t.Fatal("默认不该是简单模式")
+		t.Fatal("界面用例的基线是完整模式（见 testApp）；新配置的默认值由 TestFirstRunEntersSimpleMode 盯")
 	}
 	a.setSimpleMode(true)
 	if !a.store.Config().Settings.SimpleMode {

@@ -271,6 +271,8 @@ type Settings struct {
 	CaptureMode string `json:"captureMode,omitempty"`
 	// SimpleMode 把界面收敛成「一个接入点 + 一个网址输入框」，专业设置收进设置页。
 	// 它只影响展示与默认值（见 ConvergeSimple），不改变任何业务逻辑。
+	// 默认开启（见 DefaultSettings）。已经存在的完整模式配置不会被迁移过来：
+	// Normalize 只在整份设置都是零值时才回落到默认值，带着其他字段的旧配置保持原样。
 	SimpleMode bool `json:"simpleMode,omitempty"`
 	// AutoRestoreAppCapture 是「启动/登录后自动恢复应用接管」的意图。
 	// CaptureMode 记的是上次真正生效的档位；这个字段记的是用户是否希望
@@ -308,6 +310,9 @@ type Config struct {
 const CurrentVersion = 1
 
 // DefaultSettings returns the settings of a first run.
+//
+// 首次运行默认进简单模式：首屏只有一张连接卡和一个网址输入框。它是展示层的
+// 默认收敛，不是功能阉割——设置页里一个开关就能回到完整模式（见 SimpleMode）。
 func DefaultSettings() Settings {
 	return Settings{
 		ListenHost:        "127.0.0.1",
@@ -320,6 +325,7 @@ func DefaultSettings() Settings {
 		AutoReconnect:     true,
 		SecretStore:       SecretStoreKeychain,
 		CaptureMode:       CaptureModeSystem,
+		SimpleMode:        true,
 	}
 }
 
@@ -412,6 +418,10 @@ func (c *Config) Normalize() {
 
 // Normalize fills the default settings.
 func (s *Settings) Normalize() {
+	// 整份设置都是零值 = 还没人做过选择，直接给默认值（现已包含简单模式）。
+	// 已知副作用（接受）：手写的最小配置 {"settings":{"simpleMode":false}} 也会
+	// 回到默认值，因为 omitempty 的 bool 分不出“没选”和“选了 false”。真实用户
+	// 不受影响：应用自己写出的配置总带着其它字段，不会命中这个早退分支。
 	if s.ListenHost == "" && s.AggregatePort == 0 && s.Routing == "" &&
 		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && len(s.DNSBindings) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 && s.CaptureMode == "" && !s.SimpleMode && !s.AutoRestoreAppCapture {
 		*s = DefaultSettings()

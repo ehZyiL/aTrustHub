@@ -83,10 +83,10 @@ func TestLayoutBoundsWithinWindow(t *testing.T) {
 	labels := map[int][]string{
 		0: {"接入点", "全部接入点重新登录", "统一入口", "＋ 添加接入点"},
 		1: {"网关资源", "搜索资源", "过滤资源", "网络授权与路由"},
-		2: {"访问日志", "复制全部", "清空"},
+		2: {"访问日志", "筛选访问结果", "复制全部", "清空"},
 		3: {"本机软件", "搜索本机项目", "＋ 添加项目", "公司主网关", "办公网线路"},
 	}
-	sizes := []struct{ w, h int }{{1120, 780}, {880, 560}, {1440, 900}}
+	sizes := []struct{ w, h int }{{1120, 780}, {880, 560}, {1440, 900}, {720, 520}}
 	for _, size := range sizes {
 		for tab, want := range labels {
 			a.tab = tab
@@ -113,14 +113,38 @@ func TestLayoutBoundsWithinWindow(t *testing.T) {
 	}
 }
 
+func TestAccessPointActionsFitMinimumWindow(t *testing.T) {
+	a := layoutApp(t)
+	tt := ui.NewTester(a.view, 720, 520)
+	tt.Frame()
+	for _, label := range []string{
+		"＋ 添加接入点",
+		"打开常用入口 公司主网关",
+		"代理浏览器 公司主网关",
+		"断开 公司主网关",
+		"登录 办公网线路",
+	} {
+		r, ok := tt.Find(label)
+		if !ok || r.W <= 0 || r.H <= 0 || r.X < 0 || r.Y < 0 || r.X+r.W > 720.5 || r.Y+r.H > 520.5 {
+			t.Errorf("%q 在最小窗口不可见：found=%v rect=%+v", label, ok, r)
+		}
+	}
+	tt.Scroll(400, 370, 0, 240)
+	tt.Frame()
+	footer, hasFooter := tt.Find("统一入口")
+	if r, ok := tt.Find("登录 浙江大学网关"); !ok || r.W <= 0 || r.H <= 0 || !hasFooter || r.Y+r.H > footer.Y {
+		t.Errorf("滚动后应能操作靠后的接入点：found=%v rect=%+v footer=%+v", ok, r, footer)
+	}
+}
+
 // 设置页是整页多 tab：每个分区的关键控件都必须在窗口内。
 func TestSettingsPageFitsWindow(t *testing.T) {
 	a := layoutApp(t)
 	sections := map[int][]string{
-		settingGeneral: {"设置", "监听地址", "统一入口端口", "分流模式", "颜色模式", "主题配色", "经典蓝白", "极客森绿", "柔和紫灰"},
-		settingNetwork: {"网络与接管", "接管方式", "当前接管：系统代理"},
+		settingGeneral: {"设置", "显示与主题", "颜色模式", "主题配色", "经典蓝白", "极客森绿", "柔和紫灰"},
+		settingNetwork: {"网络与接管", "选择接管方式", "状态与日志", "当前接管：系统代理"},
 		settingLogs:    {"日志", "运行日志", "打开 TUN 日志"},
-		settingAbout:   {"关于", "版本", "项目主页", "打开数据目录"},
+		settingAbout:   {"关于", "版本与链接", "项目主页", "打开数据目录", "退出应用"},
 	}
 	for _, size := range []struct{ w, h int }{{1120, 780}, {880, 560}} {
 		for section, want := range sections {
@@ -137,6 +161,15 @@ func TestSettingsPageFitsWindow(t *testing.T) {
 				if r.X < -0.5 || r.Y < -0.5 ||
 					r.X+r.W > float32(size.w)+0.5 || r.Y+r.H > float32(size.h)+0.5 {
 					t.Errorf("%dx%d 设置分区 %d: %q 越出窗口 rect=%+v", size.w, size.h, section, label, r)
+				}
+			}
+			if section == settingGeneral {
+				tt.Scroll(400, 380, 0, 800)
+				tt.Frame()
+				for _, label := range []string{"监听地址", "统一入口端口", "分流模式"} {
+					if r, ok := tt.Find(label); !ok || r.W <= 0 || r.H <= 0 {
+						t.Errorf("%dx%d 设置滚动后找不到 %q：found=%v rect=%+v", size.w, size.h, label, ok, r)
+					}
 				}
 			}
 		}

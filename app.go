@@ -66,9 +66,7 @@ type app struct {
 	// localCollapsed remembers which access points' project groups are folded
 	// (true = folded). A group starts out open.
 	localCollapsed map[string]bool
-	// pointsWidth is the access point grid's width from the last frame, so the
-	// tile count can follow a narrow window.
-	pointsWidth float32
+	revealPointID  string // One-time scroll target from a shortcut.
 	// windowH is the window content height from the last frame; dialogs use it
 	// to size their scrolling body so the footer stays inside the panel.
 	windowH   float32
@@ -184,6 +182,7 @@ type app struct {
 	// "all", "on" or "off". appFilterIndex is the segmented control's choice.
 	appFilter      string
 	appFilterIndex int
+	accessFilter   int
 	// appCollapsed remembers which access points' app groups are collapsed
 	// (true = collapsed). A point is expanded by default.
 	appCollapsed map[string]bool
@@ -243,6 +242,7 @@ type editorDraft struct {
 	certificateAddress     string
 	certificateAcceptedPin string
 	advanced               bool
+	detailsOpen            bool
 	open                   bool
 	editingID              string
 	name                   string

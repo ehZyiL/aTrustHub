@@ -145,6 +145,10 @@ func TestSettingsNormalizeKeepsSimpleMode(t *testing.T) {
 // 顶栏在简单模式下收成纯单页，不需要顶部分段 Tab。
 func TestPageNavSimpleMode(t *testing.T) {
 	a := testApp(t)
+	_, tt := frames(t, a, 880, 560)
+	if _, ok := tt.Find("页面导航"); !ok {
+		t.Fatal("完整模式应渲染导航容器")
+	}
 	pages := a.pages()
 	if len(pages) != 4 || pages[0].Label != "接入点" || pages[3].Tab != 3 {
 		t.Fatalf("完整模式应当是四段 0..3，实际 %+v", pages)
@@ -153,6 +157,10 @@ func TestPageNavSimpleMode(t *testing.T) {
 	pages = a.pages()
 	if len(pages) != 0 {
 		t.Fatalf("简单模式为纯单页，顶栏无需导航分段，实际 %+v", pages)
+	}
+	tt.Frame()
+	if _, ok := tt.Find("页面导航"); ok {
+		t.Fatal("简单模式不应保留空的导航容器")
 	}
 }
 
@@ -165,15 +173,35 @@ func TestSimpleHomeLayout(t *testing.T) {
 			t.Errorf("首屏缺少 %q；texts = %s", want, texts)
 		}
 	}
-	for _, no := range []string{"全部接入点重新登录", "常用入口", "本机软件", "网关资源", "独立 SOCKS5", "运行环境", "高级设置"} {
+	for _, no := range []string{"全部接入点重新登录", "常用入口", "本机软件", "网关资源", "独立 SOCKS5", "运行环境", "高级设置", "入口未启动"} {
 		if strings.Contains(texts, no) {
 			t.Errorf("简单模式首屏不该出现 %q；texts = %s", no, texts)
 		}
 	}
-	// 护栏 3：统一入口状态还在首屏（未接管时要用它）。
-	if !strings.Contains(texts, "入口未启动") {
-		t.Errorf("首屏应当仍然能看到入口状态；texts = %s", texts)
+}
+
+func TestSimpleModeHidesListeningProxyAddress(t *testing.T) {
+	a := simpleApp(t)
+	a.cfg.Settings.AggregatePort = freePorts(t, 1)[0]
+	a.mgr.Apply(a.cfg)
+	a.mgr.Start()
+	addr := a.proxyFor(a.cfg.Points[0].ID)
+	if addr == "" {
+		t.Fatal("代理浏览器应当仍能取得统一入口地址")
 	}
+	assertHidden := func() {
+		t.Helper()
+		texts, tt := frames(t, a, 720, 520)
+		if strings.Contains(texts, addr) || tt.HasText("统一入口未监听") {
+			t.Fatal("简单模式不应显示代理监听地址或状态")
+		}
+		if _, ok := tt.Find("复制统一入口地址"); ok {
+			t.Fatal("简单模式不应显示复制代理地址按钮")
+		}
+	}
+	assertHidden()
+	a.openSettingsAt(settingNetwork)
+	assertHidden()
 }
 
 // 简单模式但不止一个接入点时退回列表：单卡只描述唯一那个，多个点会看不清。

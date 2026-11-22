@@ -239,9 +239,6 @@ var (
 	softDark  = appTheme(themeBlue, true)
 )
 
-// textOnFill 是彩色实底上的文字：危险按钮这类「实心块」才用它。
-var textOnFill = ui.RGBA(255, 255, 255, 1)
-
 // cardShadow 是卡片与面板的「呼吸阴影」：比边框更轻，抬起半像素而不抢内容。
 func cardShadow(t *ui.Theme) ui.Color {
 	if t.Dark {

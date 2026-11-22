@@ -243,6 +243,7 @@ func TestMaybeRestoreCaptureModeYieldsToTunIntent(t *testing.T) {
 // 上一次生效的是应用接管、但自动恢复没勾选：启动后不能静默停在「不使用」。
 // 除非明确提示一次，否则用户会以为它自己会回来；但提示不能改变任何接管行为。
 func TestMaybeRestoreCaptureModeNoticesAppCaptureNotRestored(t *testing.T) {
+	forceAutoCaptureSupported(t)
 	a := testApp(t)
 	if _, err := a.store.Update(func(cfg *model.Config) error {
 		cfg.Settings.CaptureMode = model.CaptureModeApp
@@ -262,8 +263,8 @@ func TestMaybeRestoreCaptureModeNoticesAppCaptureNotRestored(t *testing.T) {
 	if calls != 0 {
 		t.Fatalf("应用接管不该被写成系统代理，实际写了 %d 次", calls)
 	}
-	if !strings.Contains(a.toast, "应用接管") {
-		t.Errorf("应当提示上次用的是应用接管，实际 toast=%q", a.toast)
+	if !strings.Contains(a.toast, "应用接管") || !strings.Contains(a.toast, "勾选") {
+		t.Errorf("应当提示「勾选自动恢复」，实际 toast=%q", a.toast)
 	}
 	if got := tailLog(a.bus.Tail(5)); !strings.Contains(got, "自动恢复应用接管") {
 		t.Errorf("提示也要进运行日志，实际 %q", got)
@@ -273,6 +274,38 @@ func TestMaybeRestoreCaptureModeNoticesAppCaptureNotRestored(t *testing.T) {
 	}
 	if !a.captureRestored {
 		t.Error("提示过就应当标记，避免每轮 tick 重复提示")
+	}
+}
+
+// 平台没有「自动恢复」这一项时（Windows 启动助手要过 UAC），文案不能指着
+// 一个不存在的勾选框，得说清平台限制并给出可做的事。
+func TestMaybeRestoreCaptureModeExplainsUnsupportedAutoRestore(t *testing.T) {
+	forceAutoCaptureUnsupported(t, "需要管理员授权")
+	a := testApp(t)
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Settings.CaptureMode = model.CaptureModeApp
+		cfg.Settings.AutoRestoreAppCapture = false
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg = a.store.Config()
+
+	a.maybeRestoreCaptureMode()
+
+	if strings.Contains(a.toast, "勾选") {
+		t.Errorf("本平台没有这个开关，不能让人去勾选，实际 toast=%q", a.toast)
+	}
+	for _, want := range []string{"应用接管", "需要管理员授权", "重新选"} {
+		if !strings.Contains(a.toast, want) {
+			t.Errorf("提示缺少 %q，实际 toast=%q", want, a.toast)
+		}
+	}
+	if got := tailLog(a.bus.Tail(5)); !strings.Contains(got, "本平台不支持自动恢复") {
+		t.Errorf("平台限制也要进日志，实际 %q", got)
+	}
+	if a.captureMode() != captureOff {
+		t.Errorf("提示不能顺手打开任何接管，实际 %q", a.captureMode())
 	}
 }
 

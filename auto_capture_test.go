@@ -686,6 +686,10 @@ func TestSettingsPageExplainsUnsupportedAutoRestore(t *testing.T) {
 	if !strings.Contains(texts, "自动恢复不可用：需要管理员授权") {
 		t.Fatalf("unsupported reason missing: %s", texts)
 	}
+	// 没有这个开关时也要说清后果，否则用户只能对着「不使用」猜。
+	if !strings.Contains(texts, "重启后接管方式会回到「不使用」") {
+		t.Fatalf("unsupported consequence missing: %s", texts)
+	}
 	if strings.Contains(texts, "启动 / 登录后自动恢复应用接管") {
 		t.Fatalf("unsupported platform must not show the checkbox: %s", texts)
 	}
@@ -767,6 +771,7 @@ func stampResourceTUN(t *testing.T, a *app) *resourceTUNController {
 // D：用户手动选中「应用接管」，就把「下次启动自动恢复」的意图记下来。
 // 否则重启后会静默回到「不使用」，与用户的显式选择相反。
 func TestManualAppCaptureSelectionRemembersAutoRestore(t *testing.T) {
+	forceAutoCaptureSupported(t)
 	a := onlineGatewayApp(t)
 	ctrl := stampResourceTUN(t, a)
 	if a.autoRestoreEnabled() || a.store.Config().Settings.AutoRestoreAppCapture {
@@ -788,6 +793,7 @@ func TestManualAppCaptureSelectionRemembersAutoRestore(t *testing.T) {
 // 用户显式取消勾选后再手动选回应用接管：最近一次显式意图优先，重新记下。
 // 这跟「取消勾选只影响以后」是同一套语义，必须写死，免得以后被改成静默忽略。
 func TestManualAppCaptureSelectionOverridesUncheckedIntent(t *testing.T) {
+	forceAutoCaptureSupported(t)
 	a := onlineGatewayApp(t)
 	stampResourceTUN(t, a)
 	if err := a.setAutoRestoreAppCapture(false); err != nil {
@@ -832,4 +838,31 @@ func TestSettingsShowsAppCaptureNotRestoredHint(t *testing.T) {
 	if got := strings.Join(tt.Texts(), "|"); strings.Contains(got, "本次未自动接管") {
 		t.Fatalf("勾选后说明应当消失: %s", got)
 	}
+}
+
+// forceAutoCaptureUnsupported 把平台能力谎报成「不支持」，用来验证文案分支。
+// Windows 真机默认就是这一支，这个钩子让 Linux 上也能覆盖同一段代码。
+func forceAutoCaptureUnsupported(t *testing.T, reason string) {
+	t.Helper()
+	prev := autoCaptureSupportedFn
+	autoCaptureSupportedFn = func() (bool, string) { return false, reason }
+	t.Cleanup(func() { autoCaptureSupportedFn = prev })
+}
+
+// 平台不支持自动恢复时，手动选中应用接管不能写一个永远不会生效、界面上也
+// 看不到的设置项——那只会让配置里多出一个无法解释也无法撤销的字段。
+func TestManualAppCaptureSelectionDoesNotPersistWhenUnsupported(t *testing.T) {
+	forceAutoCaptureUnsupported(t, "需要管理员授权")
+	a := onlineGatewayApp(t)
+	stampResourceTUN(t, a)
+
+	a.applyCaptureMode(captureAppCapture)
+
+	if a.store.Config().Settings.AutoRestoreAppCapture {
+		t.Error("本平台不支持自动恢复，不该写进设置")
+	}
+	if a.autoRestoreEnabled() {
+		t.Error("本平台不支持自动恢复，运行时也不该开启")
+	}
+	waitLogged(t, a, "本平台不支持自动恢复应用接管")
 }

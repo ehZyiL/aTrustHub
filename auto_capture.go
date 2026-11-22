@@ -201,11 +201,19 @@ func (a *app) retryAutoCapture() {
 // noticeAppCaptureNotRestored 说清「上次用的是应用接管、这次为什么没接管」。
 // 应用接管要拉起提权助手，不能在启动时静默开启，所以默认不自动恢复；但静默
 // 地停在「不使用」会让人以为它自己会回来，所以要明确提示一次（不改变任何行为）。
+//
+// 文案必须跟平台能力一致：Windows 根本没有「自动恢复」这一项（启动助手每次都要
+// 过 UAC），指着一个不存在的勾选框只会让人更困惑。
 func (a *app) noticeAppCaptureNotRestored(cfg model.Config) {
 	if cfg.Settings.CaptureMode != model.CaptureModeApp || cfg.Settings.AutoRestoreAppCapture {
 		return
 	}
 	if a.quitRequested.Load() || a.captureMode() == captureAppCapture {
+		return
+	}
+	if ok, reason := autoCaptureSupportedFn(); !ok {
+		a.setToast("上次使用的是「应用接管」，本次没有接管：" + reason + "。需要时在接管方式里重新选一次。")
+		a.tunLogf("上次使用的是应用接管，本次不自动接管：本平台不支持自动恢复（%s）", reason)
 		return
 	}
 	a.setToast("上次使用的是「应用接管」，本次未自动接管；勾选「启动 / 登录后自动恢复应用接管」后，下次会自动接管。")
@@ -215,8 +223,15 @@ func (a *app) noticeAppCaptureNotRestored(cfg model.Config) {
 // rememberAppCaptureIntent 是「用户手动选中应用接管」时的意图记录：下次启动
 // 按这个意图自动恢复。只在用户显式选这一档时调用，不在自动恢复流程里调用，
 // 所以不会把用户手动取消的勾选又勾回去（取消勾选走 clearAutoRestoreAppCapture）。
+//
+// 平台不支持自动恢复时一个字也不写：写下去既不会生效，界面上又没有这个开关，
+// 用户无法解释也无法撤销这个字段。
 func (a *app) rememberAppCaptureIntent() {
 	if a.quitRequested.Load() {
+		return
+	}
+	if ok, reason := autoCaptureSupportedFn(); !ok {
+		a.tunLogf("本次选择不写进设置：本平台不支持自动恢复应用接管（%s）", reason)
 		return
 	}
 	if err := a.setAutoRestoreAppCapture(true); err != nil {

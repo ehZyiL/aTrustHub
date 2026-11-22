@@ -2153,6 +2153,9 @@ func (a *app) captureSection(c *ui.Context) {
 		} else {
 			ui.Text(c, "自动恢复不可用："+reason).
 				FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(620)
+			// 说清实际后果：没有这个开关时，重启就是会回到「不使用」。
+			ui.Text(c, "重启后接管方式会回到「不使用」，需要时在下拉里重新选一次。").
+				FontSize(11).TextColor(t.TextMuted).Wrap().MaxWidth(620)
 		}
 	}
 	agg := a.mgr.Aggregate()

@@ -8,8 +8,8 @@ import (
 )
 
 // 内存策略只做两件事，而且都做得保守：
-//   - 启动时给 Go 一个软上限，避免异常情况把内存吃穿（GOGC 保持默认 100，
-//     降 GC 百分比换来的是更频繁的 GC，与「省 CPU」的目标相悖）；
+//   - 启动时给 Go 一个软上限（128MB），并让 GC 比默认早一点回收（GOGC 80）：
+//     上限已经压得很低，先回收比让堆顶到上限再救更便宜；
 //   - 只有在「藏进托盘或最小化 ≥30 秒，而且这段时间没有新流量」时才修剪一次工作集。
 //
 // 修剪（FreeOSMemory / SetProcessWorkingSetSize）会把页面换出去，
@@ -109,8 +109,8 @@ func (a *app) trafficTotal() int64 {
 			n += v.Total
 		}
 	}
-	for _, p := range a.configForBackground().LocalApps {
-		c := a.localView(p.ID).Connections
+	for _, id := range a.localAppIDsForBackground() {
+		c := a.localView(id).Connections
 		n += int64(c.Opened) + int64(c.Sent>>10) + int64(c.Received>>10)
 	}
 	return n

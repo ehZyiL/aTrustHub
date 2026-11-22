@@ -967,6 +967,21 @@ func (a *app) configForBackground() model.Config {
 	return a.cfg.Clone()
 }
 
+// localAppIDsForBackground returns just the local-app IDs. The state ticker asks
+// for them once a second, and cloning the whole configuration (access points,
+// route policies, DNS bindings, every argument list) to read a handful of IDs is
+// pure garbage — worse, that cost grows with the user's configuration, not with
+// the work actually done.
+func (a *app) localAppIDsForBackground() []string {
+	a.cfgMu.RLock()
+	defer a.cfgMu.RUnlock()
+	ids := make([]string, len(a.cfg.LocalApps))
+	for i := range a.cfg.LocalApps {
+		ids[i] = a.cfg.LocalApps[i].ID
+	}
+	return ids
+}
+
 // mutateConfig edits the in-memory configuration under the write lock. It is for
 // the settings the app changes outside Store.Update (auto restore intent).
 func (a *app) mutateConfig(fn func(*model.Config)) {

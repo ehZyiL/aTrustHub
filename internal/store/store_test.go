@@ -167,7 +167,7 @@ func TestAutoLoginIsOptInOnLoad(t *testing.T) {
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := loadConfig(path)
+	cfg, _, err := loadConfig(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestAutoLoginIsOptInOnLoad(t *testing.T) {
 	if err := saveJSON(path, cfg); err != nil {
 		t.Fatal(err)
 	}
-	again, err := loadConfig(path)
+	again, _, err := loadConfig(path)
 	if err != nil {
 		t.Fatal(err)
 	}

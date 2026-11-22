@@ -128,11 +128,15 @@ const (
 )
 
 type AccessPoint struct {
-	Protocol          string   `json:"protocol,omitempty"`
-	RemoteDNS         string   `json:"remoteDNS,omitempty"`
-	InternalDomains   []string `json:"internalDomains,omitempty"`
-	CertificateSHA256 string   `json:"certificateSHA256,omitempty"`
-	HealthTarget      string   `json:"healthTarget,omitempty"`
+	Protocol        string   `json:"protocol,omitempty"`
+	RemoteDNS       string   `json:"remoteDNS,omitempty"`
+	InternalDomains []string `json:"internalDomains,omitempty"`
+	// CertificateSHA256 pins the gateway leaf certificate, and it is enforced by
+	// the EasyConnect worker only (pinnedcert). aTrust has no enforcement point
+	// yet, so a pin stored on an aTrust point is accepted and ignored; keep it
+	// that way only until aTrust gains one.
+	CertificateSHA256 string `json:"certificateSHA256,omitempty"`
+	HealthTarget      string `json:"healthTarget,omitempty"`
 
 	ID       string `json:"id"`
 	Name     string `json:"name"`
@@ -223,7 +227,13 @@ func (p *AccessPoint) SetAppDisabled(id string, disabled bool) bool {
 type Settings struct {
 	// ListenHost is the address both the per-access-point and the
 	// aggregate proxies bind to. Loopback by default.
-	ListenHost       string               `json:"listenHost"`
+	ListenHost string `json:"listenHost"`
+	// ProxyUsername / ProxyPassword guard the listeners when ListenHost is not
+	// loopback. A loopback listener stays unauthenticated so existing browser
+	// and tool configuration keeps working; exposing the proxy to the LAN is a
+	// deliberate act and requires these credentials.
+	ProxyUsername    string               `json:"proxyUsername,omitempty"`
+	ProxyPassword    string               `json:"proxyPassword,omitempty"`
 	AggregatePort    int                  `json:"aggregatePort"`
 	AggregateEnabled bool                 `json:"aggregateEnabled"`
 	Routing          Routing              `json:"routing"`
@@ -313,6 +323,54 @@ func DefaultSettings() Settings {
 	}
 }
 
+// ProxyUsernameDefault is the account name generated for LAN listeners.
+const ProxyUsernameDefault = "hub"
+
+// MinProxyPasswordLen is the shortest proxy password a LAN listener accepts. The
+// generated one is 24 characters; this floor only rejects hand-edited values.
+const MinProxyPasswordLen = 12
+
+// IsLoopbackHost reports whether host only addresses this machine. An empty
+// value is not loopback: it would bind every interface.
+func IsLoopbackHost(host string) bool {
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// AuthRequired reports whether the local listeners must ask for credentials.
+// Loopback never does, so upgrading must not break existing configurations.
+func (s Settings) AuthRequired() bool { return !IsLoopbackHost(s.ListenHost) }
+
+// ProxyAuth is the credential pair the listeners ask for, and ok is false when
+// the listener may stay open (loopback, or a configuration that has not been
+// validated yet).
+func (s Settings) ProxyAuth() (user, pass string, ok bool) {
+	if !s.AuthRequired() || strings.TrimSpace(s.ProxyPassword) == "" {
+		return "", "", false
+	}
+	user = strings.TrimSpace(s.ProxyUsername)
+	if user == "" {
+		user = ProxyUsernameDefault
+	}
+	return user, s.ProxyPassword, true
+}
+
+// NewProxyPassword returns a 24-character password for a LAN listener.
+func NewProxyPassword() string {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(b[:])
+}
+
 // NewID returns a random access point ID.
 func NewID() string {
 	var b [6]byte
@@ -369,6 +427,10 @@ func (s *Settings) Normalize() {
 	if strings.TrimSpace(s.ListenHost) == "" {
 		s.ListenHost = d.ListenHost
 	}
+	// A listener bound to one interface is written as a bare IP (or ::1).
+	s.ListenHost = strings.TrimSpace(strings.Trim(s.ListenHost, "[]"))
+	s.ProxyUsername = strings.TrimSpace(s.ProxyUsername)
+	s.ProxyPassword = strings.TrimSpace(s.ProxyPassword)
 	if s.AggregatePort <= 0 || s.AggregatePort > 65535 {
 		s.AggregatePort = d.AggregatePort
 	}
@@ -581,6 +643,19 @@ func (s *Settings) Validate() error {
 	}
 	if s.ListenHost == "" {
 		return errors.New("监听地址不能为空")
+	}
+	if !IsLoopbackHost(s.ListenHost) {
+		if net.ParseIP(strings.Trim(s.ListenHost, "[]")) == nil {
+			return errors.New("监听地址必须是 IP 地址或 localhost")
+		}
+		// Exposing the proxy to the LAN without credentials makes it an open
+		// relay for every host that can reach this machine.
+		if strings.TrimSpace(s.ProxyPassword) == "" {
+			return errors.New("监听地址不是本机回环时，必须设置代理密码")
+		}
+		if len(s.ProxyPassword) < MinProxyPasswordLen {
+			return errors.New("代理密码至少 12 位")
+		}
 	}
 	if s.AggregatePort < 1 || s.AggregatePort > 65535 {
 		return errors.New("统一入口端口必须在 1–65535 之间")

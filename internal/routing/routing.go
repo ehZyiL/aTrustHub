@@ -109,8 +109,11 @@ func ParseRequest(r Request) (host string, port int, network string, err error) 
 	return
 }
 
-// Domain rules follow the gateway resolver: bare names include label-boundary
-// subdomains; *.name and .name exclude the apex and allow multiple labels.
+// Domain rules follow the gateway resolver: a bare name matches the apex plus
+// every label-boundary subdomain (a.com covers a.com, x.a.com, x.y.a.com); a
+// "*." or "." prefix matches the same subdomains but never the apex itself.
+// The two forms therefore differ only at the apex, and both accept multiple
+// labels. TestDomainSemanticsAndRequestValidation pins this table.
 func DomainSpecificity(pattern, host string) int {
 	pattern = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(pattern)), ".")
 	wild := strings.HasPrefix(pattern, "*.") || strings.HasPrefix(pattern, ".")

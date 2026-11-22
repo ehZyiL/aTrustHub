@@ -1,6 +1,16 @@
 package store
 
-import "sync"
+import (
+	"errors"
+	"fmt"
+	"sync"
+)
+
+// ErrSecretNotPersisted means the value is usable for this session but the
+// system credential store refused to keep it. Callers must surface that to the
+// user instead of reporting a successful save: the secret will be gone after a
+// restart.
+var ErrSecretNotPersisted = errors.New("secret is kept in memory only")
 
 // SessionSecrets keeps writes in memory first, so a temporarily unavailable
 // keyring cannot resurrect an older password. It never creates a plaintext file.
@@ -35,8 +45,11 @@ func (s *SessionSecrets) Set(key, value string) error {
 	defer s.mu.Unlock()
 	s.values[key] = value
 	delete(s.deleted, key)
-	if s.primary != nil {
-		_ = s.primary.Set(key, value)
+	if s.primary == nil {
+		return nil
+	}
+	if err := s.primary.Set(key, value); err != nil {
+		return fmt.Errorf("%w: %v", ErrSecretNotPersisted, err)
 	}
 	return nil
 }

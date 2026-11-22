@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/ehzyil/connect-hub/internal/model"
@@ -31,8 +32,9 @@ type Store struct {
 	dir string
 	sec SecretStore
 
-	mu  sync.Mutex
-	cfg model.Config
+	mu       sync.Mutex
+	cfg      model.Config
+	warnings []string
 }
 
 // PasswordKey is the secret key of an access point's cred.
@@ -55,31 +57,41 @@ func Open(dir string, secrets SecretStore) (*Store, error) {
 	if s.sec == nil {
 		s.sec = NewMemorySecrets()
 	}
-	cfg, err := loadConfig(filepath.Join(dir, "config.json"))
+	cfg, warnings, err := loadConfig(filepath.Join(dir, "config.json"))
 	if err != nil {
 		return nil, err
 	}
 	s.cfg = cfg
+	s.warnings = warnings
 	return s, nil
 }
 
-func loadConfig(path string) (model.Config, error) {
+// Warnings reports what loading the configuration had to correct. The app logs
+// them once at startup instead of failing to start.
+func (s *Store) Warnings() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.warnings...)
+}
+
+func loadConfig(path string) (model.Config, []string, error) {
 	cfg := model.Config{
 		Version:  model.CurrentVersion,
 		Settings: model.DefaultSettings(),
 	}
+	var warnings []string
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return cfg, nil
+		return cfg, nil, nil
 	}
 	if err != nil {
-		return cfg, fmt.Errorf("read %s: %w", path, err)
+		return cfg, nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	if len(data) == 0 {
-		return cfg, nil
+		return cfg, nil, nil
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return cfg, fmt.Errorf("parse %s: %w", path, err)
+		return cfg, nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	var raw map[string]json.RawMessage
 	if json.Unmarshal(data, &raw) == nil {
@@ -94,6 +106,17 @@ func loadConfig(path string) (model.Config, error) {
 			}
 		}
 	}
+	// A listener exposed to the LAN must carry credentials. A configuration
+	// written before that rule existed, or edited by hand, falls back to
+	// loopback instead of staying an open relay; the user restores LAN access
+	// by setting a proxy password.
+	if host := strings.TrimSpace(cfg.Settings.ListenHost); host != "" &&
+		!model.IsLoopbackHost(host) &&
+		len(strings.TrimSpace(cfg.Settings.ProxyPassword)) < model.MinProxyPasswordLen {
+		warnings = append(warnings, fmt.Sprintf(
+			"监听地址 %s 需要代理密码，已回落到 127.0.0.1；要让局域网使用，请在设置里设置代理密码后再改回", host))
+		cfg.Settings.ListenHost = "127.0.0.1"
+	}
 	cfg.Normalize()
 	// Auto-login is opt-in. Earlier builds switched it on for every access
 	// point, so clear it once here and remember that we did.
@@ -104,7 +127,7 @@ func loadConfig(path string) (model.Config, error) {
 		}
 		_ = saveJSON(path, cfg)
 	}
-	return cfg, nil
+	return cfg, warnings, nil
 }
 
 // Dir returns the data directory.

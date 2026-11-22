@@ -47,7 +47,7 @@ connect-hub-linux-amd64/
 ├── install-desktop-entry.sh   # 桌面图标与菜单注册脚本
 ├── core/
 │   ├── easyconnect-worker     # VPN 协议引擎 (IPC v7)
-│   └── easyconnect-hub-capture # 操作系统特权助手 (IPC v10；安装后位于 /usr/local/libexec/)
+│   └── connect-hub-capture    # 操作系统特权助手 (IPC v11；安装后位于 /usr/local/libexec/)
 ├── share/icons/hicolor/       # 各尺寸高清应用图标
 ├── resources/                 # 运行时静态资源
 ├── LICENSES/                  # 开源协议清单
@@ -80,7 +80,7 @@ Connect Hub 遵循**最小权限原则**：
 
 ### 安装 / 更新辅助服务
 1. 打开 Connect Hub 主界面，进入 **「本机软件」** 或开启 **「全系统 TUN 模式」**。
-2. 界面会提示「辅助服务未安装」或「检测到新版本辅助服务（需要协议 v10）」。
+2. 界面会提示「辅助服务未安装」或「检测到新版本辅助服务（需要协议 v11）」。
 3. 点击 **「安装 / 更新辅助服务」**，系统将弹出 PolicyKit 认证对话框，输入管理员密码完成配置。
 4. 辅助服务安装后通过私有 Unix Domain Socket 与主程序通信，并在主程序退出或心跳超时后自动清理所有临时路由规则。
 

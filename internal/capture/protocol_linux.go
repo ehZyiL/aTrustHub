@@ -18,7 +18,7 @@ import (
 
 const (
 	// Version 10 transfers live DNS capabilities between capture modes.
-	ProtocolVersion = 10
+	ProtocolVersion = 11
 	maxFrame        = 64 << 10
 	maxSessions     = 16
 	LauncherFlag    = "--managed-capture-program"
@@ -125,7 +125,7 @@ func writeFrame(w io.Writer, v any) error {
 	return err
 }
 
-func RuntimeDir(uid int) string { return fmt.Sprintf("/run/easyconnect-hub-capture-%d", uid) }
+func RuntimeDir(uid int) string { return fmt.Sprintf("/run/connect-hub-capture-%d", uid) }
 func SocketPath(uid int) string { return RuntimeDir(uid) + "/control.sock" }
 
 func scopePath(uid int, id string) string {

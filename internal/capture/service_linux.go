@@ -68,7 +68,7 @@ func newService(uid int, dir string, run commandFunc) (*Service, error) {
 	if err := secureDirectory(filepath.Join(dir, "aliases"), 0700); err != nil {
 		return nil, err
 	}
-	networkDir := filepath.Join(filepath.Dir(dir), "easyconnect-hub-capture")
+	networkDir := filepath.Join(filepath.Dir(dir), "connect-hub-capture")
 	if err := secureDirectory(networkDir, 0755); err != nil {
 		return nil, err
 	}

@@ -14,7 +14,7 @@
 |---|---|---|
 | `DEVELOPMENT.md` §1 架构图 | aTrust 与 EasyConnect 两条协议栈都在 `easyconnect-worker` 里 | aTrust 在 **GUI 进程内**直接 import（`internal/vpn/zju.go`）；worker 只做 EasyConnect，协议里无协议选择字段 |
 | `DEVELOPMENT.md` §4.3 | "Linux（Native TUN + Policy Routing）"属于全局 TUN 的一档 | Linux `supportsElevatedTUN() = false`，**没有**全局 TUN 这一档；Linux 只有"应用接管"（`supportsResourceTUN = true`） |
-| `DEVELOPMENT.md` §3.2 | Linux 助手 socket 在 `/run/connect-hub/helper.sock` | 实际 `/run/easyconnect-hub-capture-<uid>/control.sock`（`capture.SocketPath`），0600 且 chown 到该 UID |
+| `DEVELOPMENT.md` §3.2 | Linux 助手 socket 在 `/run/connect-hub/helper.sock` | 实际 `/run/connect-hub-capture-<uid>/control.sock`（`capture.SocketPath`），0600 且 chown 到该 UID |
 | `DEVELOPMENT.md` §2 | `go.work` 的 `use` 含 `./tests/e2e` | 该目录**不存在**（曾导致根目录任何 go 命令失败，已修复）；`tests/e2e` 与 harness 已不在仓库 |
 | `desktop-status-2026-11-19` | "新接入点默认 EasyConnect" | `model.AccessPoint.Normalize()` 默认 `protocol = atrust`，EasyConnect 必须显式填写 |
 | `desktop-status-2026-11-19` | "Linux 关闭窗口退出并清理连接" | 有托盘时关闭是**隐藏到托盘**（`quitclose.go`：linux + trayOK + 未勾选退出 → `closeHide`）；只有检测不到托盘才退出 |
@@ -74,6 +74,8 @@
 
 1. `scripts/package-linux.sh` 原先把助手编成 `core/connect-hub-capture`，
    而 `packaging/linux/install-capture-helper.sh` 只认 `core/easyconnect-hub-capture`
-   → **Linux 上按包内脚本安装特权助手必然失败**。现已统一为 `easyconnect-hub-capture`
-   （systemd 单元名与 `/run/easyconnect-hub-capture-<uid>` 是既成契约，不能改）。
+   → **Linux 上按包内脚本安装特权助手必然失败**。现已把产品名收尾到 `connect-hub`：
+   包内二进制、安装路径 `/usr/local/libexec/connect-hub-capture`、systemd 单元
+   `connect-hub-capture@<uid>.service`、运行时目录 `/run/connect-hub-capture-<uid>` 全部统一，
+   助手协议随之升到 v11；安装脚本会把改名前的 `easyconnect-hub-capture` 单元与二进制先停掉并移除。
 2. Windows/Linux 两处 `COMPONENTS.txt` 里的主程序名仍写 `easyconnect-hub(.exe)`，已改为实际的 `connect-hub(.exe)`。

@@ -97,7 +97,7 @@ func TestInstallCommandUsesPackagedFilesAndLiteralArguments(t *testing.T) {
 	if _, err := installCommand(exe, 1000); err == nil {
 		t.Fatal("incomplete bundle accepted")
 	}
-	for _, name := range []string{"install-capture-helper.sh", "easyconnect-hub-capture@.service"} {
+	for _, name := range []string{"install-capture-helper.sh", "connect-hub-capture@.service"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("fixture"), 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -110,7 +110,7 @@ func TestInstallCommandUsesPackagedFilesAndLiteralArguments(t *testing.T) {
 	if err := os.Mkdir(core, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(core, "easyconnect-hub-capture"), []byte("fixture"), 0700); err != nil {
+	if err := os.WriteFile(filepath.Join(core, "connect-hub-capture"), []byte("fixture"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	cmd, err := installCommand(exe, 1000)
@@ -127,7 +127,7 @@ func TestInstallCommandUsesPackagedFilesAndLiteralArguments(t *testing.T) {
 	if err := os.RemoveAll(core); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "easyconnect-hub-capture"), []byte("fixture"), 0700); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "connect-hub-capture"), []byte("fixture"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := installCommand(exe, 1000); err != nil {

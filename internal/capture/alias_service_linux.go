@@ -109,10 +109,10 @@ func (s *Service) otherAliasReservations(excludeOwnSystem ...bool) ([]string, er
 		return nil, err
 	}
 	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), "easyconnect-hub-capture-") {
+		if !strings.HasPrefix(entry.Name(), "connect-hub-capture-") {
 			continue
 		}
-		uid, err := strconv.Atoi(strings.TrimPrefix(entry.Name(), "easyconnect-hub-capture-"))
+		uid, err := strconv.Atoi(strings.TrimPrefix(entry.Name(), "connect-hub-capture-"))
 		if err != nil || uid < 1 || uid == s.uid {
 			continue
 		}

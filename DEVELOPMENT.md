@@ -122,9 +122,9 @@ replace (
   - 代码位置：[aTrustHub/internal/wincapture/protocol.go](file:///d:/Programming/Projects/Go/easy-connect/aTrustHub/internal/wincapture/protocol.go)
   - **载体**：命名管道（Named Pipe），带有严格受控的 DACL 安全描述符，杜绝任意远程连接。
   - **安全校验**：助手在接受连接时主动校验连接端进程 PID 与可执行文件签名/路径，阻断仿冒攻击；会话 Token 在内存中协商，不写磁盘。
-- **Linux 平台（协议版本：v10）**：
+- **Linux 平台（协议版本：v11）**：
   - 代码位置：[aTrustHub/internal/capture/protocol_linux.go](file:///d:/Programming/Projects/Go/easy-connect/aTrustHub/internal/capture/protocol_linux.go)
-  - **载体**：Unix Domain Socket（`/run/easyconnect-hub-capture-<uid>/control.sock`，权限 0600 且 owner 为该 UID）。
+  - **载体**：Unix Domain Socket（`/run/connect-hub-capture-<uid>/control.sock`，权限 0600 且 owner 为该 UID）。
   - **身份凭据**：通过 64 字节随机 Token 进行双向握手确认，防止未授权租约操作。
 
 ---
@@ -245,7 +245,7 @@ mkdir -p build/debug/resources build/debug/core
 
 # 2. 编译主程序与助手
 go build -mod=readonly -trimpath -o build/debug/connect-hub .
-go build -mod=readonly -trimpath -o build/debug/core/easyconnect-hub-capture ./cmd/app-helper
+go build -mod=readonly -trimpath -o build/debug/core/connect-hub-capture ./cmd/app-helper
 
 # 3. 编译独立 Worker (GOWORK=off)
 (cd ../zju-connect && env GOWORK=off go build -mod=readonly -trimpath -o ../aTrustHub/build/debug/core/easyconnect-worker ./cmd/easyconnect-worker)
@@ -287,7 +287,7 @@ diff -u <(sed -e 's/\r$//' -e 's/^package desktop$/package workeripc/' ../zju-co
 ./core/connect-hub-capture.exe --protocol-version
 
 # 校验 Linux 助手协议版本 (当前预期为 10)
-./core/easyconnect-hub-capture --protocol-version
+./core/connect-hub-capture --protocol-version
 ```
 
 ---
@@ -355,4 +355,4 @@ GitHub Actions 自动化流水线配置在 [aTrustHub/.github/workflows/build.ym
     ```powershell
     Get-DnsClientNrptRule | Where-Object { $_.Comment -like "*ConnectHub*" } | Remove-DnsClientNrptRule -Force
     ```
-  - Linux：执行 `sudo systemctl stop 'easyconnect-hub-capture@<uid>.service'` 或清理 `/run/easyconnect-hub-capture-<uid>/`。
+  - Linux：执行 `sudo systemctl stop 'connect-hub-capture@<uid>.service'` 或清理 `/run/connect-hub-capture-<uid>/`。

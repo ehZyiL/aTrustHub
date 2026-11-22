@@ -13,7 +13,7 @@
 |---|---|---|
 | Worker IPC | **v7** | `internal/workeripc/protocol.go` `Version = 7` |
 | Windows 提权助手 | **v7** | `internal/wincapture/protocol.go` `ProtocolVersion = 7` |
-| Linux 提权助手 | **v10** | `internal/capture/protocol_linux.go` `ProtocolVersion = 10` |
+| Linux 提权助手 | **v11** | `internal/capture/protocol_linux.go` `ProtocolVersion = 11` |
 | Hub 模块 | `GO 1.27.3` | `aTrustHub/go.mod` |
 | 应用构建标识 | `0.1.0-dev-multigateway-tun.11` | `app.go` `appBuild` |
 

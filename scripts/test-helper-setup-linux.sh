@@ -19,7 +19,7 @@ for tool in bash dirname install getent stat flock mktemp rm mv cat mkdir chmod 
     cp -L --parents "$library" "$test_root"
   done < <(ldd "$tool_path" | awk '/=> \// {print $3} /^[[:space:]]*\// {print $1}')
 done
-cp "$app_root/packaging/linux/"{install-capture-helper.sh,uninstall-capture-helper.sh,easyconnect-hub-capture@.service} "$test_root/bundle/"
+cp "$app_root/packaging/linux/"{install-capture-helper.sh,uninstall-capture-helper.sh,connect-hub-capture@.service} "$test_root/bundle/"
 for tool in ip nft busctl systemd-run; do
   printf '#!/bin/bash\nexit 0\n' > "$test_root/usr/bin/$tool"
   chmod +x "$test_root/usr/bin/$tool"
@@ -39,24 +39,24 @@ case "$1" in
 esac
 MOCK
 chmod +x "$test_root/usr/bin/systemctl"
-cat > "$test_root/bundle/core/easyconnect-hub-capture" <<'MOCK'
+cat > "$test_root/bundle/core/connect-hub-capture" <<'MOCK'
 #!/bin/bash
 if [[ ${1:-} == --protocol-version ]]; then
-  printf '%s\n' "${CANDIDATE_PROTOCOL:-10}"
+  printf '%s\n' "${CANDIDATE_PROTOCOL:-11}"
   exit 0
 fi
 printf 'new-helper %s\n' "$*" >> /calls
 MOCK
-chmod +x "$test_root/bundle/core/easyconnect-hub-capture"
+chmod +x "$test_root/bundle/core/connect-hub-capture"
 cat > "$test_root/check.sh" <<'CHECK'
 #!/bin/bash
 set -euo pipefail
 [[ ${EASYCONNECT_SETUP_SANDBOX:-} == 1 && -f /.setup-sandbox ]] || exit 99
-unit=easyconnect-hub-capture@1000.service
-helper=/usr/local/libexec/easyconnect-hub-capture
-template=/etc/systemd/system/easyconnect-hub-capture@.service
+unit=connect-hub-capture@1000.service
+helper=/usr/local/libexec/connect-hub-capture
+template=/etc/systemd/system/connect-hub-capture@.service
 reset_case() {
-  rm -rf -- /usr/local/libexec /etc/systemd/system /run/easyconnect-hub-capture
+  rm -rf -- /usr/local/libexec /etc/systemd/system /run/connect-hub-capture /run/easyconnect-hub-capture
   mkdir -p /usr/local/libexec /etc/systemd/system
   rm -f /active
   : > /calls
@@ -83,7 +83,7 @@ passed() { printf 'PASS %s\n' "$1"; }
 reset_case
 bash /bundle/install-capture-helper.sh --uid 1000 >/result
 [[ -x $helper && -f $template && -f /active ]]
-[[ $(cat "$helper") == "$(cat /bundle/core/easyconnect-hub-capture)" ]]
+[[ $(cat "$helper") == "$(cat /bundle/core/connect-hub-capture)" ]]
 [[ $(cat /calls) == *"enable --now $unit"* ]]
 passed 'fresh install'
 
@@ -93,7 +93,7 @@ old_helper
 bash /bundle/install-capture-helper.sh --uid 1000 >/result
 calls=$(cat /calls)
 [[ $calls == *"stop $unit"*"old-helper --uid=1000 --recover"*"enable --now $unit"* ]]
-[[ $(cat "$helper") == "$(cat /bundle/core/easyconnect-hub-capture)" ]]
+[[ $(cat "$helper") == "$(cat /bundle/core/connect-hub-capture)" ]]
 passed 'upgrade cleans old helper before replacement'
 
 reset_case
@@ -108,7 +108,7 @@ passed 'failed recovery preserves old executable and stops installation'
 reset_case
 old_helper
 expected=$(cat "$helper")
-printf 'easyconnect-hub-capture@2000.service loaded active running\n' > /running
+printf 'connect-hub-capture@2000.service loaded active running\n' > /running
 expect_failure 1 bash /bundle/install-capture-helper.sh --uid 1000
 [[ $(cat "$helper") == "$expected" && ! -e $template ]]
 [[ $(cat /calls) != *"old-helper"* ]]
@@ -124,10 +124,29 @@ unset CANDIDATE_PROTOCOL
 [[ $(cat "$helper") == "$expected" && -f /active && ! -s /calls ]]
 passed 'old candidate protocol is refused before stopping existing service'
 
+# 旧的（改名前的）助手必须先被撤掉，否则两个特权服务会抢同一套网络规则。
+reset_case
+legacy=/usr/local/libexec/easyconnect-hub-capture
+legacy_template=/etc/systemd/system/easyconnect-hub-capture@.service
+cat > "$legacy" <<'OLD'
+#!/bin/bash
+printf 'legacy-helper %s\n' "$*" >> /calls
+OLD
+chmod +x "$legacy"
+: > "$legacy_template"
+: > /active
+bash /bundle/install-capture-helper.sh --uid 1000 >/result
+calls=$(cat /calls)
+[[ ! -e $legacy && ! -e $legacy_template ]]
+[[ -x $helper && -f $template && -f /active ]]
+[[ $calls == *"legacy-helper --uid=1000 --recover"* ]]
+[[ $calls == *"enable --now $unit"* ]]
+passed 'upgrade removes the pre-rename helper before installing the new one'
+
 reset_case
 old_helper
 : > "$template"
-printf 'easyconnect-hub-capture@2000.service enabled\n' > /enabled
+printf 'connect-hub-capture@2000.service enabled\n' > /enabled
 bash /bundle/uninstall-capture-helper.sh --uid 1000 >/result
 [[ -x $helper && -f $template ]]
 [[ $(cat /calls) == *"old-helper --uid=1000 --recover"*"disable $unit"* ]]
@@ -152,8 +171,8 @@ unset RECOVER_FAIL
 passed 'failed uninstall recovery preserves files and enabled state'
 
 reset_case
-mkdir -m 0755 /run/easyconnect-hub-capture
-exec {held_lock}>/run/easyconnect-hub-capture/installer.lock
+mkdir -m 0755 /run/connect-hub-capture
+exec {held_lock}>/run/connect-hub-capture/installer.lock
 flock -n "$held_lock"
 expect_failure 75 bash /bundle/install-capture-helper.sh --uid 1000
 expect_failure 75 bash /bundle/uninstall-capture-helper.sh --uid 1000
@@ -162,8 +181,8 @@ exec {held_lock}>&-
 passed 'concurrent maintenance is rejected'
 
 reset_case
-mkdir -m 0755 /run/easyconnect-hub-capture
-ln -s /calls /run/easyconnect-hub-capture/installer.lock
+mkdir -m 0755 /run/connect-hub-capture
+ln -s /calls /run/connect-hub-capture/installer.lock
 expect_failure 1 bash /bundle/install-capture-helper.sh --uid 1000
 expect_failure 1 bash /bundle/uninstall-capture-helper.sh --uid 1000
 [[ ! -s /calls ]]

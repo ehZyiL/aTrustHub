@@ -223,7 +223,7 @@ func (s *Service) systemReservations(excludeOwn ...bool) ([]string, error) {
 	}
 	for _, entry := range dirs {
 		dir := filepath.Join(filepath.Dir(s.dir), entry.Name())
-		if dir == s.dir || !strings.HasPrefix(entry.Name(), "easyconnect-hub-capture-") {
+		if dir == s.dir || !strings.HasPrefix(entry.Name(), "connect-hub-capture-") {
 			continue
 		}
 		if err := verifyDirectory(dir, 0755); err != nil {

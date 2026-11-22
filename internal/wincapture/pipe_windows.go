@@ -185,7 +185,7 @@ func checkHelperProtocol(ctx context.Context, helper string) error {
 		return ctx.Err()
 	}
 	if err != nil || strings.TrimSpace(string(output)) != strconv.Itoa(ProtocolVersion) {
-		return fmt.Errorf("Windows 网络助手版本不匹配或无法校验（需要协议 v%d），请重新解压完整安装包（easyconnect-hub-capture.exe 位于 core 目录）", ProtocolVersion)
+		return fmt.Errorf("Windows 网络助手版本不匹配或无法校验（需要协议 v%d），请重新解压完整安装包（connect-hub-capture.exe 位于 core 目录）", ProtocolVersion)
 	}
 	return nil
 }

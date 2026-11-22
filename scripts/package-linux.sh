@@ -27,10 +27,10 @@ cd "$app_root"
 env "$go_tool" run ./cmd/appicon -icon resources/icon.png -png-dir "$bundle/share/icons/hicolor" -png-name connect-hub
 env GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/connect-hub" .
 # worker 和抓包助手是内部程序，放进 core/，避免用户直接双击。
-env GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/core/easyconnect-hub-capture" ./cmd/app-helper
-helper_protocol=$("$bundle/core/easyconnect-hub-capture" --protocol-version)
-if [[ "$helper_protocol" != 10 ]]; then
-  printf 'Linux capture helper protocol mismatch: expected 10, got %s\n' "$helper_protocol" >&2
+env GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/core/connect-hub-capture" ./cmd/app-helper
+helper_protocol=$("$bundle/core/connect-hub-capture" --protocol-version)
+if [[ "$helper_protocol" != 11 ]]; then
+  printf 'Linux capture helper protocol mismatch: expected 11, got %s\n' "$helper_protocol" >&2
   exit 1
 fi
 "$go_tool" list -m all > "$bundle/desktop-modules.txt"
@@ -60,13 +60,15 @@ Worker source commit: $worker_commit
 Linux capture helper protocol: $helper_protocol
 Scope: IPv4 TCP and DNS. System IPv4 UDP for eligible L3 sessions is experimental; IPv6 is unsupported.
 Layout: connect-hub at the bundle root; easyconnect-worker and
-core/easyconnect-hub-capture under core/. Launch only connect-hub (or start.sh);
+core/connect-hub-capture under core/. Launch only connect-hub (or start.sh);
 the two programs in core/ are internal and start on demand.
-The helper keeps the easyconnect-hub-capture name because the systemd unit and
-/run/easyconnect-hub-capture-<uid> runtime directory are fixed by it.
+The helper's installed name, systemd unit and /run/connect-hub-capture-<uid>
+runtime directory all use the product name; install-capture-helper.sh stops and
+removes the pre-rename easyconnect-hub-capture unit and binary first, so an
+upgrade cannot leave two privileged helpers behind.
 GUI, worker and helper are a matched build from this bundle; do not mix files from other bundles.
 EOF
-install -m 0644 "$app_root/packaging/linux/easyconnect-hub-capture@.service" "$bundle/easyconnect-hub-capture@.service"
+install -m 0644 "$app_root/packaging/linux/connect-hub-capture@.service" "$bundle/connect-hub-capture@.service"
 install -m 0755 "$app_root/packaging/linux/install-capture-helper.sh" "$bundle/install-capture-helper.sh"
 install -m 0755 "$app_root/packaging/linux/uninstall-capture-helper.sh" "$bundle/uninstall-capture-helper.sh"
 install -m 0755 "$app_root/packaging/linux/install-desktop-entry.sh" "$bundle/install-desktop-entry.sh"
@@ -75,7 +77,7 @@ install -m 0755 "$app_root/packaging/linux/test-worker.sh" "$bundle/test-worker.
 
 printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'bundle_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)' 'cd "$bundle_dir"' 'exec "$bundle_dir/connect-hub" "$@"' > "$bundle/start.sh"
 chmod +x "$bundle/start.sh"
-chmod +x "$bundle/connect-hub" "$bundle/core/easyconnect-worker" "$bundle/core/easyconnect-hub-capture" "$bundle/test-worker.sh" "$bundle/install-capture-helper.sh" "$bundle/uninstall-capture-helper.sh" "$bundle/install-desktop-entry.sh"
+chmod +x "$bundle/connect-hub" "$bundle/core/easyconnect-worker" "$bundle/core/connect-hub-capture" "$bundle/test-worker.sh" "$bundle/install-capture-helper.sh" "$bundle/uninstall-capture-helper.sh" "$bundle/install-desktop-entry.sh"
 
 cd "$bundle"
 find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS

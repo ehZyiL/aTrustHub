@@ -142,7 +142,7 @@ Linux 侧顺带修掉一个真实缺陷：`resource_proxy_linux.go` / `resource_
 | 项目 | 证据 |
 |---|---|
 | worker IPC v7 + `strict_vpn` / `flow_prepare` / `flow_cancel` | `internal/workeripc/protocol.go`，`processSession.configureReady` 校验能力组合 |
-| Windows helper v7 / Linux helper v10，两侧都拒绝混装 | 常量 + 打包脚本 `--protocol-version` 自检 + 安装脚本候选校验 |
+| Windows helper v7 / Linux helper v11，两侧都拒绝混装 | 常量 + 打包脚本 `--protocol-version` 自检 + 安装脚本候选校验 |
 | 独立 `internal/routing` 决策层（归属/授权/策略/预算） | `Decide` / `DecideDNS` / `applyPolicy` |
 | 不可变资源快照 + 代次隔离 | `Manager.routeSnapshot` / `currentRoute` 的 gen+endpoint+sess 三元校验 |
 | 合成地址映射池（Session 绑定、不可改绑、TTL/容量/退役） | `internal/dnsmapping/pool.go` |

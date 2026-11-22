@@ -566,37 +566,55 @@ func TestAccessLogFiltersAndClearsAccessOnly(t *testing.T) {
 func TestAccessLogKeepsUnifiedEntryVisible(t *testing.T) {
 	a := testApp(t)
 	a.tab = 2
-	for i := 0; i < 40; i++ {
-		a.bus.Add(vpn.AccessFail, fmt.Sprintf("reports.example.test:443 · 失败记录 %d", i))
-	}
 	tt := ui.NewTester(a.view, 720, 520)
-	checkFooter := func() {
+	checkFooter := func(state string, height float32) {
 		t.Helper()
 		rect, ok := tt.Find("统一入口")
-		if !ok || rect.Y < 480 || rect.Y+rect.H > 520 {
-			t.Fatalf("统一入口应固定在窗口底部：找到了 %v，位置 %+v", ok, rect)
+		if !ok || rect.Y < height-40 || rect.Y+rect.H > height {
+			t.Fatalf("%s：统一入口应固定在窗口底部，找到了 %v，位置 %+v", state, ok, rect)
 		}
 	}
-	checkFooter()
+	checkFooter("打开空日志", 520)
 	if !tt.HasText("未启动") {
 		t.Fatal("未监听时仍应说明入口状态")
 	}
+	for i := 0; i < 40; i++ {
+		a.bus.Add(vpn.AccessFail, fmt.Sprintf("reports.example.test:443 · 失败记录 %d", i))
+	}
+	tt.Frame()
+	checkFooter("有多条日志", 520)
 	tt.Scroll(350, 300, 0, 600)
-	checkFooter()
+	checkFooter("滚动后", 520)
 
 	a.cfg.Settings.AggregatePort = freePorts(t, 1)[0]
 	a.mgr.Apply(a.cfg)
 	a.mgr.Start()
 	tt.Frame()
-	checkFooter()
+	checkFooter("入口监听后", 520)
 	if addr := a.mgr.Aggregate().Addr; addr == "" || !tt.HasText("socks5://"+addr) {
 		t.Fatal("监听后应展示可用的入口地址")
 	}
+	if err := tt.Click("成功"); err != nil {
+		t.Fatal(err)
+	}
+	if !tt.HasText("没有符合筛选条件的记录") {
+		t.Fatal("成功筛选应显示无结果提示")
+	}
+	checkFooter("筛选无结果", 520)
+	if err := tt.Click("清空"); err != nil {
+		t.Fatal(err)
+	}
+	if !tt.HasText("还没有访问记录") {
+		t.Fatal("清空后应显示空日志提示")
+	}
+	checkFooter("清空后", 520)
+	tt.SetSize(1120, 780)
+	checkFooter("放大窗口后", 780)
 
 	a.cfg.Settings.AggregateEnabled = false
 	a.mgr.Apply(a.cfg)
 	tt.Frame()
-	checkFooter()
+	checkFooter("入口禁用后", 780)
 	if !tt.HasText("已关闭") {
 		t.Fatal("禁用统一入口时仍应说明入口状态")
 	}

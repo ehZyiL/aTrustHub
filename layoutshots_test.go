@@ -109,5 +109,9 @@ func TestLayoutShots(t *testing.T) {
 		shot("17-dialog-point-editor-min", 0, false, 880, 560)
 		a.editor.open = false
 	}
+	a.bus.ClearAccess()
+	a.sysProxyOn.Store(false)
+	a.mgr.Start()
+	shot("30-access-empty", 2, false, 880, 560)
 	t.Logf("shots dir: %s", out)
 }

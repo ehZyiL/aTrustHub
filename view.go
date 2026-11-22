@@ -1407,16 +1407,17 @@ func (a *app) accessSection(c *ui.Context) {
 		ui.Segmented(c, &a.accessFilter, "全部", "成功", "失败").Label("筛选访问结果")
 		ui.Text(c, fmt.Sprintf("成功 %d · 失败 %d", succeeded, failed)).FontSize(12).TextColor(t.TextMuted)
 	})
-	if len(entries) == 0 {
-		noResults(c, "还没有访问记录", "启动本机项目或通过接入点访问内网后，连接结果会显示在这里。")
-		return
-	}
-	if (a.accessFilter == 1 && succeeded == 0) || (a.accessFilter == 2 && failed == 0) {
-		noResults(c, "没有符合筛选条件的记录", "切换到全部可以查看其他访问记录。")
-		return
-	}
+	// 无结果时也保留占满剩余空间的正文，避免底栏随列表收起。
 	scroll := ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(8, 6, 8, 4)
 	scroll.Children(func() {
+		if len(entries) == 0 {
+			noResults(c, "还没有访问记录", "启动本机项目或通过接入点访问内网后，连接结果会显示在这里。")
+			return
+		}
+		if (a.accessFilter == 1 && succeeded == 0) || (a.accessFilter == 2 && failed == 0) {
+			noResults(c, "没有符合筛选条件的记录", "切换到全部可以查看其他访问记录。")
+			return
+		}
 		box := ui.Column(c).Padding(0, 10).Radius(8).Border(1, t.Border).
 			Background(t.Surface)
 		box.Children(func() {

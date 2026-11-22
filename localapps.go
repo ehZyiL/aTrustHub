@@ -53,12 +53,14 @@ func (a *app) pointChoice(p model.AccessPoint) string {
 func (a *app) localAppsSection(c *ui.Context) {
 	ui.Column(c).Grow(1).MinHeight(0).Gap(10).Children(func() {
 		pageBar(c, "本机软件", fmt.Sprintf("%d 个", len(a.cfg.LocalApps)), func() {
-			ui.SearchField(c, &a.localQuery).Placeholder("搜索名称、地址或接入点").
-				Label("搜索本机项目").Width(240)
-			// 工具栏级按钮跟其他页面保持同一尺寸（13），11 只用于列表行内。
-			if ui.PrimaryButton(c, "＋ 添加项目").Clicked() {
+			if ui.PrimaryButton(c, "＋ 添加项目").FontSize(12).Clicked() {
 				a.openLocalAppEditor("")
 			}
+		})
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.SearchField(c, &a.localQuery).Placeholder("搜索名称、地址或接入点").
+				Label("搜索本机项目").Grow(1).MinWidth(0)
+			ui.Text(c, "点击项目编辑").FontSize(12).TextColor(c.Theme().TextMuted)
 		})
 		if captureExperimentEnabled() {
 			a.captureSetupView(c)
@@ -140,34 +142,26 @@ func (a *app) localAppList(c *ui.Context) {
 	t := c.Theme()
 	query := strings.TrimSpace(a.localQuery)
 	groups := a.localGroupsMatching(query)
-	panel := ui.Column(c).Grow(1).Radius(12).Border(1, t.Border).
-		Background(t.Surface)
-	panel.Children(func() {
-		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(6, 2, 6, 0).Children(func() {
-			ui.Column(c).Padding(0, 10, 0, 0).Children(func() {
-				if len(groups) == 0 {
-					noResults(c, "没有匹配的项目",
-						"换个名称、地址或接入点试试；清空搜索可以看到全部项目。")
-					return
-				}
-				first := true
-				for _, g := range groups {
-					if !first {
-						ui.Divider(c)
-					}
-					first = false
+	if len(groups) == 0 {
+		noResults(c, "没有匹配的项目", "换个名称、地址或接入点试试。")
+		return
+	}
+	ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(6, 2, 6, 0).Children(func() {
+		ui.Column(c).Padding(0, 12, 0, 0).Gap(10).Children(func() {
+			for _, g := range groups {
+				ui.Column(c).Radius(8).Border(1, t.Border).Background(t.Surface).Children(func() {
 					// 搜索时全部展开，不然命中的项目还被折在组里。
 					collapsed := a.localCollapsed[g.id] && query == ""
 					a.localGroupHeader(c, g, collapsed)
 					if collapsed {
-						continue
+						return
 					}
 					for _, p := range g.items {
 						ui.Divider(c)
 						a.localAppRow(c, p)
 					}
-				}
-			})
+				})
+			}
 		})
 	})
 }
@@ -225,7 +219,7 @@ func (a *app) localAppRow(c *ui.Context, p model.LocalApp) {
 	v := a.localView(p.ID)
 	online, _ := a.localPointOnline(p)
 	status, tone := localStatusText(t, p, v, online)
-	row := ui.Row(c).Padding(12, 14).Gap(10).AlignItems(ui.Center).Radius(8)
+	row := ui.Row(c).Padding(10, 14).Gap(10).AlignItems(ui.Center).Radius(8)
 	row.OnClick(func() {
 		a.openLocalAppEditor(p.ID)
 	})
@@ -237,14 +231,14 @@ func (a *app) localAppRow(c *ui.Context, p model.LocalApp) {
 		ui.Column(c).Gap(3).Grow(1).MinWidth(0).Children(func() {
 			ui.Text(c, p.Name).FontSize(13).Bold().Ellipsis("…")
 			// 接入点已经写在分组头上，行里只留目标与方式。
-			ui.Text(c, localModeLabel(p.Mode)+" · "+localTargetLine(p)).FontSize(11).
+			ui.Text(c, localModeLabel(p.Mode)+" · "+localTargetLine(p)).FontSize(12).
 				TextColor(t.TextMuted).Ellipsis("…")
 		})
-		ui.Text(c, status).FontSize(11).TextColor(tone).Ellipsis("…")
+		ui.Text(c, status).FontSize(12).TextColor(tone).Ellipsis("…").Tooltip(status)
 		// 行里只放一个常用动作，其余详情、编辑、删除都在弹窗里。
 		switch {
 		case !localProjectBusy(v):
-			if ui.PrimaryButton(c, "启动").Label("启动 " + p.Name).FontSize(11).Clicked() {
+			if ui.PrimaryButton(c, "启动").Label("启动 " + p.Name).FontSize(12).Clicked() {
 				a.startLocalApp(p.ID)
 			}
 		case v.Stopping:
@@ -256,7 +250,7 @@ func (a *app) localAppRow(c *ui.Context, p model.LocalApp) {
 			if v.Starting {
 				label = "取消"
 			}
-			if ui.Button(c, label).Label(label + " " + p.Name).FontSize(11).Clicked() {
+			if ui.Button(c, label).Label(label + " " + p.Name).FontSize(12).Clicked() {
 				go func() { _ = a.local.Stop(p.ID) }()
 			}
 		}

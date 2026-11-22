@@ -393,9 +393,11 @@ func TestAppsTab(t *testing.T) {
 			t.Errorf("apps tab lacks %q; texts = %s", want, texts)
 		}
 	}
-	if err := tt.Click("应用详情 18F-同步通道（软件公司）"); err != nil {
-		t.Fatalf("open detail: %v", err)
+	row, ok := tt.Find("18F-同步通道（软件公司）")
+	if !ok {
+		t.Fatal("could not find the resource row")
 	}
+	tt.ClickAt(row.X+row.W/2, row.Y+row.H/2)
 	if !a.detailOpen {
 		t.Fatal("detail did not open")
 	}
@@ -529,6 +531,34 @@ func TestSetAllAppsEnabled(t *testing.T) {
 	a.setAllAppsEnabled(id, true)
 	if p := a.cfg.Find(id); len(p.DisabledApps) != 0 {
 		t.Fatalf("启用后应为空：%v", p.DisabledApps)
+	}
+}
+
+func TestAccessLogFiltersAndClearsAccessOnly(t *testing.T) {
+	a := testApp(t)
+	a.tab = 2
+	a.bus.Add("app", "运行日志")
+	a.bus.Add(vpn.AccessOK, "访问成功的记录")
+	a.bus.Add(vpn.AccessFail, "访问失败的记录")
+	tt := ui.NewTester(a.view, 720, 520)
+	tt.Frame()
+	if !tt.HasText("访问成功的记录") || !tt.HasText("访问失败的记录") {
+		t.Fatal("默认应显示所有访问记录")
+	}
+	if err := tt.Click("失败"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if tt.HasText("访问成功的记录") || !tt.HasText("访问失败的记录") {
+		t.Fatal("按失败筛选后，应该只显示失败的访问记录")
+	}
+	if err := tt.Click("清空"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	remaining := a.bus.Tail(0)
+	if len(remaining) != 1 || remaining[0].Source != "app" || !tt.HasText("还没有访问记录") {
+		t.Fatalf("清空访问记录时应保留运行日志：%+v", remaining)
 	}
 }
 

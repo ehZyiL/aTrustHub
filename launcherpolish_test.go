@@ -29,30 +29,36 @@ func TestEnvStripIsRuntimeOnly(t *testing.T) {
 	}
 }
 
-func TestPointDiagnosticsExpandAndCollapse(t *testing.T) {
+func TestPointCardShowsDiagnosticsAndOpensEditor(t *testing.T) {
 	a := layoutApp(t)
 	tt := ui.NewTester(a.view, 880, 600)
 	tt.Frame()
-	if tt.HasText("HTTP / SOCKS5") {
-		t.Fatal("本地代理详情应默认收起")
+	_, hasEditButton := tt.Find("编辑 公司主网关")
+	if !tt.HasText("HTTP / SOCKS5") || tt.HasText("连接与诊断") || hasEditButton {
+		t.Fatal("卡片应直接显示代理信息，且没有诊断或编辑按钮")
 	}
 	if err := tt.Click("打开常用入口 公司主网关"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Frame()
-	if !tt.HasText("HTTP / SOCKS5") {
-		t.Fatal("从常用入口打开网关后应能查看本地代理")
-	}
-	if err := tt.Click("收起诊断 公司主网关"); err != nil {
-		t.Fatal(err)
+	if a.editor.open {
+		t.Fatal("点击常用入口只应定位卡片")
 	}
 	tt.Frame()
-	if tt.HasText("HTTP / SOCKS5") {
-		t.Fatal("收起后仍看到本地代理详情")
+	name, ok := tt.Find("https://atrust.corp.example · alice@Radius")
+	if !ok {
+		t.Fatal("找不到接入点卡片名称")
+	}
+	tt.ClickAt(name.X+name.W/2, name.Y+name.H/2)
+	tt.Frame()
+	if !a.editor.open || a.editor.editingID != a.cfg.Points[0].ID {
+		t.Fatal("点击卡片应该打开对应接入点的编辑器")
+	}
+	if _, ok := tt.Find("代理浏览器 公司主网关"); !ok {
+		t.Fatal("在线接入点的代理浏览器操作应在编辑器中")
 	}
 }
 
-func TestPointFailureActionsVisibleWithoutExpanding(t *testing.T) {
+func TestPointFailureShowsReasonAndLogin(t *testing.T) {
 	a := testApp(t)
 	v := vpn.View{
 		ID:    "broken",
@@ -65,8 +71,24 @@ func TestPointFailureActionsVisibleWithoutExpanding(t *testing.T) {
 	if !tt.HasText(v.Error) {
 		t.Fatal("未展开诊断时应显示失败原因")
 	}
-	if _, ok := tt.Find("重试 " + v.Name); !ok {
-		t.Fatal("未展开诊断时应能重试登录")
+	if _, ok := tt.Find("登录 " + v.Name); !ok {
+		t.Fatal("发生错误后应保留登录按钮")
+	}
+}
+
+func TestPointLoginDoesNotOpenEditor(t *testing.T) {
+	a := layoutApp(t)
+	tt := ui.NewTester(a.view, 1120, 780)
+	tt.Frame()
+	if err := tt.Click("登录 办公网线路"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.editor.open {
+		t.Fatal("点击卡片的登录按钮不能同时打开编辑器")
+	}
+	if v, ok := a.mgr.View(a.cfg.Points[1].ID); !ok || v.State == vpn.StateOffline {
+		t.Fatal("应开始登录所点击的接入点")
 	}
 }
 

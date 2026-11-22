@@ -59,9 +59,9 @@ func TestLayoutShots(t *testing.T) {
 	shot("08-localapps-dark", 3, true, 1120, 780)
 	shot("09-resources-dark", 1, true, 1120, 780)
 	shot("25-points-min", 0, false, 720, 520)
-	a.pointDiagnosticsID = a.cfg.Points[0].ID
-	shot("26-point-diagnostics", 0, false, 880, 600)
-	a.pointDiagnosticsID = ""
+	shot("26-resources-min", 1, false, 720, 520)
+	shot("27-access-dark", 2, true, 880, 560)
+	shot("28-localapps-min", 3, false, 720, 520)
 
 	a.openLocalAppEditor(a.cfg.LocalApps[0].ID)
 	shot("10-dialog-localapp-editor", 3, false, 1120, 780)

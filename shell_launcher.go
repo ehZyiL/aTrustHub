@@ -36,7 +36,6 @@ func (a *app) quickTiles() []quickTile {
 			label: name,
 			hint:  "在线 · " + v.Protocol,
 			open: func() {
-				a.pointDiagnosticsID = id
 				a.revealPointID = id
 				a.goTab(0)
 			},
@@ -155,9 +154,9 @@ func (a *app) groupedPoints(c *ui.Context, views []vpn.View) {
 	sort.Strings(protos)
 	for _, proto := range protos {
 		group := byProto[proto]
-		label := proto
-		if label == "" {
-			label = "其他接入点"
+		label := "其他接入点"
+		if proto != "" {
+			label = protocolLabel(proto)
 		}
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Padding(4, 2).Children(func() {
 			ui.Text(c, label).FontSize(12).Bold().TextColor(t.TextMuted)
@@ -236,6 +235,7 @@ func (a *app) launcherBody(c *ui.Context) {
 		ui.Column(c).Grow(1).MinHeight(0).Gap(12).Children(func() {
 			pageBar(c, "接入点", fmt.Sprintf("%d 个", len(views)), func() {
 				if len(views) > 0 {
+					ui.Text(c, "点击卡片编辑").FontSize(12).TextColor(c.Theme().TextMuted)
 					if ui.Button(c, "全部登录").Label("全部接入点重新登录").FontSize(12).Clicked() {
 						a.mgr.ConnectAll(false)
 					}

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/ehzyil/connect-hub/internal/model"
@@ -176,7 +175,10 @@ func (a *app) simpleEmpty(c *ui.Context) {
 func (a *app) simpleHero(c *ui.Context, v vpn.View) {
 	t := c.Theme()
 	card := ui.Column(c).Padding(18).Gap(12).Radius(14).Background(t.Surface).
-		Border(1, t.Border).Shadow(0, 2, 10, 0, cardShadow(t))
+		Border(1, t.Border).OnClick(func() { a.openEditor(v) })
+	if card.Hovered() {
+		card.Background(t.SurfaceHover)
+	}
 	card.Children(func() {
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Row(c).Size(10, 10).Radius(5).Background(stateColor(t, v.State))
@@ -186,29 +188,13 @@ func (a *app) simpleHero(c *ui.Context, v vpn.View) {
 					TextColor(t.TextMuted).Ellipsis("…")
 			})
 			a.stateBadge(c, v.State)
-			if ui.Button(c, "编辑").Label("编辑 " + v.Name).FontSize(11).Clicked() {
-				a.openEditor(v)
-			}
+			a.pointAction(c, v)
 		})
-		if v.State == vpn.StateError && v.Error != "" {
-			ui.Row(c).Padding(8, 12).Radius(8).Background(t.SurfaceHover).Border(1, t.Danger).Children(func() {
-				ui.Text(c, v.Error).FontSize(12).TextColor(t.Danger).Wrap()
-			})
-		}
-		// 状态信息行：内网 IP、拨号延迟
-		if v.State == vpn.StateOnline {
-			ui.Row(c).GapX(14).GapY(4).Wrap().AlignItems(ui.Center).Children(func() {
-				if v.ClientIP != "" {
-					meta(c, t, "内网 IP", v.ClientIP)
-				}
-				if v.Latency >= time.Millisecond {
-					meta(c, t, "拨号延迟", v.Latency.Round(time.Millisecond).String())
-				}
-			})
-		}
-		a.simpleActions(c, v)
-		a.simpleCaptureSelector(c)
+		a.pointAlerts(c, v)
+		a.pointFacts(c, v)
 	})
+	a.simpleEntryStatus(c, v)
+	a.simpleCaptureSelector(c)
 }
 
 // simpleCaptureSelector 是卡片内紧凑优雅的接管方式分段切换器。
@@ -243,40 +229,16 @@ func (a *app) simpleCaptureSelector(c *ui.Context) {
 	})
 }
 
-// simpleActions 是首屏的动作行：根据接管模式动态呈现必要动作。
+// simpleEntryStatus shows the entry address or active capture mode.
 // 系统代理生效时，系统所有软件均已走代理，无需展示独立代理地址与代理浏览器；
 // 只有不使用接管时，才提供专用代理浏览器与 SOCKS5 复制。
-func (a *app) simpleActions(c *ui.Context, v vpn.View) {
+func (a *app) simpleEntryStatus(c *ui.Context, v vpn.View) {
 	t := c.Theme()
 	curCapture := a.captureMode()
 	isIntercepted := curCapture != captureOff
 	agg := a.mgr.Aggregate()
 
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-		switch v.State {
-		case vpn.StateOnline:
-			if ui.Button(c, "断开").Label("断开 " + v.Name).FontSize(12).Clicked() {
-				a.disconnectPoint(v.ID)
-			}
-			// 仅在未开启系统/应用接管时，才需要专用代理浏览器
-			if !isIntercepted {
-				if ui.PrimaryButton(c, "代理浏览器").Label("代理浏览器 " + v.Name).FontSize(12).Clicked() {
-					if err := openProxyBrowser(a.proxyFor(v.ID), "about:blank"); err != nil {
-						a.setToast(err.Error())
-					}
-				}
-			}
-		case vpn.StateConnecting:
-			ui.Text(c, "正在接入…").FontSize(12).TextColor(t.Warning)
-			if ui.Button(c, "取消").Label("取消 " + v.Name).FontSize(12).Clicked() {
-				go a.mgr.Disconnect(v.ID)
-			}
-		default:
-			if ui.PrimaryButton(c, "登录").Label("登录 " + v.Name).FontSize(12).Clicked() {
-				a.mgr.Connect(v.ID)
-			}
-		}
-
 		if v.State == vpn.StateOnline {
 			if isIntercepted {
 				ui.Text(c, "✓ "+curCapture+"生效中，浏览器可直接访问内网").
@@ -287,9 +249,7 @@ func (a *app) simpleActions(c *ui.Context, v vpn.View) {
 					Border(1, t.Border).Gap(6).AlignItems(ui.Center)
 				pill.Children(func() {
 					ui.Text(c, addr).Font("monospace").FontSize(11).TextColor(t.Text)
-					if ui.Button(c, "复制").Label("复制代理地址").FontSize(10).Clicked() {
-						a.copyText(addr)
-					}
+					iconButton(c, copyIcon, "复制代理地址", func() { a.copyText(addr) })
 				})
 			}
 		} else if agg.Running && agg.Addr != "" && !isIntercepted {

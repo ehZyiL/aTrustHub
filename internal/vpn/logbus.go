@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -160,6 +161,15 @@ func (b *LogBus) Tail(n int) []LogEntry {
 func (b *LogBus) Clear() {
 	b.mu.Lock()
 	b.lines = nil
+	b.mu.Unlock()
+}
+
+// ClearAccess removes access records while retaining the operational log.
+func (b *LogBus) ClearAccess() {
+	b.mu.Lock()
+	b.lines = slices.DeleteFunc(b.lines, func(entry LogEntry) bool {
+		return entry.Source == AccessOK || entry.Source == AccessFail
+	})
 	b.mu.Unlock()
 }
 

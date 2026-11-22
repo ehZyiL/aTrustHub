@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/miekg/dns"
 	"github.com/ehzyil/connect-hub/internal/dnsmapping"
 	"github.com/ehzyil/connect-hub/internal/netpolicy"
 	"github.com/ehzyil/connect-hub/internal/splitdns"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
+	"github.com/miekg/dns"
 	"golang.org/x/net/idna"
 )
 

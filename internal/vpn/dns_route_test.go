@@ -3,11 +3,11 @@ package vpn
 import (
 	"context"
 	"errors"
-	"github.com/miekg/dns"
 	"github.com/ehzyil/connect-hub/internal/model"
 	"github.com/ehzyil/connect-hub/internal/routing"
 	"github.com/ehzyil/connect-hub/internal/splitdns"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
+	"github.com/miekg/dns"
 	"io"
 	"net"
 	"sync/atomic"

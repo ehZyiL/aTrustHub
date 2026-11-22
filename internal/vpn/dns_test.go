@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/miekg/dns"
 	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/miekg/dns"
 )
 
 func testDNSSession(t *testing.T, mode string) *processSession {

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/miekg/dns"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
+	"github.com/miekg/dns"
 )
 
 type fakeAliasBinding struct {

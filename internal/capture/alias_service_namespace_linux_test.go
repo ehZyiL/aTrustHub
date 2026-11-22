@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/miekg/dns"
 	"github.com/ehzyil/connect-hub/internal/netpolicy"
 	"github.com/ehzyil/connect-hub/internal/resolved"
 	"github.com/ehzyil/connect-hub/internal/splitdns"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
+	"github.com/miekg/dns"
 )
 
 // This uses the same helper control/launch APIs as the GUI. Only the remote

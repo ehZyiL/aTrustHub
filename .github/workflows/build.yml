@@ -62,6 +62,17 @@ jobs:
           cd connect-hub
           go run ./internal/workeripc/cmd/protogen -check -src ../zju-connect/internal/desktop/protocol.go -out ./internal/workeripc/protocol.go
 
+      - name: 校验代码格式（gofmt）
+        shell: bash
+        run: |
+          cd connect-hub
+          # third_party/ 是上游代码，按上游格式保留，不参与本仓库的格式约束。
+          unformatted=$(gofmt -l . | grep -v '^third_party/' || true)
+          if [[ -n "$unformatted" ]]; then
+            printf 'These files need gofmt -w:\n%s\n' "$unformatted" >&2
+            exit 1
+          fi
+
       - name: 执行 Windows 便携包打包构建
         shell: bash
         env:
@@ -123,6 +134,17 @@ jobs:
         run: |
           cd connect-hub
           go run ./internal/workeripc/cmd/protogen -check -src ../zju-connect/internal/desktop/protocol.go -out ./internal/workeripc/protocol.go
+
+      - name: 校验代码格式（gofmt）
+        shell: bash
+        run: |
+          cd connect-hub
+          # third_party/ 是上游代码，按上游格式保留，不参与本仓库的格式约束。
+          unformatted=$(gofmt -l . | grep -v '^third_party/' || true)
+          if [[ -n "$unformatted" ]]; then
+            printf 'These files need gofmt -w:\n%s\n' "$unformatted" >&2
+            exit 1
+          fi
 
       - name: 执行 Linux 打包构建
         env:

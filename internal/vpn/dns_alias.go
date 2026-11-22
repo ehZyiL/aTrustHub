@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/netip"
 
-	"github.com/miekg/dns"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
+	"github.com/miekg/dns"
 )
 
 func validateDNSAliases(prefix string, response *dns.Msg, aliases []workeripc.DNSAlias) error {

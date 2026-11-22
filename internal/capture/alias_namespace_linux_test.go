@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/miekg/dns"
 	"github.com/ehzyil/connect-hub/internal/netpolicy"
 	"github.com/ehzyil/connect-hub/internal/splitdns"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
+	"github.com/miekg/dns"
 )
 
 // This proof spans both reference modules and the actual kernel. It exercises

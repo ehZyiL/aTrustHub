@@ -2,9 +2,9 @@ package localapps
 
 import (
 	"context"
-	"github.com/miekg/dns"
 	"github.com/ehzyil/connect-hub/internal/model"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
+	"github.com/miekg/dns"
 	"net"
 	"reflect"
 	"testing"

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/miekg/dns"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
+	"github.com/miekg/dns"
 )
 
 // DNSExchanger is optional; aTrust sessions retain their existing behavior.

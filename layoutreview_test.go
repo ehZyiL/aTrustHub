@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"testing"
 	"time"
 
@@ -8,17 +9,43 @@ import (
 	"github.com/ehzyil/connect-hub/internal/model"
 )
 
+// freePorts 让内核分配 n 个当前空闲的回环端口。
+func freePorts(t *testing.T, n int) []int {
+	t.Helper()
+	listeners := make([]net.Listener, 0, n)
+	defer func() {
+		for _, ln := range listeners {
+			ln.Close()
+		}
+	}()
+	ports := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("找一个空闲端口失败: %v", err)
+		}
+		listeners = append(listeners, ln)
+		ports = append(ports, ln.Addr().(*net.TCPAddr).Port)
+	}
+	return ports
+}
+
 // layoutApp 造一个带两个接入点和三个本机项目的应用，供布局检查使用。
 func layoutApp(t *testing.T) *app {
 	t.Helper()
 	a := testApp(t)
+	// 端口必须自选：默认的 1080/1081 会和本机正常运行的实例相同，
+	// 于是「开着应用跑测试」会变成三个假失败（TCP 端口已被占用）。
+	ports := freePorts(t, 4)
 	var ids []string
 	if _, err := a.store.Update(func(cfg *model.Config) error {
-		for _, p := range []model.AccessPoint{
+		cfg.Settings.AggregatePort = ports[0]
+		for i, p := range []model.AccessPoint{
 			{Name: "公司主网关", Server: "atrust.corp.example", Port: 443, Username: "alice", AuthMode: string(model.AuthModePassword), InPool: true},
 			{Name: "办公网线路", Server: "ec.corp.example", Port: 443, Username: "bob", AuthMode: string(model.AuthModePassword), InPool: true},
 			{Name: "浙江大学网关", Server: "vpn.zju.edu.cn", Port: 443, Protocol: model.ProtocolEasyConnect, AuthMode: string(model.AuthModePassword)},
 		} {
+			p.SocksPort = ports[i+1]
 			ids = append(ids, cfg.Add(p).ID)
 		}
 		cfg.LocalApps = append(cfg.LocalApps,

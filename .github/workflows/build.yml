@@ -24,6 +24,10 @@ permissions:
 env:
   GOFLAGS: -mod=mod
   GOPROXY: https://goproxy.cn,https://proxy.golang.org,direct
+  WORKER_REPOSITORY: ehZyiL/zju-connect
+  # 固定 worker 版本：优先用仓库变量 WORKER_REF（建议填一个 commit SHA），
+  # 缺省回退分支——分支会移动，开发包可以，发布包请把 WORKER_REF 钉到 SHA。
+  WORKER_REF: ${{ vars.WORKER_REF || 'feat/desktop-worker' }}
 
 jobs:
   build-windows:
@@ -38,8 +42,8 @@ jobs:
       - name: 检出 ZJU-Connect (依赖 Worker 分支)
         uses: actions/checkout@v4
         with:
-          repository: ehZyiL/zju-connect
-          ref: feat/desktop-worker
+          repository: ${{ env.WORKER_REPOSITORY }}
+          ref: ${{ env.WORKER_REF }}
           token: ${{ secrets.GH_PAT || github.token }}
           path: zju-connect
 
@@ -51,6 +55,12 @@ jobs:
           cache-dependency-path: |
             connect-hub/go.sum
             zju-connect/go.sum
+
+      - name: 校验 worker IPC 协议与 worker 源码一致
+        shell: bash
+        run: |
+          cd connect-hub
+          go run ./internal/workeripc/cmd/protogen -check -src ../zju-connect/internal/desktop/protocol.go -out ./internal/workeripc/protocol.go
 
       - name: 执行 Windows 便携包打包构建
         shell: bash
@@ -94,8 +104,8 @@ jobs:
       - name: 检出 ZJU-Connect (依赖 Worker 分支)
         uses: actions/checkout@v4
         with:
-          repository: ehZyiL/zju-connect
-          ref: feat/desktop-worker
+          repository: ${{ env.WORKER_REPOSITORY }}
+          ref: ${{ env.WORKER_REF }}
           token: ${{ secrets.GH_PAT || github.token }}
           path: zju-connect
 
@@ -107,6 +117,12 @@ jobs:
           cache-dependency-path: |
             connect-hub/go.sum
             zju-connect/go.sum
+
+      - name: 校验 worker IPC 协议与 worker 源码一致
+        shell: bash
+        run: |
+          cd connect-hub
+          go run ./internal/workeripc/cmd/protogen -check -src ../zju-connect/internal/desktop/protocol.go -out ./internal/workeripc/protocol.go
 
       - name: 执行 Linux 打包构建
         env:

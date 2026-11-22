@@ -26,7 +26,7 @@ func TestWorkerProtocolContract(t *testing.T) {
 	if !bytes.Equal(normalize(hub), normalize(worker)) {
 		t.Fatal("Hub/worker protocol contract differs")
 	}
-	if Version != 6 {
-		t.Fatalf("strict dialing and flow preparation require protocol v6, got %d", Version)
+	if Version != 7 {
+		t.Fatalf("resource attribution and flow preparation require protocol v7, got %d", Version)
 	}
 }

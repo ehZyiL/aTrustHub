@@ -15,9 +15,12 @@ if [[ -n "$(git -C "$app_root" status --porcelain --untracked-files=no 2>/dev/nu
   repo_dirty=" (dirty)"
 fi
 app_build=$(sed -n 's/^const appBuild = "\(.*\)"$/\1/p' "$app_root/app.go" | head -n1)
-printf 'Packaging %s@%s%s (appBuild %s)\n' "$repo_branch" "$repo_commit" "$repo_dirty" "${app_build:-unknown}"
-diff -u --strip-trailing-cr <(sed -e 's/\r$//' -e 's/^package desktop$/package workeripc/' "$worker_root/internal/desktop/protocol.go") <(sed 's/\r$//' "$app_root/internal/workeripc/protocol.go")
+worker_commit=$(git -C "$worker_root" rev-parse --short HEAD 2>/dev/null || echo unknown)
+printf 'Packaging %s@%s%s (appBuild %s, worker %s)\n' "$repo_branch" "$repo_commit" "$repo_dirty" "${app_build:-unknown}" "$worker_commit"
 go_tool=${GO:-go}
+# 协议单源化：内部 workeripc/protocol.go 由 worker 仓库的 protocol.go 生成；
+# 两边不一致时打包直接失败（提示重新生成，而不是让人手抄）。
+(cd "$app_root" && env "$go_tool" run ./internal/workeripc/cmd/protogen -check -src "$worker_root/internal/desktop/protocol.go" -out ./internal/workeripc/protocol.go)
 target_arch=${GOARCH:-amd64}
 if [[ "$target_arch" != "amd64" ]]; then
   printf 'Windows capture test bundle currently supports amd64 only\n' >&2
@@ -91,14 +94,15 @@ cat > "$bundle/COMPONENTS.txt" <<EOF
 Connect Hub Windows bundle
 Bundle profile: $bundle_profile
 Architecture: $target_arch
-Worker IPC protocol: 6
+Worker IPC protocol: 7
 Windows capture helper protocol: $helper_protocol
 Source branch: $repo_branch
 Source commit: $repo_commit$repo_dirty
+Worker source commit: $worker_commit
 App build: ${app_build:-unknown}
 Scope: IPv4 TCP and DNS. System IPv4 UDP for eligible L3 sessions is experimental; IPv6 is unsupported.
-Layout: easyconnect-hub.exe at the bundle root; easyconnect-worker.exe and
-easyconnect-hub-capture.exe under core/. Launch only easyconnect-hub.exe;
+Layout: connect-hub.exe at the bundle root; easyconnect-worker.exe and
+connect-hub-capture.exe under core/. Launch only connect-hub.exe;
 the two programs in core/ are internal and start on demand.
 GUI, worker and helper are a matched build from this bundle; do not mix files from other bundles.
 EOF

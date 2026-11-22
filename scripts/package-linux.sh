@@ -6,8 +6,10 @@ export GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
 app_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 worker_root=${ZJU_CONNECT_ROOT:-$(cd -- "$app_root/../zju-connect" && pwd)}
 # The two independently built modules must agree before bundling their IPC.
-diff -u --strip-trailing-cr <(sed -e 's/\r$//' -e 's/^package desktop$/package workeripc/' "$worker_root/internal/desktop/protocol.go") <(sed 's/\r$//' "$app_root/internal/workeripc/protocol.go")
+worker_commit=$(git -C "$worker_root" rev-parse --short HEAD 2>/dev/null || echo unknown)
 go_tool=${GO:-go}
+# 协议单源化：workeripc/protocol.go 由 worker 仓库的 protocol.go 生成；不一致则打包失败。
+(cd "$app_root" && env "$go_tool" run ./internal/workeripc/cmd/protogen -check -src "$worker_root/internal/desktop/protocol.go" -out ./internal/workeripc/protocol.go)
 target_arch=${GOARCH:-$($go_tool env GOARCH)}
 bundle_name=${EASYCONNECT_BUNDLE_NAME:-connect-hub-linux-$target_arch}
 if [[ ! "$bundle_name" =~ ^[a-zA-Z0-9._-]+$ || "$bundle_name" == "." || "$bundle_name" == ".." ]]; then
@@ -25,8 +27,8 @@ cd "$app_root"
 env "$go_tool" run ./cmd/appicon -icon resources/icon.png -png-dir "$bundle/share/icons/hicolor" -png-name connect-hub
 env GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/connect-hub" .
 # worker 和抓包助手是内部程序，放进 core/，避免用户直接双击。
-env GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/core/connect-hub-capture" ./cmd/app-helper
-helper_protocol=$("$bundle/core/connect-hub-capture" --protocol-version)
+env GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/core/easyconnect-hub-capture" ./cmd/app-helper
+helper_protocol=$("$bundle/core/easyconnect-hub-capture" --protocol-version)
 if [[ "$helper_protocol" != 10 ]]; then
   printf 'Linux capture helper protocol mismatch: expected 10, got %s\n' "$helper_protocol" >&2
   exit 1
@@ -51,14 +53,17 @@ install -m 0644 "$app_root/LINUX-QUICKSTART.md" "$bundle/README.md"
 # 性能对照脚本只用于受控 HTTP 对照测试，需要 Python 3 和 curl；
 # 发布包不携带，脚本保留在仓库 scripts/ 目录。
 cat > "$bundle/COMPONENTS.txt" <<EOF
-EasyConnect Hub Linux bundle
+Connect Hub Linux bundle
 Architecture: $target_arch
-Worker IPC protocol: 6
+Worker IPC protocol: 7
+Worker source commit: $worker_commit
 Linux capture helper protocol: $helper_protocol
 Scope: IPv4 TCP and DNS. System IPv4 UDP for eligible L3 sessions is experimental; IPv6 is unsupported.
-Layout: easyconnect-hub at the bundle root; easyconnect-worker and
-easyconnect-hub-capture under core/. Launch only easyconnect-hub (or start.sh);
+Layout: connect-hub at the bundle root; easyconnect-worker and
+core/easyconnect-hub-capture under core/. Launch only connect-hub (or start.sh);
 the two programs in core/ are internal and start on demand.
+The helper keeps the easyconnect-hub-capture name because the systemd unit and
+/run/easyconnect-hub-capture-<uid> runtime directory are fixed by it.
 GUI, worker and helper are a matched build from this bundle; do not mix files from other bundles.
 EOF
 install -m 0644 "$app_root/packaging/linux/easyconnect-hub-capture@.service" "$bundle/easyconnect-hub-capture@.service"
@@ -70,7 +75,7 @@ install -m 0755 "$app_root/packaging/linux/test-worker.sh" "$bundle/test-worker.
 
 printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'bundle_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)' 'cd "$bundle_dir"' 'exec "$bundle_dir/connect-hub" "$@"' > "$bundle/start.sh"
 chmod +x "$bundle/start.sh"
-chmod +x "$bundle/connect-hub" "$bundle/core/easyconnect-worker" "$bundle/core/connect-hub-capture" "$bundle/test-worker.sh" "$bundle/install-capture-helper.sh" "$bundle/uninstall-capture-helper.sh" "$bundle/install-desktop-entry.sh"
+chmod +x "$bundle/connect-hub" "$bundle/core/easyconnect-worker" "$bundle/core/easyconnect-hub-capture" "$bundle/test-worker.sh" "$bundle/install-capture-helper.sh" "$bundle/uninstall-capture-helper.sh" "$bundle/install-desktop-entry.sh"
 
 cd "$bundle"
 find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS

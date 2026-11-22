@@ -1293,6 +1293,11 @@ func (a *app) disconnectPoint(id string) {
 func (a *app) pointAction(c *ui.Context, v vpn.View) {
 	switch v.State {
 	case vpn.StateOnline:
+		if ui.PrimaryButton(c, "代理浏览器").Label("代理浏览器 " + v.Name).FontSize(12).Clicked() {
+			if err := openProxyBrowser(a.proxyFor(v.ID), "about:blank"); err != nil {
+				a.setToast(err.Error())
+			}
+		}
 		if ui.Button(c, "断开").Label("断开 " + v.Name).FontSize(12).Clicked() {
 			a.disconnectPoint(v.ID)
 		}
@@ -1834,11 +1839,6 @@ func (a *app) pointTools(c *ui.Context, v vpn.View) {
 				addr := "127.0.0.1:" + strconv.Itoa(v.SocksPort)
 				metaCopy(c, t, "HTTP / SOCKS5", addr, "复制独立 SOCKS5 地址",
 					func() { a.copyText("socks5://" + addr) })
-			}
-			if ui.Button(c, "代理浏览器").Label("代理浏览器 " + v.Name).FontSize(12).Clicked() {
-				if err := openProxyBrowser(a.proxyFor(v.ID), "about:blank"); err != nil {
-					a.setToast(err.Error())
-				}
 			}
 			if v.Protocol == model.ProtocolEasyConnect && ui.Button(c, "DNS 诊断").Label("DNS 诊断 "+v.Name).FontSize(12).Clicked() {
 				a.openDNSProbe(v.ID, v.Name)

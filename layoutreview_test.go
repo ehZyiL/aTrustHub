@@ -121,6 +121,7 @@ func TestAccessPointActionsFitMinimumWindow(t *testing.T) {
 		"＋ 添加接入点",
 		"打开常用入口 公司主网关",
 		"HTTP / SOCKS5",
+		"代理浏览器 公司主网关",
 		"断开 公司主网关",
 		"登录 办公网线路",
 	} {

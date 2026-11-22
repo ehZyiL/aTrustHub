@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/ehzyil/connect-hub/internal/model"
@@ -17,10 +16,10 @@ type tileAction struct {
 }
 
 type quickTile struct {
-	label   string
-	hint    string
-	open    func()
-	actions []tileAction
+	label  string
+	hint   string
+	open   func()
+	action tileAction
 }
 
 // quickTiles 收集当前在用的入口：在线接入点 + 运行中的本机项目。
@@ -34,15 +33,15 @@ func (a *app) quickTiles() []quickTile {
 		name := v.Name
 		tiles = append(tiles, quickTile{
 			label: name,
-			hint:  "在线 · " + v.Protocol,
+			hint:  protocolLabel(v.Protocol) + " · 在线",
 			open: func() {
 				a.revealPointID = id
 				a.goTab(0)
 			},
-			actions: []tileAction{{
-				label: "断开 " + name,
+			action: tileAction{
+				label: "断开",
 				run:   func() { a.disconnectPoint(id) },
-			}},
+			},
 		})
 	}
 	for _, app := range a.cfg.LocalApps {
@@ -54,17 +53,15 @@ func (a *app) quickTiles() []quickTile {
 		appName := app.Name
 		tile := quickTile{
 			label: appName,
-			hint:  "本机项目运行中",
+			hint:  localModeLabel(app.Mode) + " · 运行中",
 			open:  func() { a.goTab(3) },
 		}
-		if app.Mode == model.LocalAppBrowser {
-			// 浏览器在独立窗口里关，项目名已经是查看入口。
-			tile.hint = "浏览器窗口中运行"
-		} else {
-			tile.actions = []tileAction{{
-				label: "停止 " + appName,
+		// 浏览器在独立窗口里关。
+		if app.Mode != model.LocalAppBrowser {
+			tile.action = tileAction{
+				label: "停止",
 				run:   func() { go func() { _ = a.local.Stop(appID) }() },
-			}}
+			}
 		}
 		tiles = append(tiles, tile)
 	}
@@ -72,40 +69,57 @@ func (a *app) quickTiles() []quickTile {
 }
 
 // quickLaunch 只展示正在使用的入口，避免离线时占用列表空间。
-func (a *app) quickLaunch(c *ui.Context) {
-	t := c.Theme()
-	tiles := a.quickTiles()
+func quickLaunch(c *ui.Context, tiles []quickTile) {
 	if len(tiles) == 0 {
 		return
 	}
-	ui.Row(c).AlignItems(ui.Center).GapX(8).GapY(4).Wrap().Children(func() {
-		ui.Text(c, "常用入口").FontSize(12).Bold().TextColor(t.TextMuted)
-		for _, tile := range tiles {
-			item := ui.Row(c).MaxWidth(225).Padding(2, 4).Radius(8).Gap(3).AlignItems(ui.Center).
-				Background(t.Surface).Border(1, t.Border)
-			item.Children(func() {
-				if ui.Button(c, shortText(tile.label, 10)).Label("打开常用入口 " + tile.label).
-					FontSize(12).Tooltip(tile.label + " · " + tile.hint).Clicked() {
-					tile.open()
-				}
-				for _, action := range tile.actions {
-					if ui.Button(c, shortActionLabel(action.label)).Label("常用入口：" + action.label).
-						FontSize(12).Clicked() {
-						action.run()
-						a.invalidate()
-					}
-				}
-			})
-		}
+	t := c.Theme()
+	ui.Column(c).Gap(6).Children(func() {
+		ui.Text(c, "常用入口").FontSize(13).Bold().TextColor(t.Text)
+		ui.Row(c).GapX(8).GapY(6).Wrap().Children(func() {
+			for _, tile := range tiles {
+				quickEntry(c, tile)
+			}
+		})
 	})
 }
 
-// shortActionLabel 把「断开 公司主网关」这类标签收成按钮上显示的动作。
-func shortActionLabel(label string) string {
-	if i := strings.Index(label, " "); i > 0 {
-		return label[:i]
-	}
-	return label
+func quickEntry(c *ui.Context, tile quickTile) {
+	t := c.Theme()
+	ui.Row(c).Width(218).Radius(8).Background(t.Surface).Border(1, t.Border).
+		AlignItems(ui.Center).Children(func() {
+		open := ui.ButtonBase(c).Grow(1).MinWidth(0).Padding(7, 9).Gap(8).
+			Radius(7).AlignItems(ui.Center).Cursor(ui.CursorPointer).
+			Label("打开常用入口 " + tile.label).Tooltip(tile.label)
+		if open.Hovered() || open.Pressed() {
+			open.Background(t.SurfaceHover)
+		}
+		open.Children(func() {
+			ui.Row(c).Size(7, 7).Shrink(0).Radius(3.5).Background(t.Success)
+			ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
+				ui.Text(c, tile.label).FontSize(13).Bold().Ellipsis("…")
+				ui.Text(c, tile.hint).FontSize(11).TextColor(t.TextMuted).Ellipsis("…")
+			})
+			ui.Text(c, "›").FontSize(15).TextColor(t.TextMuted)
+		})
+		if open.Clicked() {
+			tile.open()
+		}
+		if action := tile.action; action.run != nil {
+			ui.Row(c).Size(1, 22).Shrink(0).Background(t.Border)
+			button := ui.ButtonBase(c).Padding(8, 10).Radius(7).Cursor(ui.CursorPointer).
+				Label("常用入口：" + action.label + " " + tile.label)
+			if button.Hovered() || button.Pressed() {
+				button.Background(t.SurfaceHover)
+			}
+			button.Children(func() {
+				ui.Text(c, action.label).FontSize(12).TextColor(t.TextMuted)
+			})
+			if button.Clicked() {
+				action.run()
+			}
+		}
+	})
 }
 
 // useProtocolGroups 决定要不要按协议分组：接入点很少、且只有一个协议时，
@@ -243,7 +257,7 @@ func (a *app) launcherBody(c *ui.Context) {
 			})
 			ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(6, 2, 6, 0).Children(func() {
 				ui.Column(c).Padding(0, 2, 0, 4).Gap(10).Children(func() {
-					a.quickLaunch(c)
+					quickLaunch(c, a.quickTiles())
 					if len(views) == 0 {
 						a.emptyState(c)
 						return

@@ -37,6 +37,14 @@ func TestPointCardShowsDiagnosticsAndOpensEditor(t *testing.T) {
 	if !tt.HasText("HTTP / SOCKS5") || tt.HasText("连接与诊断") || hasEditButton {
 		t.Fatal("卡片应直接显示代理信息，且没有诊断或编辑按钮")
 	}
+	browser, hasBrowser := tt.Find("代理浏览器 公司主网关")
+	disconnect, hasDisconnect := tt.Find("断开 公司主网关")
+	if !hasBrowser || !hasDisconnect || browser.W == 0 || browser.X+browser.W > disconnect.X+0.5 {
+		t.Fatalf("在线卡片上应先显示代理浏览器，再显示断开：browser=%+v disconnect=%+v", browser, disconnect)
+	}
+	if _, ok := tt.Find("代理浏览器 办公网线路"); ok {
+		t.Fatal("未登录的卡片不能显示代理浏览器")
+	}
 	if err := tt.Click("打开常用入口 公司主网关"); err != nil {
 		t.Fatal(err)
 	}
@@ -52,9 +60,6 @@ func TestPointCardShowsDiagnosticsAndOpensEditor(t *testing.T) {
 	tt.Frame()
 	if !a.editor.open || a.editor.editingID != a.cfg.Points[0].ID {
 		t.Fatal("点击卡片应该打开对应接入点的编辑器")
-	}
-	if _, ok := tt.Find("代理浏览器 公司主网关"); !ok {
-		t.Fatal("在线接入点的代理浏览器操作应在编辑器中")
 	}
 }
 
@@ -119,30 +124,21 @@ func TestUseProtocolGroups(t *testing.T) {
 	}
 }
 
-// 在线接入点可以通过常用入口直接断开。
-func TestQuickTilesCarryActions(t *testing.T) {
-	a := layoutApp(t)
-	tiles := a.quickTiles()
-	if len(tiles) == 0 {
-		t.Fatal("在线接入点应当出现在常用入口里")
+func TestQuickEntryActionDoesNotOpenEntry(t *testing.T) {
+	opened, acted := false, false
+	entry := quickTile{
+		label: "公司主网关",
+		hint:  "aTrust · 在线",
+		open:  func() { opened = true },
+		action: tileAction{
+			label: "断开",
+			run:   func() { acted = true },
+		},
 	}
-	acts := 0
-	for _, tile := range tiles {
-		acts += len(tile.actions)
-	}
-	if acts == 0 {
-		t.Fatalf("磁贴没有动作：%+v", tiles)
-	}
-	sawDisconnect := false
-	for _, tile := range tiles {
-		for _, act := range tile.actions {
-			if strings.HasPrefix(act.label, "断开 ") {
-				sawDisconnect = true
-			}
-		}
-	}
-	if !sawDisconnect {
-		t.Error("在线接入点的磁贴应当能断开")
+	tt := ui.NewTester(func(c *ui.Context) { quickLaunch(c, []quickTile{entry}) }, 720, 520)
+	tt.Frame()
+	if err := tt.Click("常用入口：断开 公司主网关"); err != nil || opened || !acted {
+		t.Fatalf("断开应独立于打开操作：err=%v opened=%v acted=%v", err, opened, acted)
 	}
 }
 

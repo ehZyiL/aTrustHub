@@ -716,7 +716,7 @@ func (a *app) toolbar(c *ui.Context) {
 		a.pageNav(c)
 		a.captureChip(c)
 		iconButton(c, gearIcon, "设置", func() { a.openSettingsAt(a.settings.section) })
-		if ui.PrimaryButton(c, "＋ 接入点").Label("＋ 添加接入点").FontSize(11).Clicked() {
+		if ui.PrimaryButton(c, "＋ 接入点").Label("＋ 添加接入点").FontSize(12).Clicked() {
 			a.openNewEditor()
 		}
 	})
@@ -1025,109 +1025,60 @@ func (a *app) applyCaptureMode(mode string) {
 func pageBar(c *ui.Context, title, count string, trailing func()) {
 	t := c.Theme()
 	ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
-		ui.Text(c, title).FontSize(15).Bold()
+		ui.Text(c, title).FontSize(17).Bold()
 		if count != "" {
-			ui.Text(c, count).FontSize(11).TextColor(t.TextMuted)
+			ui.Text(c, count).FontSize(12).TextColor(t.TextMuted)
 		}
 		ui.Row(c).Grow(1)
 		trailing()
 	})
 }
 
-// statusBanner 用一条横幅回答「内网现在能不能用」，并把统一入口、分流策略和
-// 批量动作收进来，取代原先独占一块的统一入口卡片。
+// statusBanner reports connection state independently of DNS and TCP reachability.
 func (a *app) statusBanner(c *ui.Context, views []vpn.View) {
 	t := c.Theme()
-	online, connecting, total := a.mgr.Counts()
-	agg := a.mgr.Aggregate()
-
-	failed := 0
-	firstErr := ""
-	names := make([]string, 0, len(views))
+	online, connecting, attention := 0, 0, 0
 	for _, v := range views {
 		switch v.State {
+		case vpn.StateConnecting:
+			connecting++
 		case vpn.StateOnline:
-			label := v.Name
-			if v.Latency >= time.Millisecond {
-				label += " " + v.Latency.Round(time.Millisecond).String()
-			}
-			if len(names) < 3 {
-				names = append(names, label)
+			online++
+			if v.TunnelState != "" || (v.MonitorOn && v.Alive == "已失效") ||
+				v.DNSProbe.State == "failed" || v.TCPProbe.State == "failed" {
+				attention++
 			}
 		case vpn.StateError:
-			failed++
-			if firstErr == "" {
-				firstErr = v.Name
-				if v.Error != "" {
-					firstErr += "：" + v.Error
-				}
-			}
+			attention++
 		}
 	}
 
-	dot := t.TextMuted
-	title := "尚未连接内网"
-	summary := fmt.Sprintf("%d 个接入点未连接，登录后即可使用代理浏览器与端口转发", total)
-	if total == 0 {
-		title = "内网尚未配置"
-		summary = "先添加一个 EasyConnect / aTrust 网关，登录后即可使用代理浏览器与端口转发"
+	tone := t.TextMuted
+	switch {
+	case attention > 0 || connecting > 0:
+		tone = t.Warning
+	case online > 0:
+		tone = t.Success
 	}
-	if online > 0 {
-		dot = t.Success
-		title = "内网现在可用"
-		onlineNames := strings.Join(names, " · ")
-		if online > len(names) {
-			onlineNames += " 等"
+	ui.Row(c).AlignItems(ui.Center).Gap(8).Padding(6, 10).Radius(8).
+		Background(t.Surface).Border(1, t.Border).Children(func() {
+		ui.Row(c).Size(7, 7).Radius(3.5).Background(tone)
+		ui.Text(c, fmt.Sprintf("%d 个接入点在线", online)).FontSize(13).Bold()
+		if connecting > 0 {
+			ui.Text(c, fmt.Sprintf("%d 个正在连接", connecting)).FontSize(12).TextColor(t.TextMuted)
 		}
-		summary = fmt.Sprintf("%d 个接入点在线（%s）", online, onlineNames)
-	}
-	if connecting > 0 {
-		summary += fmt.Sprintf(" · %d 个正在连接", connecting)
-	}
-	if failed > 0 {
-		summary += fmt.Sprintf(" · %d 个需要处理", failed)
-	}
-
-	card := ui.Column(c).Padding(12, 16).Gap(8).Radius(14).
-		Background(t.Surface.Mix(t.Accent, 0.04)).Shadow(0, 2, 10, 0, cardShadow(t))
-	card.Children(func() {
-		// 一条裤要带上说完了：状态、在线情况、统一入口和批量动作。
-		// 窗口窄时末尾的控件自动换行，不用另起一行版式。
-		ui.Row(c).AlignItems(ui.Center).Gap(10).Wrap().Children(func() {
-			ui.Row(c).Size(8, 8).Radius(4).Background(dot)
-			ui.Text(c, title).FontSize(13).Bold()
-			ui.Text(c, summary).FontSize(11).TextColor(t.TextMuted).
-				Grow(1).MinWidth(0).Ellipsis("…")
-			if a.sysProxyOn.Load() {
-				if agg.Running {
-					addr := "socks5://" + displayAddr(agg.Addr)
-					ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, "统一入口").FontSize(11).TextColor(t.TextMuted)
-						ui.Text(c, addr).Font("monospace").FontSize(11).TextColor(t.Text)
-						ui.Row(c).Padding(3).Radius(8).AlignItems(ui.Center).
-							OnClick(func() { a.copyText(addr) }).
-							Tooltip("复制统一入口地址").Children(func() {
-							ui.Icon(c, copyIcon).Size(12, 12)
-						})
-					})
-				} else if agg.Error != "" {
-					ui.Text(c, "统一入口未监听："+agg.Error).FontSize(11).
-						TextColor(t.Danger).MaxWidth(200).Ellipsis("…").Tooltip(agg.Error)
-				} else {
-					ui.Text(c, "统一入口未开启").FontSize(11).TextColor(t.TextMuted)
-				}
-				ui.Text(c, "分流").FontSize(11).TextColor(t.TextMuted)
-				mode := a.cfg.Settings.Routing.Label()
-				sel := ui.Select(c, &mode, routingLabelStrings()).Width(104)
-				if sel.Changed() {
-					a.setRouting(routingFromLabel(mode))
-				}
+		if attention > 0 {
+			ui.Text(c, fmt.Sprintf("%d 个需要处理", attention)).FontSize(12).TextColor(t.Warning)
+		}
+		ui.Row(c).Grow(1)
+		if a.sysProxyOn.Load() {
+			ui.Text(c, "分流策略").FontSize(12).TextColor(t.TextMuted)
+			mode := a.cfg.Settings.Routing.Label()
+			sel := ui.Select(c, &mode, routingLabelStrings()).Width(104)
+			if sel.Changed() {
+				a.setRouting(routingFromLabel(mode))
 			}
-			if firstErr != "" {
-				ui.Text(c, firstErr).FontSize(11).TextColor(t.Danger).
-					MaxWidth(180).Ellipsis("…").Tooltip(firstErr)
-			}
-		})
+		}
 	})
 }
 
@@ -1181,17 +1132,6 @@ func (a *app) recentFailuresFor(c *ui.Context, onOpen func()) {
 	})
 }
 
-// pointGridBreakpoint 是接入点卡片从三列降为两列的宽度阈值（DIP）。
-const pointGridBreakpoint = 980
-
-// pointColumns 让接入点卡片在窄窗口里保持可读：够宽时三列，否则两列。
-// 宽度取上一帧的实际可用宽度，首帧直接按三列画。
-func (a *app) pointColumns() int {
-	if a.pointsWidth > 0 && a.pointsWidth < pointGridBreakpoint {
-		return 2
-	}
-	return 3
-}
 
 // noResults 是列表内的「没有结果」提示：留白、字号与层次统一，
 // 与整页空状态（emptyState 类的面板）区分开。
@@ -1223,109 +1163,155 @@ func (a *app) emptyState(c *ui.Context) {
 
 func (a *app) pointCard(c *ui.Context, v vpn.View) {
 	t := c.Theme()
-	card := ui.Column(c).Key("point:"+v.ID).Padding(16).Gap(8).Radius(14).
-		Background(t.Surface).Shadow(0, 2, 10, 0, cardShadow(t))
-	card.Children(func() {
-		// 三列卡片里可用宽度有限：名称单行省略，地址与说明合成一行。
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Row(c).Size(8, 8).Radius(4).Background(stateColor(t, v.State))
-			ui.Column(c).Gap(3).Grow(1).MinWidth(0).Children(func() {
-				ui.Text(c, v.Name).FontSize(13).Bold().Ellipsis("…")
-				ui.Text(c, addrOf(v)).Font("monospace").FontSize(11).
-					TextColor(t.TextMuted).Ellipsis("…")
+	expanded := a.pointDiagnosticsID != "" && a.pointDiagnosticsID == v.ID
+	ui.Column(c).Key("point:"+v.ID).Padding(9, 12).Gap(5).Children(func() {
+		header := ui.Row(c).AlignItems(ui.Center).Gap(8)
+		if a.revealPointID != "" && a.revealPointID == v.ID {
+			header.ScrollIntoView()
+			a.revealPointID = ""
+		}
+		header.Children(func() {
+			ui.Column(c).Gap(2).Grow(1).MinWidth(0).Children(func() {
+				ui.Text(c, v.Name).FontSize(14).Bold().Ellipsis("…").Tooltip(v.Name)
+				addr := addrOf(v)
+				ui.Text(c, addr).Font("monospace").FontSize(12).
+					TextColor(t.TextMuted).Ellipsis("…").Tooltip(addr)
 			})
 			a.stateBadge(c, v.State)
-		})
-		if sub := a.subtitleOf(v); sub != "" {
-			ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted).Ellipsis("…")
-		}
-
-		ui.Row(c).GapX(12).GapY(4).Wrap().Children(func() {
-			if v.ClientIP != "" {
-				meta(c, t, "隧道 IP", v.ClientIP)
+			label := "连接与诊断"
+			if expanded {
+				label = "收起诊断"
 			}
-			if v.SocksPort > 0 && !a.simpleMode() {
-				addr := "127.0.0.1:" + strconv.Itoa(v.SocksPort)
-				socks := "socks5://" + addr
-				metaCopy(c, t, "HTTP / SOCKS5", addr, "复制独立 SOCKS5 地址",
-					func() { a.copyText(socks) })
-			}
-			meta(c, t, "连接", fmt.Sprintf("%d 当前 / %d 累计", v.Active, v.Total))
-			if len(v.Apps) > 0 {
-				meta(c, t, "应用", fmt.Sprintf("%d 个", len(v.Apps)))
-			}
-			if v.Latency >= time.Millisecond {
-				meta(c, t, "拨号延迟", v.Latency.Round(time.Millisecond).String())
-			} else if v.LoginDuration >= time.Millisecond {
-				meta(c, t, "登录耗时", v.LoginDuration.Round(time.Millisecond).String())
-			}
-			if v.Failed > 0 {
-				meta(c, t, "失败", fmt.Sprintf("%d 次", v.Failed))
-			}
-			if v.InPool {
-				meta(c, t, "统一入口", "参与分流")
-			}
-		})
-
-		if v.State == vpn.StateError && v.Error != "" {
-			ui.Text(c, v.Error).FontSize(13).TextColor(t.Danger)
-			if v.Protocol == model.ProtocolEasyConnect && vpn.IsGatewayCertificateError(v.Error) {
-				if ui.Button(c, "查看网关证书").Label("查看网关证书 " + v.Name).FontSize(11).Clicked() {
-					a.openGatewayCertificate(v.ID)
-				}
-			}
-		}
-		// A dead tunnel with a valid login looks "online" everywhere else, so
-		// the probe result needs its own line.
-		if v.State == vpn.StateOnline {
-			for _, probe := range []struct {
-				kind   string
-				result vpn.ProbeResult
-			}{{"DNS", v.DNSProbe}, {"TCP", v.TCPProbe}} {
-				colour := t.TextMuted
-				if probe.result.State == "failed" {
-					colour = t.Warning
-				}
-				ui.Text(c, healthProbeText(probe.kind, probe.result)).FontSize(11).TextColor(colour).Wrap()
-			}
-		}
-		if v.TunnelState != "" && v.State != vpn.StateError {
-			colour := t.Warning
-			label := "隧道保活探测失败"
-			if v.TunnelFails > 0 {
-				label += "（" + strconv.Itoa(v.TunnelFails) + " 次）"
-			}
-			if v.TunnelState == "dead" {
-				colour = t.Danger
-				label = "隧道已失效（登录仍有效），正在重建"
-			}
-			text := label
-			if v.TunnelErr != "" {
-				text += "：" + v.TunnelErr
-			}
-			ui.Text(c, text).FontSize(13).TextColor(colour).Ellipsis("…")
-		}
-		summary := vpn.NodeSummary(v)
-		showMonitor := v.State == vpn.StateOnline && v.MonitorOn
-		// The node summary and the session monitor share one row: the summary
-		// on the left, the monitor state and its refresh button on the right.
-		if (len(summary) > 0 && v.State == vpn.StateOnline) || showMonitor {
-			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-				if len(summary) > 0 && v.State == vpn.StateOnline {
-					ui.Text(c, "节点组 "+strings.Join(summary, " · ")).
-						FontSize(11).TextColor(t.TextMuted).Grow(1).Ellipsis("…")
+			if ui.Button(c, label).Label(label+" "+v.Name).FontSize(12).Clicked() {
+				if expanded {
+					a.pointDiagnosticsID = ""
 				} else {
-					ui.Row(c).Grow(1)
+					a.pointDiagnosticsID = v.ID
 				}
-				if showMonitor {
-					a.sessionMonitor(c, v)
-				}
-			})
-		}
-		ui.Row(c).Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
+				a.invalidate()
+			}
 			a.pointButtons(c, v)
 		})
+		a.pointAlerts(c, v)
+		if expanded {
+			ui.Divider(c)
+			a.pointDiagnostics(c, v)
+		}
 	})
+}
+
+func (a *app) pointAlerts(c *ui.Context, v vpn.View) {
+	t := c.Theme()
+	if v.State == vpn.StateError && v.Error != "" {
+		ui.Text(c, v.Error).FontSize(13).TextColor(t.Danger).Wrap()
+		if v.Protocol == model.ProtocolEasyConnect && vpn.IsGatewayCertificateError(v.Error) {
+			if ui.Button(c, "查看网关证书").Label("查看网关证书 " + v.Name).FontSize(12).Clicked() {
+				a.openGatewayCertificate(v.ID)
+			}
+		}
+	}
+	if v.TunnelState != "" && v.State != vpn.StateError {
+		colour := t.Warning
+		label := "隧道保活探测失败"
+		if v.TunnelFails > 0 {
+			label += "（" + strconv.Itoa(v.TunnelFails) + " 次）"
+		}
+		if v.TunnelState == "dead" {
+			colour = t.Danger
+			label = "隧道已失效（登录仍有效），正在重建"
+		}
+		text := label
+		if v.TunnelErr != "" {
+			text += "：" + v.TunnelErr
+		}
+		ui.Text(c, text).FontSize(13).TextColor(colour).Wrap()
+	}
+	if v.State == vpn.StateOnline {
+		if v.MonitorOn && v.Alive == "已失效" {
+			ui.Text(c, "会话监测：已失效").FontSize(12).TextColor(t.Danger)
+		}
+		if v.DNSProbe.State == "failed" {
+			ui.Text(c, healthProbeText("DNS", v.DNSProbe)).FontSize(12).TextColor(t.Warning).Wrap()
+		}
+		if v.TCPProbe.State == "failed" {
+			ui.Text(c, healthProbeText("TCP", v.TCPProbe)).FontSize(12).TextColor(t.Warning).Wrap()
+		}
+	}
+}
+
+func (a *app) pointDiagnostics(c *ui.Context, v vpn.View) {
+	t := c.Theme()
+	if sub := a.subtitleOf(v); sub != "" {
+		ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted).Ellipsis("…")
+	}
+
+	ui.Row(c).GapX(12).GapY(4).Wrap().Children(func() {
+		if v.ClientIP != "" {
+			meta(c, t, "隧道 IP", v.ClientIP)
+		}
+		if v.SocksPort > 0 && !a.simpleMode() {
+			addr := "127.0.0.1:" + strconv.Itoa(v.SocksPort)
+			socks := "socks5://" + addr
+			metaCopy(c, t, "HTTP / SOCKS5", addr, "复制独立 SOCKS5 地址",
+				func() { a.copyText(socks) })
+		}
+		meta(c, t, "连接", fmt.Sprintf("%d 当前 / %d 累计", v.Active, v.Total))
+		if len(v.Apps) > 0 {
+			meta(c, t, "应用", fmt.Sprintf("%d 个", len(v.Apps)))
+		}
+		if v.Latency >= time.Millisecond {
+			meta(c, t, "拨号延迟", v.Latency.Round(time.Millisecond).String())
+		} else if v.LoginDuration >= time.Millisecond {
+			meta(c, t, "登录耗时", v.LoginDuration.Round(time.Millisecond).String())
+		}
+		if v.Failed > 0 {
+			meta(c, t, "失败", fmt.Sprintf("%d 次", v.Failed))
+		}
+		if v.InPool {
+			meta(c, t, "统一入口", "参与分流")
+		}
+	})
+	if v.State == vpn.StateOnline {
+		for _, probe := range []struct {
+			kind   string
+			result vpn.ProbeResult
+		}{{"DNS", v.DNSProbe}, {"TCP", v.TCPProbe}} {
+			if probe.result.State == "failed" {
+				continue // 失败信息已在卡片上显示。
+			}
+			ui.Text(c, healthProbeText(probe.kind, probe.result)).FontSize(12).TextColor(t.TextMuted).Wrap()
+		}
+	}
+	summary := vpn.NodeSummary(v)
+	showMonitor := v.State == vpn.StateOnline && v.MonitorOn
+	// The node summary and the session monitor share one row: the summary
+	// on the left, the monitor state and its refresh button on the right.
+	if (len(summary) > 0 && v.State == vpn.StateOnline) || showMonitor {
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			if len(summary) > 0 && v.State == vpn.StateOnline {
+				ui.Text(c, "节点组 "+strings.Join(summary, " · ")).
+					FontSize(11).TextColor(t.TextMuted).Grow(1).Ellipsis("…")
+			} else {
+				ui.Row(c).Grow(1)
+			}
+			if showMonitor {
+				a.sessionMonitor(c, v)
+			}
+		})
+	}
+	if v.State == vpn.StateOnline {
+		ui.Row(c).AlignItems(ui.Center).Gap(6).Wrap().Children(func() {
+			if v.Protocol == model.ProtocolEasyConnect && ui.Button(c, "DNS 诊断").Label("DNS 诊断 "+v.Name).FontSize(12).Clicked() {
+				a.openDNSProbe(v.ID, v.Name)
+			}
+			// External authentication can retain a reusable session.
+			if p := a.cfg.Find(v.ID); a.canLogout(p) {
+				if ui.Button(c, "退出登录").Label("退出登录 "+v.Name).FontSize(12).Clicked() {
+					a.askLogout(v)
+				}
+			}
+		})
+	}
 }
 
 // sessionMonitor draws the validity state and the manual check button.
@@ -1375,38 +1361,32 @@ func (a *app) disconnectPoint(id string) {
 func (a *app) pointButtons(c *ui.Context, v vpn.View) {
 	switch v.State {
 	case vpn.StateOnline:
-		if v.Protocol == model.ProtocolEasyConnect && ui.Button(c, "DNS 诊断").Label("DNS 诊断 "+v.Name).FontSize(11).Clicked() {
-			a.openDNSProbe(v.ID, v.Name)
-		}
-		if ui.Button(c, "代理浏览器").Label("代理浏览器 " + v.Name).FontSize(11).Clicked() {
+		if ui.Button(c, "代理浏览器").Label("代理浏览器 " + v.Name).FontSize(12).Clicked() {
 			if err := openProxyBrowser(a.proxyFor(v.ID), "about:blank"); err != nil {
 				a.toast = err.Error()
 			}
 		}
-		if ui.Button(c, "断开").Label("断开 " + v.Name).FontSize(11).Clicked() {
+		if ui.Button(c, "断开").Label("断开 " + v.Name).FontSize(12).Clicked() {
 			a.disconnectPoint(v.ID)
 		}
-		// Only the WeCom login keeps a session worth discarding by hand: it is
-		// the one where "退出登录" means "sign in as someone else next time".
-		if p := a.cfg.Find(v.ID); a.canLogout(p) {
-			if ui.Button(c, "退出登录").Label("退出登录 " + v.Name).FontSize(11).Clicked() {
-				a.askLogout(v)
-			}
-		}
 	case vpn.StateConnecting:
-		if ui.Button(c, "取消").Label("取消 " + v.Name).FontSize(11).Clicked() {
+		if ui.Button(c, "取消").Label("取消 " + v.Name).FontSize(12).Clicked() {
 			go a.mgr.Disconnect(v.ID)
 		}
 	default:
 		// One button, and the configured auth mode decides what it does:
 		// password logs in by itself, WeCom opens the QR popup, single
 		// sign-on needs the browser.
-		if ui.PrimaryButton(c, "登录").Label("登录 " + v.Name).FontSize(11).Clicked() {
+		label := "登录"
+		if v.State == vpn.StateError {
+			label = "重试"
+		}
+		if ui.PrimaryButton(c, label).Label(label+" "+v.Name).FontSize(12).Clicked() {
 			a.tunLogf("登录点击：%s（%s）", v.Name, v.ID)
 			a.mgr.Connect(v.ID)
 		}
 	}
-	if ui.Button(c, "编辑").Label("编辑 " + v.Name).FontSize(11).Clicked() {
+	if ui.Button(c, "编辑").Label("编辑 " + v.Name).FontSize(12).Clicked() {
 		a.openEditor(v)
 	}
 }
@@ -2946,6 +2926,9 @@ func (a *app) removePoint(id string) {
 		return
 	}
 	_ = a.store.DeleteSecrets(id)
+	if a.pointDiagnosticsID == id {
+		a.pointDiagnosticsID = ""
+	}
 	a.toast = "已删除接入点"
 }
 

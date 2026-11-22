@@ -33,7 +33,7 @@ func (a *app) captureChip(c *ui.Context) {
 		dot = t.Success
 	}
 	mode := a.captureMode()
-	chip := ui.Row(c).Padding(4, 10).Radius(999).Background(t.Surface).
+	chip := ui.Row(c).Padding(5, 9).Radius(6).Background(t.Surface).
 		Border(1, t.Border).AlignItems(ui.Center).Gap(6).
 		Tooltip("切换接管方式").
 		OnClick(func() {
@@ -46,7 +46,7 @@ func (a *app) captureChip(c *ui.Context) {
 		})
 	chip.Children(func() {
 		ui.Row(c).Size(6, 6).Radius(3).Background(dot)
-		ui.Text(c, captureChipLabel(mode)).FontSize(11).TextColor(t.Text)
+		ui.Text(c, captureChipLabel(mode)).FontSize(12).TextColor(t.Text)
 		ui.Text(c, "▾").FontSize(10).TextColor(t.TextMuted)
 	})
 	ui.Popover(c, chip, &a.captureMenuOpen, func() {

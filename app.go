@@ -66,9 +66,9 @@ type app struct {
 	// localCollapsed remembers which access points' project groups are folded
 	// (true = folded). A group starts out open.
 	localCollapsed map[string]bool
-	// pointsWidth is the access point grid's width from the last frame, so the
-	// tile count can follow a narrow window.
-	pointsWidth float32
+	// pointDiagnosticsID keeps one card's diagnostics expanded on the home page.
+	pointDiagnosticsID string
+	revealPointID      string // One-time scroll target from a shortcut.
 	// windowH is the window content height from the last frame; dialogs use it
 	// to size their scrolling body so the footer stays inside the panel.
 	windowH   float32

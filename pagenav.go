@@ -51,23 +51,23 @@ func (a *app) goTab(page int) {
 // 是当前页，也能从设置页回到该页——ui.Segmented 绑定同一个值时不会报变化。
 func (a *app) pageNav(c *ui.Context) {
 	t := c.Theme()
-	track := ui.Row(c).Padding(3).Radius(999).Background(t.SurfaceHover).
+	track := ui.Row(c).Padding(3).Radius(8).Background(t.SurfaceHover).
 		Border(1, t.Border).Gap(2)
 	track.Children(func() {
 		for _, ref := range a.pages() {
 			page := ref.Tab
 			label := ref.Label
 			active := !a.settings.open && a.tab == page
-			seg := ui.Row(c).Padding(5, 12).Radius(999).OnClick(func() { a.goTab(page) })
+			seg := ui.Row(c).Padding(5, 9).Radius(6).OnClick(func() { a.goTab(page) })
 			if active {
-				seg = seg.Background(t.Surface).Shadow(0, 1, 3, 0, cardShadow(t))
+				seg = seg.Background(t.Selection)
 			}
 			seg.Children(func() {
 				colour := t.TextMuted
 				if active {
 					colour = t.Text
 				}
-				ui.Text(c, label).FontSize(11).TextColor(colour)
+				ui.Text(c, label).FontSize(12).TextColor(colour)
 			})
 		}
 	})

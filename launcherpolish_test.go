@@ -15,17 +15,58 @@ func TestEnvStripIsRuntimeOnly(t *testing.T) {
 	tt := ui.NewTester(a.view, 1120, 780)
 	tt.Frame()
 	texts := strings.Join(tt.Texts(), "|")
-	if !strings.Contains(texts, "运行环境") {
-		t.Errorf("底栏缺少「运行环境」；texts = %s", texts)
-	}
-	for _, want := range []string{"在线 1 / 3", "本机项目 0 个运行中", "助手 "} {
+	for _, want := range []string{"统一入口", "本机项目 0 个运行中"} {
 		if !strings.Contains(texts, want) {
 			t.Errorf("底栏缺少 %q", want)
 		}
 	}
+	if strings.Contains(texts, "助手 已就绪") {
+		t.Error("没有检查助手状态时不应显示已就绪")
+	}
 	// 顶栏的网络状态入口会写一次「接管」，底栏再写一次就算重复。
 	if n := strings.Count(texts, "接管"); n > 1 {
 		t.Errorf("「接管」出现了 %d 次，底栏不该重复；texts = %s", n, texts)
+	}
+}
+
+func TestPointDiagnosticsExpandAndCollapse(t *testing.T) {
+	a := layoutApp(t)
+	tt := ui.NewTester(a.view, 880, 600)
+	tt.Frame()
+	if tt.HasText("HTTP / SOCKS5") {
+		t.Fatal("本地代理详情应默认收起")
+	}
+	if err := tt.Click("打开常用入口 公司主网关"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !tt.HasText("HTTP / SOCKS5") {
+		t.Fatal("从常用入口打开网关后应能查看本地代理")
+	}
+	if err := tt.Click("收起诊断 公司主网关"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if tt.HasText("HTTP / SOCKS5") {
+		t.Fatal("收起后仍看到本地代理详情")
+	}
+}
+
+func TestPointFailureActionsVisibleWithoutExpanding(t *testing.T) {
+	a := testApp(t)
+	v := vpn.View{
+		ID:    "broken",
+		Name:  "失效网关",
+		State: vpn.StateError,
+		Error: "登录失败，请检查凭据",
+	}
+	tt := ui.NewTester(func(c *ui.Context) { a.pointCard(c, v) }, 720, 520)
+	tt.Frame()
+	if !tt.HasText(v.Error) {
+		t.Fatal("未展开诊断时应显示失败原因")
+	}
+	if _, ok := tt.Find("重试 " + v.Name); !ok {
+		t.Fatal("未展开诊断时应能重试登录")
 	}
 }
 
@@ -56,7 +97,7 @@ func TestUseProtocolGroups(t *testing.T) {
 	}
 }
 
-// 常用入口的磁贴带动作：在线接入点能断开，运行中的本机项目能停止或查看。
+// 在线接入点可以通过常用入口直接断开。
 func TestQuickTilesCarryActions(t *testing.T) {
 	a := layoutApp(t)
 	tiles := a.quickTiles()

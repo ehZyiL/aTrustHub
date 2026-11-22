@@ -10,20 +10,12 @@ import (
 	"github.com/ehzyil/connect-hub/internal/vpn"
 )
 
-// 这一版对应原型 C「场景启动台」，按评审意见再收一遍：
-//   - 底栏只报运行环境，接管控件留在顶栏，避免两处说同一件事；
-//   - 接入点很少且同协议时不摆分组头，一个组头挂一张卡片太碎；
-//   - 常用入口的磁贴带动作（断开 / 停止 / 查看），高频操作不用跳到第四页；
-//   - 深色主题里只让「在线、选中、主按钮」用荧光绿，底色与悬停降饱和。
-
-// tileAction 是磁贴上就地可做的一件事。
+// tileAction 是快捷入口上的就地操作。
 type tileAction struct {
-	label   string
-	primary bool
-	run     func()
+	label string
+	run   func()
 }
 
-// quickTile 是常用入口里的一格。
 type quickTile struct {
 	label   string
 	hint    string
@@ -44,12 +36,13 @@ func (a *app) quickTiles() []quickTile {
 			label: name,
 			hint:  "在线 · " + v.Protocol,
 			open: func() {
-				a.detailPointID = id
+				a.pointDiagnosticsID = id
+				a.revealPointID = id
 				a.goTab(0)
 			},
 			actions: []tileAction{{
 				label: "断开 " + name,
-				run:   func() { go a.mgr.Disconnect(id) },
+				run:   func() { a.disconnectPoint(id) },
 			}},
 		})
 	}
@@ -66,12 +59,8 @@ func (a *app) quickTiles() []quickTile {
 			open:  func() { a.goTab(3) },
 		}
 		if app.Mode == model.LocalAppBrowser {
-			// 浏览器在独立窗口里关，这里只做定位，不提供停止。
+			// 浏览器在独立窗口里关，项目名已经是查看入口。
 			tile.hint = "浏览器窗口中运行"
-			tile.actions = []tileAction{{
-				label: "查看 " + appName,
-				run:   func() { a.goTab(3) },
-			}}
 		} else {
 			tile.actions = []tileAction{{
 				label: "停止 " + appName,
@@ -83,61 +72,36 @@ func (a *app) quickTiles() []quickTile {
 	return tiles
 }
 
-// quickLaunch 是首屏的常用入口：磁贴上直接能做完常见的下一步。
+// quickLaunch 只展示正在使用的入口，避免离线时占用列表空间。
 func (a *app) quickLaunch(c *ui.Context) {
 	t := c.Theme()
 	tiles := a.quickTiles()
-	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-		ui.Text(c, "常用入口").FontSize(13).Bold()
-		ui.Text(c, "一边看状态，一边就能动").FontSize(10).TextColor(t.TextMuted)
-	})
 	if len(tiles) == 0 {
-		panel := ui.Column(c).Padding(16).Gap(4).Radius(14).
-			Background(t.Surface).Border(1, t.Border)
-		panel.Children(func() {
-			ui.Text(c, "还没有在用的入口").FontSize(13).Bold()
-			ui.Text(c, "登录一个接入点之后，它会出现在这里。").
-				FontSize(11).TextColor(t.TextMuted)
-		})
 		return
 	}
-	ui.Row(c).Gap(8).Wrap().Children(func() {
+	ui.Row(c).AlignItems(ui.Center).GapX(8).GapY(4).Wrap().Children(func() {
+		ui.Text(c, "常用入口").FontSize(12).Bold().TextColor(t.TextMuted)
 		for _, tile := range tiles {
-			it := tile
-			card := ui.Column(c).Width(204).Padding(10, 12).Radius(14).Gap(3).
+			item := ui.Row(c).MaxWidth(225).Padding(2, 4).Radius(8).Gap(3).AlignItems(ui.Center).
 				Background(t.Surface).Border(1, t.Border)
-			card.OnClick(func() {
-				it.open()
-				a.invalidate()
-			})
-			card.Children(func() {
-				ui.Text(c, it.label).FontSize(13).Bold().Ellipsis("…")
-				ui.Text(c, it.hint).FontSize(10).TextColor(t.TextMuted).Ellipsis("…")
-				if len(it.actions) > 0 {
-					ui.Row(c).Gap(6).Padding(2, 0).Children(func() {
-						for _, act := range it.actions {
-							action := act
-							var clicked bool
-							if action.primary {
-								clicked = ui.PrimaryButton(c, shortActionLabel(action.label)).
-									Label(action.label).FontSize(11).Clicked()
-							} else {
-								clicked = ui.Button(c, shortActionLabel(action.label)).
-									Label(action.label).FontSize(11).Clicked()
-							}
-							if clicked {
-								action.run()
-								a.invalidate()
-							}
-						}
-					})
+			item.Children(func() {
+				if ui.Button(c, shortText(tile.label, 10)).Label("打开常用入口 " + tile.label).
+					FontSize(12).Tooltip(tile.label + " · " + tile.hint).Clicked() {
+					tile.open()
+				}
+				for _, action := range tile.actions {
+					if ui.Button(c, shortActionLabel(action.label)).Label("常用入口：" + action.label).
+						FontSize(12).Clicked() {
+						action.run()
+						a.invalidate()
+					}
 				}
 			})
 		}
 	})
 }
 
-// shortActionLabel 把「断开 公司主网关」这类带名字的标签收成磁贴上显示的两个字。
+// shortActionLabel 把「断开 公司主网关」这类标签收成按钮上显示的动作。
 func shortActionLabel(label string) string {
 	if i := strings.Index(label, " "); i > 0 {
 		return label[:i]
@@ -162,7 +126,7 @@ func useProtocolGroups(views []vpn.View) bool {
 // pointsPanel 是一块发丝分隔的列表面板。
 func (a *app) pointsPanel(c *ui.Context, views []vpn.View) {
 	t := c.Theme()
-	panel := ui.Column(c).Radius(14).Background(t.Surface).Border(1, t.Border)
+	panel := ui.Column(c).Radius(8).Background(t.Surface).Border(1, t.Border)
 	panel.Children(func() {
 		for i, v := range views {
 			if i > 0 {
@@ -196,10 +160,8 @@ func (a *app) groupedPoints(c *ui.Context, views []vpn.View) {
 			label = "其他接入点"
 		}
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Padding(4, 2).Children(func() {
-			ui.Text(c, label).FontSize(11).Bold().TextColor(t.TextMuted)
-			ui.Text(c, fmt.Sprintf("%d 个", len(group))).FontSize(10).TextColor(t.TextMuted)
-			ui.Row(c).Grow(1)
-			ui.Column(c).Width(24).Height(1).Background(t.Border)
+			ui.Text(c, label).FontSize(12).Bold().TextColor(t.TextMuted)
+			ui.Text(c, fmt.Sprintf("%d 个", len(group))).FontSize(12).TextColor(t.TextMuted)
 		})
 		a.pointsPanel(c, group)
 	}
@@ -209,7 +171,6 @@ func (a *app) groupedPoints(c *ui.Context, views []vpn.View) {
 // 接管方式属于顶栏，两处都写会让同一件事有两个入口。
 func (a *app) envStrip(c *ui.Context) {
 	t := c.Theme()
-	online, connecting, total := a.mgr.Counts()
 	agg := a.mgr.Aggregate()
 	running := 0
 	for _, p := range a.cfg.LocalApps {
@@ -217,26 +178,26 @@ func (a *app) envStrip(c *ui.Context) {
 			running++
 		}
 	}
-	helper := "未启用"
-	if captureExperimentEnabled() {
-		helper = "已就绪"
-	}
-	ui.Row(c).AlignItems(ui.Center).Gap(16).Padding(8, 10).Radius(14).
-		Background(t.Surface).Border(1, t.Border).Children(func() {
-		ui.Text(c, "运行环境").FontSize(10).Bold().TextColor(t.TextMuted)
-		ui.Text(c, fmt.Sprintf("在线 %d / %d", online, total)).FontSize(11)
-		if connecting > 0 {
-			ui.Text(c, fmt.Sprintf("接入中 %d", connecting)).FontSize(11).TextColor(t.Warning)
+	ui.Divider(c)
+	ui.Row(c).AlignItems(ui.Center).Gap(14).Padding(2, 4).Children(func() {
+		listening := agg.Running && agg.Addr != ""
+		if listening || a.sysProxyOn.Load() {
+			ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
+				ui.Text(c, "统一入口").FontSize(12).Bold()
+				switch {
+				case listening:
+					addr := "socks5://" + displayAddr(agg.Addr)
+					ui.Text(c, addr).Font("monospace").FontSize(12).TextColor(t.TextMuted)
+					iconButton(c, copyIcon, "复制统一入口地址", func() { a.copyText(addr) })
+				case agg.Error != "":
+					ui.Text(c, "监听失败").FontSize(12).TextColor(t.Danger).Tooltip(agg.Error)
+				default:
+					ui.Text(c, "未启动").FontSize(12).TextColor(t.TextMuted)
+				}
+			})
 		}
-		if agg.Running && agg.Addr != "" {
-			ui.Text(c, "统一入口 "+"socks5://"+displayAddr(agg.Addr)).
-				Font("monospace").FontSize(11).TextColor(t.TextMuted)
-		} else {
-			// 没有在监听就别叫它「统一入口」，免得空状态下承诺一个不存在的入口。
-			ui.Text(c, "入口未启动").FontSize(11).TextColor(t.TextMuted)
-		}
-		ui.Text(c, fmt.Sprintf("本机项目 %d 个运行中", running)).FontSize(11).TextColor(t.TextMuted)
-		ui.Text(c, "助手 "+helper).FontSize(11).TextColor(t.TextMuted)
+		ui.Row(c).Grow(1)
+		ui.Text(c, fmt.Sprintf("本机项目 %d 个运行中", running)).FontSize(12).TextColor(t.TextMuted)
 	})
 }
 
@@ -275,19 +236,19 @@ func (a *app) launcherBody(c *ui.Context) {
 		ui.Column(c).Grow(1).MinHeight(0).Gap(12).Children(func() {
 			pageBar(c, "接入点", fmt.Sprintf("%d 个", len(views)), func() {
 				if len(views) > 0 {
-					if ui.Button(c, "全部登录").Label("全部接入点重新登录").FontSize(11).Clicked() {
+					if ui.Button(c, "全部登录").Label("全部接入点重新登录").FontSize(12).Clicked() {
 						a.mgr.ConnectAll(false)
 					}
 				}
 			})
 			ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(6, 2, 6, 0).Children(func() {
-				ui.Column(c).Padding(0, 14, 0, 0).Gap(12).Children(func() {
+				ui.Column(c).Padding(0, 2, 0, 4).Gap(10).Children(func() {
 					a.quickLaunch(c)
-					a.statusBanner(c, views)
 					if len(views) == 0 {
 						a.emptyState(c)
 						return
 					}
+					a.statusBanner(c, views)
 					a.groupedPoints(c, views)
 					a.recentFailures(c)
 				})

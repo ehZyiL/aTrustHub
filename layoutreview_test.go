@@ -113,6 +113,25 @@ func TestLayoutBoundsWithinWindow(t *testing.T) {
 	}
 }
 
+func TestAccessPointActionsFitMinimumWindow(t *testing.T) {
+	a := layoutApp(t)
+	tt := ui.NewTester(a.view, 720, 520)
+	tt.Frame()
+	for _, label := range []string{
+		"＋ 添加接入点",
+		"打开常用入口 公司主网关",
+		"连接与诊断 公司主网关",
+		"代理浏览器 公司主网关",
+		"登录 办公网线路",
+		"登录 浙江大学网关",
+	} {
+		r, ok := tt.Find(label)
+		if !ok || r.W <= 0 || r.H <= 0 || r.X < 0 || r.Y < 0 || r.X+r.W > 720.5 || r.Y+r.H > 520.5 {
+			t.Errorf("%q 在最小窗口不可见：found=%v rect=%+v", label, ok, r)
+		}
+	}
+}
+
 // 设置页是整页多 tab：每个分区的关键控件都必须在窗口内。
 func TestSettingsPageFitsWindow(t *testing.T) {
 	a := layoutApp(t)

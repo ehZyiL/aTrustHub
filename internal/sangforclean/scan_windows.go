@@ -17,17 +17,46 @@ import (
 )
 
 var (
-	modcrypt32 = windows.NewLazySystemDLL("crypt32.dll")
-	procCertOpenSystemStoreW   = modcrypt32.NewProc("CertOpenSystemStoreW")
+	modcrypt32                      = windows.NewLazySystemDLL("crypt32.dll")
+	procCertOpenStore               = modcrypt32.NewProc("CertOpenStore")
 	procCertEnumCertificatesInStore = modcrypt32.NewProc("CertEnumCertificatesInStore")
-	procCertCloseStore         = modcrypt32.NewProc("CertCloseStore")
-	procCertGetNameStringW     = modcrypt32.NewProc("CertGetNameStringW")
+	procCertCloseStore              = modcrypt32.NewProc("CertCloseStore")
+	procCertGetNameStringW          = modcrypt32.NewProc("CertGetNameStringW")
+	procCertFreeCertificateContext  = modcrypt32.NewProc("CertFreeCertificateContext")
 )
 
 const (
+	CERT_STORE_PROV_SYSTEM_W        = 10
+	CERT_SYSTEM_STORE_LOCAL_MACHINE = 0x00020000
+	CERT_SYSTEM_STORE_CURRENT_USER  = 0x00010000
+	CERT_CLOSE_STORE_FORCE_FLAG     = 0x00000001
+
 	CERT_NAME_SIMPLE_DISPLAY_TYPE = 4
 	CERT_NAME_ISSUER_FLAG         = 1
 )
+
+func openSystemRootStore(localMachine bool) (uintptr, error) {
+	storeName, err := windows.UTF16PtrFromString("Root")
+	if err != nil {
+		return 0, err
+	}
+	flags := uintptr(CERT_SYSTEM_STORE_CURRENT_USER)
+	if localMachine {
+		flags = uintptr(CERT_SYSTEM_STORE_LOCAL_MACHINE)
+	}
+
+	hStore, _, err := procCertOpenStore.Call(
+		CERT_STORE_PROV_SYSTEM_W,
+		0,
+		0,
+		flags,
+		uintptr(unsafe.Pointer(storeName)),
+	)
+	if hStore == 0 {
+		return 0, err
+	}
+	return hStore, nil
+}
 
 // ScanOptions 扫描控制参数
 type ScanOptions struct {
@@ -70,7 +99,7 @@ func Scan(opts ScanOptions) (*Plan, error) {
 	// 6. 扫描虚拟网卡设备
 	scanNetAdapters(plan)
 
-	// 7. 扫描根证书
+	// 7. 扫描根证书（LocalMachine + CurrentUser）
 	scanCertificates(plan)
 
 	// 8. 扫描文件与目录残留
@@ -152,7 +181,6 @@ func scanServicesAndDrivers(plan *Plan) {
 	}
 
 	for _, name := range names {
-		// 快速前缀过滤或已知服务名
 		isKnown := false
 		for _, ks := range KnownServices {
 			if strings.EqualFold(name, ks) || strings.HasPrefix(strings.ToLower(name), strings.ToLower(ks)) {
@@ -219,7 +247,6 @@ func scanProcesses(plan *Plan) {
 		name := windows.UTF16ToString(proc.ExeFile[:])
 		lowerName := strings.ToLower(name)
 
-		// 排除自身与网络助手进程
 		isExcluded := false
 		for _, exc := range ExcludedProcesses {
 			if strings.EqualFold(lowerName, strings.ToLower(exc)) {
@@ -395,70 +422,72 @@ func scanNetAdapters(plan *Plan) {
 }
 
 func scanCertificates(plan *Plan) {
-	storeName, err := windows.UTF16PtrFromString("Root")
-	if err != nil {
-		return
-	}
-
-	hStore, _, _ := procCertOpenSystemStoreW.Call(0, uintptr(unsafe.Pointer(storeName)))
-	if hStore == 0 {
-		return
-	}
-	defer procCertCloseStore.Call(hStore, 0)
-
-	var pCertContext uintptr
-	for {
-		pCertContext, _, _ = procCertEnumCertificatesInStore.Call(hStore, pCertContext)
-		if pCertContext == 0 {
-			break
+	for _, localMachine := range []bool{true, false} {
+		hStore, err := openSystemRootStore(localMachine)
+		if err != nil || hStore == 0 {
+			continue
 		}
 
-		// 获取 Subject
-		buf := make([]uint16, 256)
-		procCertGetNameStringW.Call(
-			pCertContext,
-			CERT_NAME_SIMPLE_DISPLAY_TYPE,
-			0,
-			0,
-			uintptr(unsafe.Pointer(&buf[0])),
-			uintptr(len(buf)),
-		)
-		subject := windows.UTF16ToString(buf)
-
-		// 获取 Issuer
-		procCertGetNameStringW.Call(
-			pCertContext,
-			CERT_NAME_SIMPLE_DISPLAY_TYPE,
-			CERT_NAME_ISSUER_FLAG,
-			0,
-			uintptr(unsafe.Pointer(&buf[0])),
-			uintptr(len(buf)),
-		)
-		issuer := windows.UTF16ToString(buf)
-
-		if MatchesKeyword(subject) || MatchesKeyword(issuer) {
-			// 计算 SHA1 Thumbprint
-			certContext := (*windows.CertContext)(unsafe.Pointer(pCertContext))
-			h := sha1.New()
-			certBytes := unsafe.Slice(certContext.EncodedCert, certContext.Length)
-			h.Write(certBytes)
-			thumbprint := hex.EncodeToString(h.Sum(nil))
-
-			plan.Findings = append(plan.Findings, Finding{
-				ID:     fmt.Sprintf("cert:%s", thumbprint),
-				Group:  "cert",
-				Title:  fmt.Sprintf("根证书: %s", subject),
-				Detail: fmt.Sprintf("签发者: %s (指纹: %s)", issuer, thumbprint),
-				Risk:   RiskNormal,
-				Action: ActionDeleteCert,
-				Params: map[string]interface{}{
-					"store":      "Root",
-					"thumbprint": thumbprint,
-					"subject":    subject,
-				},
-				Selected: true,
-			})
+		storeDesc := "LocalMachine"
+		if !localMachine {
+			storeDesc = "CurrentUser"
 		}
+
+		var pCertContext uintptr
+		for {
+			pCertContext, _, _ = procCertEnumCertificatesInStore.Call(hStore, pCertContext)
+			if pCertContext == 0 {
+				break
+			}
+
+			// 获取 Subject
+			buf := make([]uint16, 256)
+			procCertGetNameStringW.Call(
+				pCertContext,
+				CERT_NAME_SIMPLE_DISPLAY_TYPE,
+				0,
+				0,
+				uintptr(unsafe.Pointer(&buf[0])),
+				uintptr(len(buf)),
+			)
+			subject := windows.UTF16ToString(buf)
+
+			// 获取 Issuer
+			procCertGetNameStringW.Call(
+				pCertContext,
+				CERT_NAME_SIMPLE_DISPLAY_TYPE,
+				CERT_NAME_ISSUER_FLAG,
+				0,
+				uintptr(unsafe.Pointer(&buf[0])),
+				uintptr(len(buf)),
+			)
+			issuer := windows.UTF16ToString(buf)
+
+			if MatchesKeyword(subject) || MatchesKeyword(issuer) {
+				certContext := (*windows.CertContext)(unsafe.Pointer(pCertContext))
+				h := sha1.New()
+				certBytes := unsafe.Slice(certContext.EncodedCert, certContext.Length)
+				h.Write(certBytes)
+				thumbprint := hex.EncodeToString(h.Sum(nil))
+
+				plan.Findings = append(plan.Findings, Finding{
+					ID:     fmt.Sprintf("cert:%s", thumbprint),
+					Group:  "cert",
+					Title:  fmt.Sprintf("根证书: %s", subject),
+					Detail: fmt.Sprintf("存储: %s, 签发者: %s (指纹: %s)", storeDesc, issuer, thumbprint),
+					Risk:   RiskNormal,
+					Action: ActionDeleteCert,
+					Params: map[string]interface{}{
+						"store":        "Root",
+						"localMachine": localMachine,
+						"thumbprint":   thumbprint,
+						"subject":      subject,
+					},
+					Selected: true,
+				})
+			}
+		}
+		procCertCloseStore.Call(hStore, CERT_CLOSE_STORE_FORCE_FLAG)
 	}
 }
 
@@ -504,7 +533,6 @@ func scanFileSystem(plan *Plan) {
 		}
 	}
 
-	// 扫描驱动目录中的已知文件
 	systemRoot := os.Getenv("SystemRoot")
 	if systemRoot == "" {
 		systemRoot = `C:\Windows`

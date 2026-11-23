@@ -30,6 +30,7 @@ func main() {
 	skipFlag := flag.String("skip", "", "逗号分隔的条目 ID 列表（跳过指定项）")
 	yesFlag := flag.Bool("yes", false, "跳过交互确认")
 	protoVerFlag := flag.Bool("protocol-version", false, "打印清理器协议版本")
+	_ = flag.Bool("interactive-run", false, "交互模式提权标记")
 
 	flag.Parse()
 
@@ -65,7 +66,6 @@ func main() {
 				fmt.Fprintln(os.Stderr, "还原需要管理员权限且禁止自提权")
 				os.Exit(4)
 			}
-			// 自提权并等待
 			exe, _ := os.Executable()
 			code, err := sangforclean.RunElevatedAndWait(exe, strings.Join(os.Args[1:], " "), *hideFlag)
 			if err != nil {
@@ -121,7 +121,6 @@ func main() {
 				fmt.Fprintln(os.Stderr, "执行清理需要管理员权限且禁止自提权")
 				os.Exit(4)
 			}
-			// 自提权
 			exe, _ := os.Executable()
 			code, err := sangforclean.RunElevatedAndWait(exe, strings.Join(os.Args[1:], " "), *hideFlag)
 			if err != nil {

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -65,8 +66,7 @@ func Apply(opts ApplyOptions) (int, error) {
 		}
 	}
 
-	// 过滤 ID
-	selectedFindings := make([]Finding, 0)
+	// 3. 应用 --only / --skip 过滤，并在备份前写回 Selected 状态（保证执行项 100% 纳入备份）
 	onlyMap := make(map[string]bool)
 	for _, id := range opts.OnlyIDs {
 		onlyMap[strings.TrimSpace(id)] = true
@@ -76,19 +76,21 @@ func Apply(opts ApplyOptions) (int, error) {
 		skipMap[strings.TrimSpace(id)] = true
 	}
 
-	for _, f := range opts.Plan.Findings {
-		if len(onlyMap) > 0 && !onlyMap[f.ID] {
-			continue
+	selectedFindings := make([]Finding, 0)
+	for i := range opts.Plan.Findings {
+		f := &opts.Plan.Findings[i]
+		if len(onlyMap) > 0 {
+			f.Selected = onlyMap[f.ID]
 		}
 		if skipMap[f.ID] {
-			continue
+			f.Selected = false
 		}
-		if f.Selected || onlyMap[f.ID] {
-			selectedFindings = append(selectedFindings, f)
+		if f.Selected {
+			selectedFindings = append(selectedFindings, *f)
 		}
 	}
 
-	// 3. 执行全量快照备份（零数据损失安全保障）
+	// 4. 执行全量快照备份（零数据损失安全保障）
 	manifest, err := CreateBackup(opts.Plan, opts.BackupRootDir)
 	if err != nil {
 		if rw != nil {
@@ -127,7 +129,7 @@ func Apply(opts ApplyOptions) (int, error) {
 	rebootCount := 0
 	skippedCount := 0
 
-	// 4. 按依赖释放顺序分阶段执行动作
+	// 5. 按依赖释放顺序分阶段执行动作
 	// Phase A: kill-process
 	for _, f := range selectedFindings {
 		if f.Action == ActionKillProcess {
@@ -176,7 +178,7 @@ func Apply(opts ApplyOptions) (int, error) {
 		}
 	}
 
-	// Phase E: delete-path (文件最后清理，未占用则隔离，占用则注册重启延迟删除)
+	// Phase E: delete-path (文件最后清理)
 	quarantineRoot := filepath.Join(filepath.Dir(manifestPath), "quarantine")
 	for _, f := range selectedFindings {
 		if f.Action == ActionDeletePath {
@@ -263,11 +265,11 @@ func executeDeleteService(f Finding) (ReportStatus, string) {
 		return StatusOk, "服务已成功删除: " + name
 	}
 
-	if strings.Contains(outStr, "1060") { // ERROR_SERVICE_DOES_NOT_EXIST
+	if strings.Contains(outStr, "1060") {
 		return StatusSkipped, "服务已不存在"
 	}
 
-	if strings.Contains(outStr, "1072") || isDriver { // ERROR_SERVICE_MARKED_FOR_DELETE 或驱动无法动态卸载
+	if strings.Contains(outStr, "1072") || isDriver {
 		return StatusReboot, "已标记删除（需重启生效）"
 	}
 
@@ -332,40 +334,41 @@ func executeDeleteCert(f Finding) (ReportStatus, string) {
 		return StatusSkipped, "缺少证书指纹"
 	}
 
-	storeW, err := windows.UTF16PtrFromString(storeName)
-	if err != nil {
-		return StatusFailed, err.Error()
-	}
-
-	hStore, _, _ := procCertOpenSystemStoreW.Call(0, uintptr(unsafe.Pointer(storeW)))
-	if hStore == 0 {
-		return StatusFailed, "无法打开证书库"
-	}
-	defer procCertCloseStore.Call(hStore, 0)
-
-	var pCertContext uintptr
-	for {
-		pCertContext, _, _ = procCertEnumCertificatesInStore.Call(hStore, pCertContext)
-		if pCertContext == 0 {
-			break
+	deleted := false
+	for _, localMachine := range []bool{true, false} {
+		hStore, err := openSystemRootStore(localMachine)
+		if err != nil || hStore == 0 {
+			continue
 		}
 
-		ctx := (*windows.CertContext)(unsafe.Pointer(pCertContext))
-		certBytes := unsafe.Slice(ctx.EncodedCert, ctx.Length)
-
-		h := sha1.New()
-		h.Write(certBytes)
-		currThumb := hex.EncodeToString(h.Sum(nil))
-
-		if strings.EqualFold(currThumb, thumbprint) {
-			ret, _, _ := procCertDeleteCertificateFromStore.Call(pCertContext)
-			if ret != 0 {
-				return StatusOk, "已精准删除根证书"
+		var pCertContext uintptr
+		for {
+			pCertContext, _, _ = procCertEnumCertificatesInStore.Call(hStore, pCertContext)
+			if pCertContext == 0 {
+				break
 			}
-			return StatusFailed, "删除证书 Context 失败"
+
+			ctx := (*windows.CertContext)(unsafe.Pointer(pCertContext))
+			certBytes := unsafe.Slice(ctx.EncodedCert, ctx.Length)
+
+			h := sha1.New()
+			h.Write(certBytes)
+			currThumb := hex.EncodeToString(h.Sum(nil))
+
+			if strings.EqualFold(currThumb, thumbprint) {
+				ret, _, _ := procCertDeleteCertificateFromStore.Call(pCertContext)
+				if ret != 0 {
+					deleted = true
+				}
+				break
+			}
 		}
+		procCertCloseStore.Call(hStore, CERT_CLOSE_STORE_FORCE_FLAG)
 	}
 
+	if deleted {
+		return StatusOk, "已精准删除根证书"
+	}
 	return StatusSkipped, "证书已不存在"
 }
 
@@ -395,7 +398,7 @@ func executeClearDosDevice(f Finding) (ReportStatus, string) {
 		return StatusSkipped, "缺少盘符"
 	}
 
-	// 1. 尝试 subst 卸除
+	// 1. subst 卸除
 	substCmd := exec.Command("subst.exe", letter, "/D")
 	substCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	_ = substCmd.Run()
@@ -436,29 +439,54 @@ func executeDeletePath(f Finding, quarantineRoot string) (ReportStatus, string) 
 		return StatusFailed, err.Error()
 	}
 
-	// 1. 尝试直接移入隔离区（同一卷）
+	// 1. 尝试移入隔离区（同盘原子移动或跨盘 Copy+Delete）
 	if quarantineRoot != "" {
 		rel := filepath.Base(path) + "_" + time.Now().Format("150405")
 		dest := filepath.Join(quarantineRoot, rel)
 		_ = os.MkdirAll(quarantineRoot, 0755)
+
 		if err := os.Rename(path, dest); err == nil {
 			return StatusOk, "已移入隔离区: " + dest
 		}
+
+		// 跨盘卷移动支持：先 Copy 到隔离区再 Remove 原路径
+		if !fi.IsDir() {
+			if _, err := copyFileAndHash(path, dest); err == nil {
+				if err := os.Remove(path); err == nil {
+					return StatusOk, "已移入隔离区 (跨卷): " + dest
+				}
+			}
+		}
 	}
 
-	// 2. 尝试直接删除
+	// 2. 尝试直接物理删除
 	if err := os.RemoveAll(path); err == nil {
 		return StatusOk, "已删除路径: " + path
 	}
 
-	// 3. 被占用：递归注册 MoveFileEx(DELAY_UNTIL_REBOOT)
+	// 3. 文件被占用：收集子文件与所有中间子目录（后序逆序），注册 MoveFileEx 延迟删除
 	if fi.IsDir() {
+		var subDirs []string
 		_ = filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
-			if err == nil && info != nil && !info.IsDir() {
-				scheduleDelayedDelete(p)
+			if err == nil && info != nil {
+				if info.IsDir() {
+					if p != path {
+						subDirs = append(subDirs, p)
+					}
+				} else {
+					scheduleDelayedDelete(p)
+				}
 			}
 			return nil
 		})
+
+		// 子目录按路径深度逆序（由深到浅），确保重启时先删空子目录再删父目录
+		sort.Slice(subDirs, func(i, j int) bool {
+			return len(subDirs[i]) > len(subDirs[j])
+		})
+		for _, d := range subDirs {
+			scheduleDelayedDelete(d)
+		}
 	}
 	scheduleDelayedDelete(path)
 

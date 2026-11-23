@@ -17,7 +17,6 @@ func (a *app) maintenanceSection(c *ui.Context) {
 	a.cleanup.mu.RLock()
 	st := a.cleanup.status
 	plan := a.cleanup.plan
-	selectedMap := a.cleanup.selectedMap
 	events := a.cleanup.events
 	backups := a.cleanup.backups
 	msg := a.cleanup.message
@@ -25,6 +24,12 @@ func (a *app) maintenanceSection(c *ui.Context) {
 	okCount := a.cleanup.okItems
 	rebootCount := a.cleanup.rebootItems
 	failedCount := a.cleanup.failedItems
+
+	// 锁内深拷贝 selectedMap，彻底防止并发读写引发 Fatal Panic
+	selectedSnapshot := make(map[string]bool, len(a.cleanup.selectedMap))
+	for k, v := range a.cleanup.selectedMap {
+		selectedSnapshot[k] = v
+	}
 	a.cleanup.mu.RUnlock()
 
 	// 1. 官方卸载器引导卡片
@@ -86,7 +91,7 @@ func (a *app) maintenanceSection(c *ui.Context) {
 		ui.Column(c).Gap(6).Children(func() {
 			for _, f := range plan.Findings {
 				id := f.ID
-				val := selectedMap[id]
+				val := selectedSnapshot[id]
 
 				label := fmt.Sprintf("[%s] %s - %s", f.Group, f.Title, f.Detail)
 				if f.Risk == sangforclean.RiskDeep {

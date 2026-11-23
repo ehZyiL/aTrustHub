@@ -59,7 +59,6 @@ func (a *app) findCleanupExe() string {
 			return candidate
 		}
 	}
-	// 尝试当前工作目录或环境变量
 	if _, err := os.Stat("connect-hub-cleanup.exe"); err == nil {
 		abs, _ := filepath.Abs("connect-hub-cleanup.exe")
 		return abs
@@ -81,6 +80,10 @@ func (a *app) initCleanupState() {
 
 func (a *app) runCleanupScan() {
 	a.cleanup.mu.Lock()
+	if a.cleanup.status == cleanupStatusScanning || a.cleanup.status == cleanupStatusApplying || a.cleanup.status == cleanupStatusRestoring {
+		a.cleanup.mu.Unlock()
+		return
+	}
 	a.cleanup.status = cleanupStatusScanning
 	a.cleanup.err = ""
 	a.cleanup.message = "正在扫描残留组件..."
@@ -88,7 +91,6 @@ func (a *app) runCleanupScan() {
 	a.invalidate()
 
 	go func() {
-		// 优先直接调用 internal 库扫描（极速、无需依赖外部 exe 文件存在）
 		plan, err := sangforclean.Scan(sangforclean.ScanOptions{})
 
 		a.cleanup.mu.Lock()
@@ -107,9 +109,7 @@ func (a *app) runCleanupScan() {
 			a.cleanup.selectedMap[f.ID] = f.Selected
 		}
 
-		// 刷新可用备份
 		a.cleanup.backups, _ = sangforclean.ListBackups("")
-
 		a.cleanup.status = cleanupStatusReady
 		a.cleanup.message = fmt.Sprintf("检测到 %d 项残留组件", len(plan.Findings))
 		a.invalidate()
@@ -118,6 +118,10 @@ func (a *app) runCleanupScan() {
 
 func (a *app) runCleanupApply() {
 	a.cleanup.mu.Lock()
+	if a.cleanup.status == cleanupStatusApplying || a.cleanup.status == cleanupStatusScanning || a.cleanup.status == cleanupStatusRestoring {
+		a.cleanup.mu.Unlock()
+		return
+	}
 	if a.cleanup.plan == nil {
 		a.cleanup.mu.Unlock()
 		return
@@ -130,10 +134,13 @@ func (a *app) runCleanupApply() {
 	a.cleanup.failedItems = 0
 	a.cleanup.rebootItems = 0
 
-	// 更新 plan 中用户的勾选状态
+	// 深拷贝 Plan，杜绝后台复核扩容与 UI 遍历发生并发竞争
+	planCopy := *a.cleanup.plan
+	planCopy.Findings = make([]sangforclean.Finding, len(a.cleanup.plan.Findings))
 	for i := range a.cleanup.plan.Findings {
-		id := a.cleanup.plan.Findings[i].ID
-		a.cleanup.plan.Findings[i].Selected = a.cleanup.selectedMap[id]
+		planCopy.Findings[i] = a.cleanup.plan.Findings[i]
+		id := planCopy.Findings[i].ID
+		planCopy.Findings[i].Selected = a.cleanup.selectedMap[id]
 	}
 
 	tmpDir := os.TempDir()
@@ -141,7 +148,7 @@ func (a *app) runCleanupApply() {
 	reportPath := filepath.Join(tmpDir, "connect-hub-cleanup-report.jsonl")
 	_ = os.Remove(reportPath)
 
-	_ = sangforclean.SavePlanToFile(planPath, a.cleanup.plan)
+	_ = sangforclean.SavePlanToFile(planPath, &planCopy)
 	a.cleanup.planPath = planPath
 	a.cleanup.reportPath = reportPath
 
@@ -150,9 +157,9 @@ func (a *app) runCleanupApply() {
 	a.invalidate()
 
 	go func() {
-		// 如果找到独立 exe，使用 ShellExecuteEx 提权执行
 		if exePath != "" {
-			args := fmt.Sprintf("--apply %s --report %s --yes --hide", planPath, reportPath)
+			// 路径加引号，防止带空格的路径解析截断
+			args := fmt.Sprintf(`--apply "%s" --report "%s" --yes --hide`, planPath, reportPath)
 			stopPoll := make(chan struct{})
 			go a.pollReportLoop(reportPath, stopPoll)
 
@@ -160,15 +167,10 @@ func (a *app) runCleanupApply() {
 			close(stopPoll)
 			a.readFinalReport(reportPath, exitCode, err)
 		} else {
-			// 开发环境下若 exe 尚未打包，走内联 apply
-			rw, _ := sangforclean.NewReportWriter(reportPath)
 			code, err := sangforclean.Apply(sangforclean.ApplyOptions{
-				Plan:       a.cleanup.plan,
+				Plan:       &planCopy,
 				ReportPath: reportPath,
 			})
-			if rw != nil {
-				_ = rw.Close()
-			}
 			a.readFinalReport(reportPath, code, err)
 		}
 	}()
@@ -176,6 +178,10 @@ func (a *app) runCleanupApply() {
 
 func (a *app) runCleanupRestore(manifestPath string) {
 	a.cleanup.mu.Lock()
+	if a.cleanup.status == cleanupStatusApplying || a.cleanup.status == cleanupStatusRestoring {
+		a.cleanup.mu.Unlock()
+		return
+	}
 	a.cleanup.status = cleanupStatusRestoring
 	a.cleanup.events = make([]sangforclean.ReportEvent, 0)
 	a.cleanup.message = "正在执行一键还原..."
@@ -191,7 +197,7 @@ func (a *app) runCleanupRestore(manifestPath string) {
 
 	go func() {
 		if exePath != "" {
-			args := fmt.Sprintf("--restore %s --report %s --hide", manifestPath, reportPath)
+			args := fmt.Sprintf(`--restore "%s" --report "%s" --hide`, manifestPath, reportPath)
 			exitCode, err := sangforclean.RunElevatedAndWait(exePath, args, true)
 			a.readFinalReport(reportPath, exitCode, err)
 		} else {
@@ -250,7 +256,6 @@ func (a *app) readFinalReport(reportPath string, exitCode int, err error) {
 	a.cleanup.mu.Lock()
 	defer a.cleanup.mu.Unlock()
 
-	// 统计结果
 	ok := 0
 	failed := 0
 	reboot := 0
@@ -286,20 +291,45 @@ func (a *app) readFinalReport(reportPath string, exitCode int, err error) {
 		a.cleanup.err = fmt.Sprintf("执行出现错误 (退出码: %d, 错误: %v)", exitCode, err)
 	}
 
-	// 刷新备份列表
 	a.cleanup.backups, _ = sangforclean.ListBackups("")
 	a.invalidate()
 }
 
 func (a *app) launchOfficialUninstaller(uninstStr string) {
-	parts := strings.Fields(uninstStr)
-	if len(parts) == 0 {
+	uninstStr = strings.TrimSpace(uninstStr)
+	if uninstStr == "" {
 		return
 	}
-	exe := strings.Trim(parts[0], `"`)
-	args := parts[1:]
+
+	var exe string
+	var args []string
+
+	// 解析带引号包裹路径的命令行
+	if strings.HasPrefix(uninstStr, `"`) {
+		endIdx := strings.Index(uninstStr[1:], `"`)
+		if endIdx != -1 {
+			exe = uninstStr[1 : endIdx+1]
+			rest := strings.TrimSpace(uninstStr[endIdx+2:])
+			if rest != "" {
+				args = strings.Fields(rest)
+			}
+		} else {
+			exe = strings.Trim(uninstStr, `"`)
+		}
+	} else {
+		parts := strings.Fields(uninstStr)
+		if len(parts) > 0 {
+			exe = parts[0]
+			args = parts[1:]
+		}
+	}
 
 	cmd := exec.Command(exe, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
-	_ = cmd.Start()
+	if err := cmd.Start(); err == nil {
+		// 释放进程句柄，避免长期泄漏
+		if cmd.Process != nil {
+			_ = cmd.Process.Release()
+		}
+	}
 }

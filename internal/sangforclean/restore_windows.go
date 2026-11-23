@@ -119,13 +119,22 @@ func RestoreBackup(manifestPath string, rw *ReportWriter) error {
 		}
 	}
 
+	exitCode := 0
+	if failedCount > 0 {
+		exitCode = 1
+	}
+
 	if rw != nil {
 		_ = rw.WriteEvent(ReportEvent{
 			Event:  "end",
 			Ok:     okCount,
 			Failed: failedCount,
-			Exit:   0,
+			Exit:   exitCode,
 		})
+	}
+
+	if failedCount > 0 {
+		return fmt.Errorf("还原过程中有 %d 项失败", failedCount)
 	}
 
 	return nil

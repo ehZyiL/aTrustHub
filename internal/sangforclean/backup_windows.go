@@ -84,7 +84,7 @@ func CreateBackup(plan *Plan, backupRootDir string) (*BackupManifest, error) {
 
 				cmd := exec.Command("reg.exe", "export", fullKey, backupDest, "/y")
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-				_ = cmd.Run() // 若项为空或受限尽量导出
+				_ = cmd.Run()
 
 				if _, err := os.Stat(backupDest); err == nil {
 					manifest.Registry = append(manifest.Registry, RegistryBackupItem{
@@ -101,7 +101,6 @@ func CreateBackup(plan *Plan, backupRootDir string) (*BackupManifest, error) {
 				continue
 			}
 
-			// 备份单文件或小目录
 			_ = backupFileOrDir(path, fileDir, backupDir, manifest)
 		} else if f.Action == ActionDeleteCert {
 			thumbprint, _ := f.Params["thumbprint"].(string)
@@ -160,12 +159,10 @@ func backupSingleFile(srcPath, fileBackupRoot, backupDir string, manifest *Backu
 		return err
 	}
 
-	// 单文件超过 200MB 跳过实体复制，仅记录哈希
 	if fi.Size() > 200*1024*1024 {
 		return nil
 	}
 
-	// 生成安全相对目标路径
 	vol := filepath.VolumeName(srcPath)
 	noVol := strings.TrimPrefix(srcPath, vol)
 	noVol = strings.TrimPrefix(noVol, `\`)
@@ -213,33 +210,38 @@ func copyFileAndHash(src, dst string) (string, error) {
 }
 
 func exportCertificate(storeName, thumbprint, destFile string) error {
-	storeW, err := windows.UTF16PtrFromString(storeName)
-	if err != nil {
-		return err
-	}
-
-	hStore, _, _ := procCertOpenSystemStoreW.Call(0, uintptr(unsafe.Pointer(storeW)))
-	if hStore == 0 {
-		return fmt.Errorf("无法打开证书存储区 %s", storeName)
-	}
-	defer procCertCloseStore.Call(hStore, 0)
-
-	var pCertContext uintptr
-	for {
-		pCertContext, _, _ = procCertEnumCertificatesInStore.Call(hStore, pCertContext)
-		if pCertContext == 0 {
-			break
+	for _, localMachine := range []bool{true, false} {
+		hStore, err := openSystemRootStore(localMachine)
+		if err != nil || hStore == 0 {
+			continue
 		}
 
-		ctx := (*windows.CertContext)(unsafe.Pointer(pCertContext))
-		certBytes := unsafe.Slice(ctx.EncodedCert, ctx.Length)
+		var pCertContext uintptr
+		found := false
+		for {
+			pCertContext, _, _ = procCertEnumCertificatesInStore.Call(hStore, pCertContext)
+			if pCertContext == 0 {
+				break
+			}
 
-		h := sha1.New()
-		h.Write(certBytes)
-		currThumb := hex.EncodeToString(h.Sum(nil))
+			ctx := (*windows.CertContext)(unsafe.Pointer(pCertContext))
+			certBytes := unsafe.Slice(ctx.EncodedCert, ctx.Length)
 
-		if strings.EqualFold(currThumb, thumbprint) {
-			return os.WriteFile(destFile, certBytes, 0644)
+			h := sha1.New()
+			h.Write(certBytes)
+			currThumb := hex.EncodeToString(h.Sum(nil))
+
+			if strings.EqualFold(currThumb, thumbprint) {
+				_ = os.WriteFile(destFile, certBytes, 0644)
+				procCertFreeCertificateContext.Call(pCertContext)
+				found = true
+				break
+			}
+		}
+
+		procCertCloseStore.Call(hStore, CERT_CLOSE_STORE_FORCE_FLAG)
+		if found {
+			return nil
 		}
 	}
 

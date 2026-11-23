@@ -11,12 +11,29 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/ehzyil/connect-hub/internal/sangforclean"
 	"golang.org/x/sys/windows"
 )
 
 const ProtocolVersion = 2
+
+var (
+	modkernel32          = windows.NewLazySystemDLL("kernel32.dll")
+	moduser32            = windows.NewLazySystemDLL("user32.dll")
+	procGetConsoleWindow = modkernel32.NewProc("GetConsoleWindow")
+	procShowWindow       = moduser32.NewProc("ShowWindow")
+)
+
+const SW_HIDE = 0
+
+func hideCurrentConsole() {
+	hwnd, _, _ := procGetConsoleWindow.Call()
+	if hwnd != 0 {
+		procShowWindow.Call(hwnd, SW_HIDE)
+	}
+}
 
 func debugLog(format string, args ...interface{}) {
 	logPath := filepath.Join(os.TempDir(), "connect-hub-cleanup.log")
@@ -194,23 +211,26 @@ func main() {
 	}
 
 	// 无参数：进入终端交互模式
-	debugLog("entering runInteractiveMode")
 	runInteractiveMode(*backupDirFlag, *yesFlag)
 }
 
 func runInteractiveMode(backupDir string, skipConfirm bool) {
+	// 如果未提权，隐藏当前未提权的控制台，直接交接给提权后的新控制台，彻底消除“双窗口”
 	if !sangforclean.IsElevated() {
-		debugLog("not elevated, requesting runas")
-		fmt.Println("正在请求管理员权限以进行深信服组件清理...")
+		debugLog("not elevated, hiding current console and spawning elevated instance")
+		hideCurrentConsole()
+
 		exe, _ := os.Executable()
-		code, err := sangforclean.RunElevatedAndWait(exe, "--interactive-run", false)
-		if err != nil {
-			debugLog("RunElevatedAndWait failed: %v", err)
-			fmt.Printf("提权未完成: %v\n", err)
-			pauseAndExit(4)
+		// 启动提权进程后立即退出自身，由提权后的全新控制台完全接管交互
+		if err := spawnElevatedAndDetach(exe, "--interactive-run"); err != nil {
+			debugLog("spawnElevatedAndDetach failed: %v", err)
+			title, _ := windows.UTF16PtrFromString("权限提示")
+			text, _ := windows.UTF16PtrFromString("需要管理员权限才能扫描和清理系统深信服残留组件。")
+			windows.MessageBox(0, text, title, windows.MB_OK|windows.MB_ICONWARNING)
+			os.Exit(4)
 		}
-		debugLog("elevated child exited with code: %d", code)
-		os.Exit(code)
+		// 提权成功发起后，普通权限的父窗口直接退出，屏幕上只留下一个提权控制台
+		os.Exit(0)
 	}
 
 	debugLog("in elevated interactive mode")
@@ -280,8 +300,41 @@ func runInteractiveMode(backupDir string, skipConfirm bool) {
 	pauseAndExit(code)
 }
 
+func spawnElevatedAndDetach(exePath string, args string) error {
+	verb, err := windows.UTF16PtrFromString("runas")
+	if err != nil {
+		return err
+	}
+	file, err := windows.UTF16PtrFromString(exePath)
+	if err != nil {
+		return err
+	}
+	params, err := windows.UTF16PtrFromString(args)
+	if err != nil {
+		return err
+	}
+	dir, err := windows.UTF16PtrFromString(filepath.Dir(exePath))
+	if err != nil {
+		return err
+	}
+
+	var sei sangforclean.SHELLEXECUTEINFOW
+	sei.CbSize = uint32(unsafe.Sizeof(sei))
+	sei.LpVerb = verb
+	sei.LpFile = file
+	sei.LpParameters = params
+	sei.LpDirectory = dir
+	sei.NShow = 1 // SW_SHOWNORMAL 正常显示新提权控制台
+
+	procShellExecuteExW := windows.NewLazySystemDLL("shell32.dll").NewProc("ShellExecuteExW")
+	ret, _, callErr := procShellExecuteExW.Call(uintptr(unsafe.Pointer(&sei)))
+	if ret == 0 {
+		return fmt.Errorf("UAC 提权被拒绝或取消: %v", callErr)
+	}
+	return nil
+}
+
 func readConsoleLine() string {
-	// 优先从控制台物理输入设备 CONIN$ 读取键盘字符，防止 Stdin 句柄异常或读到 EOF 闪退
 	conin, err := os.Open("CONIN$")
 	if err == nil {
 		defer conin.Close()
@@ -291,7 +344,6 @@ func readConsoleLine() string {
 		}
 	}
 
-	// 降级使用 os.Stdin
 	scanner := bufio.NewScanner(os.Stdin)
 	if scanner.Scan() {
 		return scanner.Text()

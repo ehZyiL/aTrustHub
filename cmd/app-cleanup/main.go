@@ -112,7 +112,7 @@ func main() {
 				os.Exit(4)
 			}
 			exe, _ := os.Executable()
-			code, err := sangforclean.RunElevatedAndWait(exe, strings.Join(os.Args[1:], " "), *hideFlag)
+			code, err := sangforclean.RunElevatedAndWait(exe, windows.ComposeCommandLine(os.Args[1:]), *hideFlag)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "提权启动失败: %v\n", err)
 			}
@@ -169,7 +169,7 @@ func main() {
 				os.Exit(4)
 			}
 			exe, _ := os.Executable()
-			code, err := sangforclean.RunElevatedAndWait(exe, strings.Join(os.Args[1:], " "), *hideFlag)
+			code, err := sangforclean.RunElevatedAndWait(exe, windows.ComposeCommandLine(os.Args[1:]), *hideFlag)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "提权失败: %v\n", err)
 			}

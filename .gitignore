@@ -14,3 +14,7 @@ appicon_windows_*.syso
 # TUN 辅助程序（由 third_party/zju-connect 编译产出，见 make helpers）
 resources/*/zju-connect-multitun
 resources/*/zju-connect-multitun.exe
+
+# 根目录本地临时构建产物
+connect-hub.exe
+connect-hub-cleanup.exe

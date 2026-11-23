@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	modshell32            = windows.NewLazySystemDLL("shell32.dll")
-	procShellExecuteExW    = modshell32.NewProc("ShellExecuteExW")
+	modshell32          = windows.NewLazySystemDLL("shell32.dll")
+	procShellExecuteExW = modshell32.NewProc("ShellExecuteExW")
 )
 
 type SHELLEXECUTEINFOW struct {

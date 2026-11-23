@@ -60,7 +60,15 @@ func Apply(opts ApplyOptions) (int, error) {
 			}
 			for _, freshF := range freshPlan.Findings {
 				if !existingIDs[freshF.ID] {
+					freshF.Selected = false // 提权新发现项一律默认不自动勾选执行，杜绝静默修改
 					opts.Plan.Findings = append(opts.Plan.Findings, freshF)
+					if rw != nil {
+						_ = rw.WriteEvent(ReportEvent{
+							Event:   "discovered",
+							ID:      freshF.ID,
+							Message: fmt.Sprintf("提权后探测到新残留: %s (%s)", freshF.Title, freshF.Detail),
+						})
+					}
 				}
 			}
 		}
@@ -239,18 +247,28 @@ func executeKillProcess(f Finding) (ReportStatus, string) {
 
 	cmd := exec.Command("taskkill.exe", "/F", "/IM", image)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	_ = cmd.Run()
-	return StatusOk, "已尝试终止进程: " + image
+	out, err := cmd.CombinedOutput()
+	outStr := string(out)
+
+	if err == nil {
+		return StatusOk, "已终止进程: " + image
+	}
+
+	// 找不到进程说明原本就已退出
+	if strings.Contains(outStr, "找不到") || strings.Contains(outStr, "not found") || strings.Contains(outStr, "128") {
+		return StatusSkipped, "进程已未在运行"
+	}
+
+	return StatusFailed, fmt.Sprintf("终止进程失败: %s (%v)", strings.TrimSpace(outStr), err)
 }
 
 func executeDeleteService(f Finding) (ReportStatus, string) {
 	name, _ := f.Params["name"].(string)
-	isDriver, _ := f.Params["isDriver"].(bool)
 	if name == "" {
 		return StatusSkipped, "缺少服务名"
 	}
 
-	// 1. 尝试停止服务
+	// 1. 尝试停止服务（非致命）
 	stopCmd := exec.Command("sc.exe", "stop", name)
 	stopCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	_ = stopCmd.Run()
@@ -265,15 +283,17 @@ func executeDeleteService(f Finding) (ReportStatus, string) {
 		return StatusOk, "服务已成功删除: " + name
 	}
 
-	if strings.Contains(outStr, "1060") {
+	if strings.Contains(outStr, "1060") { // ERROR_SERVICE_DOES_NOT_EXIST
 		return StatusSkipped, "服务已不存在"
 	}
 
-	if strings.Contains(outStr, "1072") || isDriver {
-		return StatusReboot, "已标记删除（需重启生效）"
+	// 只有明确返回 1072 (ERROR_SERVICE_MARKED_FOR_DELETE) 时才计入需重启生效
+	if strings.Contains(outStr, "1072") {
+		return StatusReboot, "服务已标记重启后删除 (SCM 1072)"
 	}
 
-	return StatusFailed, fmt.Sprintf("删除服务失败: %s (%v)", strings.TrimSpace(outStr), err)
+	// 其余错误（如拒绝访问、驱动句柄锁定等）必须如实报失败，绝不虚假假报成功
+	return StatusFailed, fmt.Sprintf("删除服务失败: %s", strings.TrimSpace(outStr))
 }
 
 func executeRemoveDevice(f Finding) (ReportStatus, string) {
@@ -284,8 +304,9 @@ func executeRemoveDevice(f Finding) (ReportStatus, string) {
 
 	cmd := exec.Command("pnputil.exe", "/remove-device", instanceId)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	if err := cmd.Run(); err != nil {
-		return StatusFailed, fmt.Sprintf("移除设备失败: %v", err)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return StatusFailed, fmt.Sprintf("移除设备失败: %s (%v)", strings.TrimSpace(string(out)), err)
 	}
 	return StatusOk, "已移除虚拟网卡设备节点"
 }
@@ -388,8 +409,18 @@ func executeDeletePolicyValue(f Finding) (ReportStatus, string) {
 
 	cmd := exec.Command("reg.exe", args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	_ = cmd.Run()
-	return StatusOk, "已清理策略项: " + val
+	out, err := cmd.CombinedOutput()
+	outStr := string(out)
+
+	if err == nil {
+		return StatusOk, "已清理策略项: " + val
+	}
+
+	if strings.Contains(outStr, "unable to find") || strings.Contains(outStr, "找不到") {
+		return StatusSkipped, "策略值已不存在"
+	}
+
+	return StatusFailed, fmt.Sprintf("清理策略项失败: %s (%v)", strings.TrimSpace(outStr), err)
 }
 
 func executeClearDosDevice(f Finding) (ReportStatus, string) {
@@ -405,9 +436,19 @@ func executeClearDosDevice(f Finding) (ReportStatus, string) {
 
 	// 2. 从 Session Manager\DOS Devices 注册表删除值
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\Session Manager\DOS Devices`, registry.SET_VALUE)
-	if err == nil {
-		_ = k.DeleteValue(letter)
-		k.Close()
+	if err != nil {
+		if err == registry.ErrNotExist {
+			return StatusSkipped, "DOS Devices 键已不存在"
+		}
+		return StatusFailed, fmt.Sprintf("打开 DOS Devices 失败: %v", err)
+	}
+	defer k.Close()
+
+	if err := k.DeleteValue(letter); err != nil {
+		if err == registry.ErrNotExist {
+			return StatusSkipped, "盘符映射已不存在"
+		}
+		return StatusFailed, fmt.Sprintf("删除盘符映射值失败: %v", err)
 	}
 
 	return StatusOk, "已清理虚拟盘符: " + letter
@@ -421,8 +462,27 @@ func executeDeleteDriverPackage(f Finding) (ReportStatus, string) {
 
 	cmd := exec.Command("pnputil.exe", "/delete-driver", inf, "/uninstall", "/force")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	_ = cmd.Run()
-	return StatusReboot, "已调用 pnputil 删除驱动包（需重启生效）"
+	out, err := cmd.CombinedOutput()
+	outStr := string(out)
+
+	if err == nil {
+		// pnputil 成功卸载驱动
+		if strings.Contains(outStr, "reboot") || strings.Contains(outStr, "重启") {
+			return StatusReboot, "驱动包已卸载（需重启生效）: " + inf
+		}
+		return StatusOk, "已成功删除驱动包: " + inf
+	}
+
+	// 驱动包仍在被活动设备节点使用或需要重启完成
+	if strings.Contains(outStr, "3010") || strings.Contains(outStr, "reboot") {
+		return StatusReboot, "驱动包已标记重启后卸载: " + inf
+	}
+
+	if strings.Contains(outStr, "not found") || strings.Contains(outStr, "找不到") {
+		return StatusSkipped, "驱动包已不存在: " + inf
+	}
+
+	return StatusFailed, fmt.Sprintf("删除驱动包失败: %s (%v)", strings.TrimSpace(outStr), err)
 }
 
 func executeDeletePath(f Finding, quarantineRoot string) (ReportStatus, string) {

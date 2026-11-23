@@ -94,11 +94,10 @@ func (a *app) runCleanupScan() {
 		plan, err := sangforclean.Scan(sangforclean.ScanOptions{})
 
 		a.cleanup.mu.Lock()
-		defer a.cleanup.mu.Unlock()
-
 		if err != nil {
 			a.cleanup.status = cleanupStatusFailed
 			a.cleanup.err = fmt.Sprintf("扫描失败: %v", err)
+			a.cleanup.mu.Unlock()
 			a.invalidate()
 			return
 		}
@@ -112,6 +111,7 @@ func (a *app) runCleanupScan() {
 		a.cleanup.backups, _ = sangforclean.ListBackups("")
 		a.cleanup.status = cleanupStatusReady
 		a.cleanup.message = fmt.Sprintf("检测到 %d 项残留组件", len(plan.Findings))
+		a.cleanup.mu.Unlock()
 		a.invalidate()
 	}()
 }
@@ -254,8 +254,6 @@ func (a *app) readFinalReport(reportPath string, exitCode int, err error) {
 	a.updateEventsFromFile(reportPath)
 
 	a.cleanup.mu.Lock()
-	defer a.cleanup.mu.Unlock()
-
 	ok := 0
 	failed := 0
 	reboot := 0
@@ -292,6 +290,7 @@ func (a *app) readFinalReport(reportPath string, exitCode int, err error) {
 	}
 
 	a.cleanup.backups, _ = sangforclean.ListBackups("")
+	a.cleanup.mu.Unlock()
 	a.invalidate()
 }
 

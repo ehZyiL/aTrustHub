@@ -39,6 +39,7 @@ var SangforKeywords = []string{
 	"ingressmgr",
 	"ingress manager",
 	"ingress_service",
+	"windivert",
 }
 
 // ExcludedProcesses 自身与受保护进程，绝对不得终止
@@ -72,6 +73,7 @@ var KnownServices = []string{
 	"SdpVnic",
 	"aTrustXtun",
 	"SfRemoveCallback",
+	"WinDivert",
 }
 
 // KnownDrivers 已知驱动文件名
@@ -86,6 +88,8 @@ var KnownDrivers = []string{
 	"SdpVnic.sys",
 	"aTrustXtun.sys",
 	"SfRemoveCallback.sys",
+	"WinDivert.sys",
+	"WinDivert64.sys",
 }
 
 // KnownProgIDs 已知的 COM / BHO ProgID

@@ -7,8 +7,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -110,6 +112,18 @@ func Scan(opts ScanOptions) (*Plan, error) {
 
 	// 10. 扫描浏览器策略
 	scanBrowserPolicies(plan)
+
+	// 11. 扫描 DriverStore 驱动包
+	scanDriverPackages(plan)
+
+	// 12. 扫描 %TEMP% 与解包临时文件
+	scanTempResiduals(plan)
+
+	// 13. 扫描 COM 与 BHO 插件
+	scanComAndBHO(plan)
+
+	// 14. 扫描防火墙残留规则
+	scanFirewallRules(plan)
 
 	return plan, nil
 }
@@ -362,10 +376,10 @@ func scanWinsock(plan *Plan) {
 					Risk:   RiskNormal,
 					Action: ActionUninstallWinsockProv,
 					Params: map[string]interface{}{
-						"keyPath":      entryKeyPath,
-						"isNameSpace":  isNSP,
-						"providerId":   hex.EncodeToString(providerIDBytes),
-						"libraryPath":  libPath,
+						"keyPath":     entryKeyPath,
+						"isNameSpace": isNSP,
+						"providerId":  hex.EncodeToString(providerIDBytes),
+						"libraryPath": libPath,
 					},
 					Selected: true,
 				})
@@ -637,6 +651,233 @@ func scanBrowserPolicies(plan *Plan) {
 				}
 			}
 			k.Close()
+		}
+	}
+}
+
+func scanDriverPackages(plan *Plan) {
+	cmd := exec.Command("pnputil.exe", "/enum-drivers")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return
+	}
+
+	lines := strings.Split(string(out), "\n")
+	var currentPublished string
+	var currentOriginal string
+	var currentProvider string
+
+	flushPackage := func() {
+		if currentPublished != "" {
+			if MatchesKeyword(currentOriginal) || MatchesKeyword(currentProvider) {
+				plan.Findings = append(plan.Findings, Finding{
+					ID:       fmt.Sprintf("drvpkg:%s", currentPublished),
+					Group:    "driverpackage",
+					Family:   "ec",
+					Title:    fmt.Sprintf("驱动包: %s", currentPublished),
+					Detail:   fmt.Sprintf("原始驱动: %s (%s)", currentOriginal, currentProvider),
+					Risk:     RiskDeep,
+					Action:   ActionDeleteDriverPackage,
+					Params:   map[string]interface{}{"inf": currentPublished},
+					Selected: false,
+				})
+			}
+		}
+		currentPublished = ""
+		currentOriginal = ""
+		currentProvider = ""
+	}
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		lower := strings.ToLower(line)
+		if strings.HasPrefix(lower, "published name") || strings.HasPrefix(line, "发布名称") {
+			flushPackage()
+			parts := strings.Split(line, ":")
+			if len(parts) >= 2 {
+				currentPublished = strings.TrimSpace(parts[1])
+			}
+		} else if strings.HasPrefix(lower, "original name") || strings.HasPrefix(line, "原始名称") {
+			parts := strings.Split(line, ":")
+			if len(parts) >= 2 {
+				currentOriginal = strings.TrimSpace(parts[1])
+			}
+		} else if strings.HasPrefix(lower, "provider name") || strings.HasPrefix(line, "提供程序名称") {
+			parts := strings.Split(line, ":")
+			if len(parts) >= 2 {
+				currentProvider = strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	flushPackage()
+}
+
+func scanTempResiduals(plan *Plan) {
+	tempDir := os.TempDir()
+	entries, err := os.ReadDir(tempDir)
+	if err == nil {
+		for _, e := range entries {
+			name := e.Name()
+			lower := strings.ToLower(name)
+			isMatch := false
+
+			// 匹配 1_*Installer.exe, 1_Sangfor*.CAB, SangforUD.exe
+			if strings.HasPrefix(lower, "1_") && (strings.Contains(lower, "sangfor") || strings.HasSuffix(lower, "installer.exe") || strings.HasSuffix(lower, ".cab")) {
+				isMatch = true
+			} else if strings.EqualFold(name, "SangforUD.exe") {
+				isMatch = true
+			}
+
+			if isMatch {
+				p := filepath.Join(tempDir, name)
+				plan.Findings = append(plan.Findings, Finding{
+					ID:       fmt.Sprintf("temp:%s", name),
+					Group:    "file",
+					Family:   "ec",
+					Title:    fmt.Sprintf("临时解包残留: %s", name),
+					Detail:   p,
+					Risk:     RiskNormal,
+					Action:   ActionDeletePath,
+					Params:   map[string]interface{}{"path": p, "isDir": e.IsDir()},
+					Selected: true,
+				})
+			}
+		}
+	}
+
+	// 扫描 %APPDATA%\EasyConnect_*
+	appData := os.Getenv("APPDATA")
+	if appData != "" {
+		if adEntries, err := os.ReadDir(appData); err == nil {
+			for _, e := range adEntries {
+				if e.IsDir() && strings.HasPrefix(strings.ToLower(e.Name()), "easyconnect_") {
+					p := filepath.Join(appData, e.Name())
+					plan.Findings = append(plan.Findings, Finding{
+						ID:       fmt.Sprintf("temp:%s", e.Name()),
+						Group:    "file",
+						Family:   "ec",
+						Title:    fmt.Sprintf("解包运行目录: %s", e.Name()),
+						Detail:   p,
+						Risk:     RiskNormal,
+						Action:   ActionDeletePath,
+						Params:   map[string]interface{}{"path": p, "isDir": true},
+						Selected: true,
+					})
+				}
+			}
+		}
+	}
+}
+
+func scanComAndBHO(plan *Plan) {
+	// 1. 扫描已知 ProgID
+	for _, progID := range KnownProgIDs {
+		keyPath := `SOFTWARE\Classes\` + progID
+		for _, view := range []struct {
+			flag uint32
+			name string
+		}{
+			{registry.WOW64_32KEY, "32"},
+			{registry.WOW64_64KEY, "64"},
+		} {
+			k, err := registry.OpenKey(registry.LOCAL_MACHINE, keyPath, registry.READ|view.flag)
+			if err == nil {
+				k.Close()
+				plan.Findings = append(plan.Findings, Finding{
+					ID:       fmt.Sprintf("com:%s_%s", progID, view.name),
+					Group:    "bho",
+					Family:   "ec",
+					Title:    fmt.Sprintf("COM ProgID (%s位): %s", view.name, progID),
+					Detail:   keyPath,
+					Risk:     RiskNormal,
+					Action:   ActionDeleteRegistry,
+					Params:   map[string]interface{}{"hive": "HKLM", "key": keyPath, "view": view.name},
+					Selected: true,
+				})
+			}
+		}
+	}
+
+	// 2. 扫描 Browser Helper Objects
+	bhoPath := `SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Browser Helper Objects`
+	for _, view := range []struct {
+		flag uint32
+		name string
+	}{
+		{registry.WOW64_32KEY, "32"},
+		{registry.WOW64_64KEY, "64"},
+	} {
+		k, err := registry.OpenKey(registry.LOCAL_MACHINE, bhoPath, registry.READ|view.flag)
+		if err != nil {
+			continue
+		}
+		clsids, _ := k.ReadSubKeyNames(-1)
+		k.Close()
+
+		for _, clsid := range clsids {
+			// 查询该 CLSID 对应的 InprocServer32
+			clsidKey := fmt.Sprintf(`SOFTWARE\Classes\CLSID\%s\InprocServer32`, clsid)
+			ck, err := registry.OpenKey(registry.LOCAL_MACHINE, clsidKey, registry.READ|view.flag)
+			if err != nil {
+				continue
+			}
+			dllPath, _, _ := ck.GetStringValue("")
+			ck.Close()
+
+			if MatchesKeyword(dllPath) {
+				fullBhoKey := bhoPath + `\` + clsid
+				plan.Findings = append(plan.Findings, Finding{
+					ID:       fmt.Sprintf("bho:%s_%s", clsid, view.name),
+					Group:    "bho",
+					Family:   "ec",
+					Title:    fmt.Sprintf("浏览器插件 BHO (%s位)", view.name),
+					Detail:   fmt.Sprintf("%s (%s)", clsid, dllPath),
+					Risk:     RiskNormal,
+					Action:   ActionDeleteRegistry,
+					Params:   map[string]interface{}{"hive": "HKLM", "key": fullBhoKey, "view": view.name},
+					Selected: true,
+				})
+			}
+		}
+	}
+}
+
+func scanFirewallRules(plan *Plan) {
+	fwPath := `SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules`
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, fwPath, registry.READ)
+	if err != nil {
+		return
+	}
+	defer k.Close()
+
+	names, err := k.ReadValueNames(-1)
+	if err != nil {
+		return
+	}
+
+	for _, name := range names {
+		val, _, err := k.GetStringValue(name)
+		if err != nil {
+			continue
+		}
+
+		if MatchesKeyword(val) || MatchesKeyword(name) {
+			plan.Findings = append(plan.Findings, Finding{
+				ID:     fmt.Sprintf("fw:%s", name),
+				Group:  "firewall",
+				Family: detectFamily(val),
+				Title:  fmt.Sprintf("防火墙残留规则: %s", name),
+				Detail: val,
+				Risk:   RiskNormal,
+				Action: ActionDeletePolicyValue,
+				Params: map[string]interface{}{
+					"hive":  "HKLM",
+					"key":   fwPath,
+					"value": name,
+				},
+				Selected: true,
+			})
 		}
 	}
 }

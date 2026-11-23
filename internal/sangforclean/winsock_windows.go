@@ -4,6 +4,7 @@ package sangforclean
 
 import (
 	"encoding/hex"
+	"fmt"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -20,53 +21,47 @@ var (
 	procWSCDeinstallProvider32  = modWs2_32.NewProc("WSCDeinstallProvider32")
 )
 
-// UninstallWinsockProvider 安全卸载 Winsock Provider（调用系统标准 SPI API，失败自动降级至 netsh 重置）
+// UninstallWinsockProvider 精准卸载单项 Winsock Provider（严禁自动全局 netsh winsock reset）
 func UninstallWinsockProvider(providerIdHex string, isNameSpace bool) error {
 	guidBytes, err := hex.DecodeString(strings.TrimSpace(providerIdHex))
 	if err != nil || len(guidBytes) != 16 {
-		// 若无法解析 GUID，通过 netsh 重置兜底
-		return NetshWinsockReset()
+		return fmt.Errorf("无效的 Provider GUID 字节: %q", providerIdHex)
 	}
 
 	guid := (*windows.GUID)(unsafe.Pointer(&guidBytes[0]))
-	failed := false
 
 	if isNameSpace {
-		ret, _, _ := procWSCUnInstallNameSpace.Call(uintptr(unsafe.Pointer(guid)))
+		ret, _, callErr := procWSCUnInstallNameSpace.Call(uintptr(unsafe.Pointer(guid)))
 		if ret != 0 {
+			// 若 64 位调用失败且存在 32 位导出，尝试 32 位视图
 			if procWSCUnInstallNameSpace32.Find() == nil {
-				ret32, _, _ := procWSCUnInstallNameSpace32.Call(uintptr(unsafe.Pointer(guid)))
+				ret32, _, callErr32 := procWSCUnInstallNameSpace32.Call(uintptr(unsafe.Pointer(guid)))
 				if ret32 != 0 {
-					failed = true
+					return fmt.Errorf("WSCUnInstallNameSpace 失败 (64bit err: %v, 32bit err: %v)", callErr, callErr32)
 				}
 			} else {
-				failed = true
+				return fmt.Errorf("WSCUnInstallNameSpace 失败: %v", callErr)
 			}
 		}
 	} else {
 		var errCode int32
-		ret, _, _ := procWSCDeinstallProvider.Call(uintptr(unsafe.Pointer(guid)), uintptr(unsafe.Pointer(&errCode)))
+		ret, _, callErr := procWSCDeinstallProvider.Call(uintptr(unsafe.Pointer(guid)), uintptr(unsafe.Pointer(&errCode)))
 		if ret != 0 {
 			if procWSCDeinstallProvider32.Find() == nil {
-				ret32, _, _ := procWSCDeinstallProvider32.Call(uintptr(unsafe.Pointer(guid)), uintptr(unsafe.Pointer(&errCode)))
+				ret32, _, callErr32 := procWSCDeinstallProvider32.Call(uintptr(unsafe.Pointer(guid)), uintptr(unsafe.Pointer(&errCode)))
 				if ret32 != 0 {
-					failed = true
+					return fmt.Errorf("WSCDeinstallProvider 失败 (errCode=%d, 64bit err: %v, 32bit err: %v)", errCode, callErr, callErr32)
 				}
 			} else {
-				failed = true
+				return fmt.Errorf("WSCDeinstallProvider 失败 (errCode=%d): %v", errCode, callErr)
 			}
 		}
-	}
-
-	// 若 SPI API 卸载失败，降级执行系统级重置
-	if failed {
-		return NetshWinsockReset()
 	}
 
 	return nil
 }
 
-// NetshWinsockReset 执行系统标准 winsock 重置
+// NetshWinsockReset 仅供外部显式调用或用户手动确认时使用，绝不自动隐式触发
 func NetshWinsockReset() error {
 	cmd := exec.Command("netsh.exe", "winsock", "reset")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}

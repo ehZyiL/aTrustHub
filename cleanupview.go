@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/ehzyil/connect-hub/internal/sangforclean"
@@ -45,6 +46,13 @@ func (a *app) maintenanceSection(c *ui.Context) {
 						a.launchOfficialUninstaller(inst.UninstallString)
 					}
 				})
+			}
+
+			if msg != "" && strings.Contains(msg, "官方卸载") {
+				ui.Text(c, "✓ "+msg).FontSize(12).TextColor(t.Success)
+			}
+			if errMsg != "" && strings.Contains(errMsg, "卸载") {
+				ui.Text(c, "⚠ "+errMsg).FontSize(12).TextColor(t.Danger)
 			}
 		} else {
 			ui.Text(c, "未检测到已注册的官方客户端主程序，或已经通过官方入口完成卸载。").

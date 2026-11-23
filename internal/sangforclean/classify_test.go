@@ -149,3 +149,58 @@ func TestClassifyWinsockEntry(t *testing.T) {
 		t.Errorf("Expected false for standard system mswsock")
 	}
 }
+
+func TestSplitUninstallString(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantExe  string
+		wantArgs string
+	}{
+		{
+			name:     "Unquoted path with spaces (EasyConnect)",
+			input:    `C:\Program Files (x86)\Sangfor\SSL\EasyConnect\Uninstall.exe`,
+			wantExe:  `C:\Program Files (x86)\Sangfor\SSL\EasyConnect\Uninstall.exe`,
+			wantArgs: "",
+		},
+		{
+			name:     "Unquoted path with spaces and args",
+			input:    `C:\Program Files (x86)\Sangfor\SSL\CSClient\VNIC\uninstall.exe /S /force`,
+			wantExe:  `C:\Program Files (x86)\Sangfor\SSL\CSClient\VNIC\uninstall.exe`,
+			wantArgs: "/S /force",
+		},
+		{
+			name:     "Quoted path with args",
+			input:    `"C:\Program Files\Sangfor\Uninstall.exe" /silent`,
+			wantExe:  `C:\Program Files\Sangfor\Uninstall.exe`,
+			wantArgs: "/silent",
+		},
+		{
+			name:     "Quoted path without args",
+			input:    `"C:\Program Files\Sangfor\Uninstall.exe"`,
+			wantExe:  `C:\Program Files\Sangfor\Uninstall.exe`,
+			wantArgs: "",
+		},
+		{
+			name:     "MsiExec command",
+			input:    `MsiExec.exe /X{12345678-ABCD-1234-ABCD-1234567890AB}`,
+			wantExe:  `MsiExec.exe`,
+			wantArgs: `/X{12345678-ABCD-1234-ABCD-1234567890AB}`,
+		},
+		{
+			name:     "Empty input",
+			input:    "",
+			wantExe:  "",
+			wantArgs: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotExe, gotArgs := SplitUninstallString(tt.input)
+			if gotExe != tt.wantExe || gotArgs != tt.wantArgs {
+				t.Errorf("SplitUninstallString(%q) = (%q, %q), want (%q, %q)", tt.input, gotExe, gotArgs, tt.wantExe, tt.wantArgs)
+			}
+		})
+	}
+}

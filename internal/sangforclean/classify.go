@@ -62,3 +62,37 @@ func ClassifyBrowserPolicyValue(valName string, valData string) bool {
 func ClassifyWinsockEntry(libraryPathOrProtocol string) bool {
 	return MatchesKeyword(libraryPathOrProtocol)
 }
+
+// SplitUninstallString 解析注册表中的卸载命令行，支持带引号路径、含空格无引号路径、.exe 分界以及参数提取
+func SplitUninstallString(raw string) (exe string, args string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", ""
+	}
+
+	// 1. 引号包裹路径: "C:\Program Files\..." /args
+	if strings.HasPrefix(raw, `"`) {
+		endIdx := strings.Index(raw[1:], `"`)
+		if endIdx != -1 {
+			exe = raw[1 : endIdx+1]
+			args = strings.TrimSpace(raw[endIdx+2:])
+			return exe, args
+		}
+		return strings.Trim(raw, `"`), ""
+	}
+
+	// 2. 查找 .exe 边界（大小写不敏感）
+	lower := strings.ToLower(raw)
+	if idx := strings.Index(lower, ".exe"); idx != -1 {
+		candidate := strings.TrimSpace(raw[:idx+4])
+		argsPart := strings.TrimSpace(raw[idx+4:])
+		return candidate, argsPart
+	}
+
+	// 3. 回退策略：按空格切分
+	parts := strings.Fields(raw)
+	if len(parts) > 0 {
+		return parts[0], strings.Join(parts[1:], " ")
+	}
+	return raw, ""
+}

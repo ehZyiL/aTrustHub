@@ -6,14 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/ehzyil/connect-hub/internal/sangforclean"
+	"golang.org/x/sys/windows"
 )
 
 func supportsCleanup() bool {
@@ -295,40 +294,57 @@ func (a *app) readFinalReport(reportPath string, exitCode int, err error) {
 }
 
 func (a *app) launchOfficialUninstaller(uninstStr string) {
-	uninstStr = strings.TrimSpace(uninstStr)
-	if uninstStr == "" {
+	exe, args := sangforclean.SplitUninstallString(uninstStr)
+	if exe == "" {
+		a.cleanup.mu.Lock()
+		a.cleanup.err = "未找到有效的卸载程序路径"
+		a.cleanup.mu.Unlock()
+		a.invalidate()
 		return
 	}
 
-	var exe string
-	var args []string
+	// 检查卸载文件是否存在（若已被手动删除则友好提示）
+	if _, statErr := os.Stat(exe); statErr != nil {
+		a.cleanup.mu.Lock()
+		a.cleanup.err = fmt.Sprintf("卸载程序不存在（%s），可直接在下方勾选残留进行清理", filepath.Base(exe))
+		a.cleanup.message = ""
+		a.cleanup.mu.Unlock()
+		a.invalidate()
+		return
+	}
 
-	// 解析带引号包裹路径的命令行
-	if strings.HasPrefix(uninstStr, `"`) {
-		endIdx := strings.Index(uninstStr[1:], `"`)
-		if endIdx != -1 {
-			exe = uninstStr[1 : endIdx+1]
-			rest := strings.TrimSpace(uninstStr[endIdx+2:])
-			if rest != "" {
-				args = strings.Fields(rest)
-			}
-		} else {
-			exe = strings.Trim(uninstStr, `"`)
-		}
+	verbRunAs, _ := windows.UTF16PtrFromString("runas")
+	verbOpen, _ := windows.UTF16PtrFromString("open")
+	filePtr, err := windows.UTF16PtrFromString(exe)
+	if err != nil {
+		a.cleanup.mu.Lock()
+		a.cleanup.err = fmt.Sprintf("路径编码失败: %v", err)
+		a.cleanup.mu.Unlock()
+		a.invalidate()
+		return
+	}
+
+	var paramsPtr *uint16
+	if args != "" {
+		paramsPtr, _ = windows.UTF16PtrFromString(args)
+	}
+	dirPtr, _ := windows.UTF16PtrFromString(filepath.Dir(exe))
+
+	// 优先以管理员权限 (runas) 拉起卸载向导，弹出系统 UAC 对话框
+	execErr := windows.ShellExecute(0, verbRunAs, filePtr, paramsPtr, dirPtr, windows.SW_SHOWNORMAL)
+	if execErr != nil {
+		// 若 runas 失败，回退尝试普通 open
+		execErr = windows.ShellExecute(0, verbOpen, filePtr, paramsPtr, dirPtr, windows.SW_SHOWNORMAL)
+	}
+
+	a.cleanup.mu.Lock()
+	if execErr != nil {
+		a.cleanup.err = fmt.Sprintf("启动官方卸载程序失败: %v", execErr)
+		a.cleanup.message = ""
 	} else {
-		parts := strings.Fields(uninstStr)
-		if len(parts) > 0 {
-			exe = parts[0]
-			args = parts[1:]
-		}
+		a.cleanup.message = fmt.Sprintf("已启动官方卸载向导: %s（请按系统弹窗提示操作）", filepath.Base(exe))
+		a.cleanup.err = ""
 	}
-
-	cmd := exec.Command(exe, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
-	if err := cmd.Start(); err == nil {
-		// 释放进程句柄，避免长期泄漏
-		if cmd.Process != nil {
-			_ = cmd.Process.Release()
-		}
-	}
+	a.cleanup.mu.Unlock()
+	a.invalidate()
 }

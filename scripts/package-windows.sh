@@ -61,6 +61,13 @@ trap 'rm -rf -- "$bundle"; rm -f -- "$icon_syso"' EXIT
 env "$go_tool" run ./cmd/appicon -icon resources/icon.png -arch "$target_arch" -out "$icon_syso"
 env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags='-H=windowsgui -s -w' -o "$bundle/connect-hub.exe" .
 rm -f -- "$icon_syso"
+# 残留清理器（控制台子系统），放在包根目录，方便用户独立双击运行或由 GUI 提权调用
+env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags='-s -w' -o "$bundle/connect-hub-cleanup.exe" ./cmd/app-cleanup
+cleanup_protocol=$("$bundle/connect-hub-cleanup.exe" --protocol-version)
+if [[ "$cleanup_protocol" != 2 ]]; then
+  printf 'Windows cleanup helper protocol mismatch: expected 2, got %s\n' "$cleanup_protocol" >&2
+  exit 1
+fi
 # worker 和抓包助手是内部程序，放进 core/，避免用户打开目录时误双击。
 env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags='-H=windowsgui -s -w' -o "$bundle/core/connect-hub-capture.exe" ./cmd/app-helper
 helper_protocol=$("$bundle/core/connect-hub-capture.exe" --protocol-version)

@@ -96,6 +96,7 @@ type app struct {
 	quitRequested atomic.Bool
 	// heartbeatOnce keeps one goroutine refreshing the helper's alive file.
 	heartbeatOnce sync.Once
+	cleanup       cleanupState
 	// Global TUN state.
 	// tunOn / tunPending are read by the background loops and written by the UI
 	// thread, so they are atomic; there is no separate mirror to keep in sync.

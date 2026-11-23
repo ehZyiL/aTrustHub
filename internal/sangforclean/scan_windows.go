@@ -862,6 +862,24 @@ func scanFirewallRules(plan *Plan) {
 			continue
 		}
 
+		lowerVal := strings.ToLower(val)
+		lowerName := strings.ToLower(name)
+
+		// 严格排除自身程序（connect-hub、connect-hub-cleanup、connect-hub-capture 等）
+		if strings.Contains(lowerVal, "connect-hub") || strings.Contains(lowerName, "connect-hub") {
+			continue
+		}
+		isSelf := false
+		for _, excl := range ExcludedProcesses {
+			if strings.Contains(lowerVal, strings.ToLower(excl)) || strings.Contains(lowerName, strings.ToLower(excl)) {
+				isSelf = true
+				break
+			}
+		}
+		if isSelf {
+			continue
+		}
+
 		if MatchesKeyword(val) || MatchesKeyword(name) {
 			plan.Findings = append(plan.Findings, Finding{
 				ID:     fmt.Sprintf("fw:%s", name),

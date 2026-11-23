@@ -8,14 +8,40 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ehzyil/connect-hub/internal/sangforclean"
+	"golang.org/x/sys/windows"
 )
 
 const ProtocolVersion = 2
 
+func debugLog(format string, args ...interface{}) {
+	logPath := filepath.Join(os.TempDir(), "connect-hub-cleanup.log")
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	msg := fmt.Sprintf(format, args...)
+	_, _ = fmt.Fprintf(f, "[%s] [pid=%d, elevated=%v] %s\n", time.Now().Format("2006-01-02 15:04:05.000"), os.Getpid(), sangforclean.IsElevated(), msg)
+}
+
 func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			debugLog("FATAL PANIC: %v", r)
+			msg := fmt.Sprintf("程序发生异常崩溃: %v\n详情见日志: %s", r, filepath.Join(os.TempDir(), "connect-hub-cleanup.log"))
+			title, _ := windows.UTF16PtrFromString("Connect Hub 清理工具异常")
+			text, _ := windows.UTF16PtrFromString(msg)
+			windows.MessageBox(0, text, title, windows.MB_OK|windows.MB_ICONERROR)
+		}
+	}()
+
+	debugLog("main started with args: %v", os.Args)
+
 	scanFlag := flag.Bool("scan", false, "只读扫描，产出 plan")
 	outFlag := flag.String("out", "", "plan 输出路径（缺省写 stdout）")
 	applyFlag := flag.String("apply", "", "执行 plan.json 文件")
@@ -40,6 +66,7 @@ func main() {
 	}
 
 	if *listBackupsFlag {
+		debugLog("executing listBackups")
 		backups, err := sangforclean.ListBackups(*backupDirFlag)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "列出备份失败: %v\n", err)
@@ -61,6 +88,7 @@ func main() {
 
 	// 还原模式
 	if *restoreFlag != "" {
+		debugLog("executing restore: %s", *restoreFlag)
 		if !sangforclean.IsElevated() {
 			if *noElevateFlag {
 				fmt.Fprintln(os.Stderr, "还原需要管理员权限且禁止自提权")
@@ -96,6 +124,7 @@ func main() {
 
 	// 扫描模式
 	if *scanFlag {
+		debugLog("executing scan")
 		plan, err := sangforclean.Scan(sangforclean.ScanOptions{})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "扫描失败: %v\n", err)
@@ -116,6 +145,7 @@ func main() {
 
 	// Apply 模式
 	if *applyFlag != "" {
+		debugLog("executing apply: %s", *applyFlag)
 		if !sangforclean.IsElevated() {
 			if *noElevateFlag {
 				fmt.Fprintln(os.Stderr, "执行清理需要管理员权限且禁止自提权")
@@ -164,20 +194,26 @@ func main() {
 	}
 
 	// 无参数：进入终端交互模式
+	debugLog("entering runInteractiveMode")
 	runInteractiveMode(*backupDirFlag, *yesFlag)
 }
 
 func runInteractiveMode(backupDir string, skipConfirm bool) {
 	if !sangforclean.IsElevated() {
+		debugLog("not elevated, requesting runas")
 		fmt.Println("正在请求管理员权限以进行深信服组件清理...")
 		exe, _ := os.Executable()
 		code, err := sangforclean.RunElevatedAndWait(exe, "--interactive-run", false)
 		if err != nil {
+			debugLog("RunElevatedAndWait failed: %v", err)
 			fmt.Printf("提权未完成: %v\n", err)
+			pauseAndExit(4)
 		}
+		debugLog("elevated child exited with code: %d", code)
 		os.Exit(code)
 	}
 
+	debugLog("in elevated interactive mode")
 	fmt.Println("====================================================")
 	fmt.Println("   Connect Hub - aTrust / EasyConnect 残留清理工具   ")
 	fmt.Println("====================================================")
@@ -185,9 +221,12 @@ func runInteractiveMode(backupDir string, skipConfirm bool) {
 
 	plan, err := sangforclean.Scan(sangforclean.ScanOptions{})
 	if err != nil {
+		debugLog("scan failed in interactive mode: %v", err)
 		fmt.Printf("扫描失败: %v\n", err)
 		pauseAndExit(1)
 	}
+
+	debugLog("scan success: %d installed, %d findings", len(plan.Installed), len(plan.Findings))
 
 	if len(plan.Installed) > 0 {
 		fmt.Println("\n【检测到官方客户端】")
@@ -213,8 +252,8 @@ func runInteractiveMode(backupDir string, skipConfirm bool) {
 
 	if !skipConfirm {
 		fmt.Print("\n是否立即执行全量备份并清理上述建议项？[y/N]: ")
-		reader := bufio.NewReader(os.Stdin)
-		input, _ := reader.ReadString('\n')
+		input := readConsoleLine()
+		debugLog("user confirmation input: %q", input)
 		input = strings.TrimSpace(strings.ToLower(input))
 		if input != "y" && input != "yes" {
 			fmt.Println("操作已取消。")
@@ -228,6 +267,7 @@ func runInteractiveMode(backupDir string, skipConfirm bool) {
 		BackupRootDir: backupDir,
 	})
 	if err != nil {
+		debugLog("apply failed: %v", err)
 		fmt.Printf("清理执行遇到错误: %v\n", err)
 	} else if code == 0 {
 		fmt.Println("\n✅ 清理完成！全部建议项已成功清除。")
@@ -240,8 +280,28 @@ func runInteractiveMode(backupDir string, skipConfirm bool) {
 	pauseAndExit(code)
 }
 
+func readConsoleLine() string {
+	// 优先从控制台物理输入设备 CONIN$ 读取键盘字符，防止 Stdin 句柄异常或读到 EOF 闪退
+	conin, err := os.Open("CONIN$")
+	if err == nil {
+		defer conin.Close()
+		scanner := bufio.NewScanner(conin)
+		if scanner.Scan() {
+			return scanner.Text()
+		}
+	}
+
+	// 降级使用 os.Stdin
+	scanner := bufio.NewScanner(os.Stdin)
+	if scanner.Scan() {
+		return scanner.Text()
+	}
+	return ""
+}
+
 func pauseAndExit(code int) {
 	fmt.Print("\n按 Enter 键退出...")
-	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+	_ = readConsoleLine()
+	debugLog("pausing complete, exiting with %d", code)
 	os.Exit(code)
 }

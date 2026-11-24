@@ -35,6 +35,10 @@ type Store struct {
 	mu       sync.Mutex
 	cfg      model.Config
 	warnings []string
+	// relayKnown serialises the read-merge-write of the attribution cache, so a
+	// concurrent save and delete of the same node cannot interleave and lose
+	// history.
+	relayKnown sync.Mutex
 }
 
 // PasswordKey is the secret key of an access point's cred.

@@ -10,6 +10,8 @@ import (
 
 	"github.com/ehzyil/connect-hub/internal/model"
 	"github.com/ehzyil/connect-hub/internal/relay"
+	"github.com/ehzyil/connect-hub/internal/routing"
+	"github.com/ehzyil/connect-hub/internal/store"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
@@ -176,5 +178,41 @@ func TestFailedRelaySessionIsStillReaped(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("the update stream was never closed after fail")
+	}
+}
+
+// R2: history must survive a later, smaller snapshot. The review's reproducer:
+// saving an empty snapshot erased the previously owned range, so a restart
+// treated the old VPN target as an ordinary direct connection.
+func TestHistoryRetainsWithdrawnOwnershipAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir, store.NewMemorySecrets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	point := model.AccessPoint{
+		ID: "r1", Name: "relay", Protocol: model.ProtocolLANRelay, Server: "192.168.1.50", Port: 12345, InPool: true,
+		Relay: &model.RelayPointOptions{Version: 1, ShareID: "share-identity-1", CertificateSHA256: strings.Repeat("ab", 32)},
+	}
+	if _, err := st.Update(func(cfg *model.Config) error { cfg.Add(point); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	source := store.RelaySource{ShareID: point.Relay.ShareID, Fingerprint: point.Relay.CertificateSHA256}
+	if err := st.SaveRelayKnown(point.ID, source, corpResources()); err != nil {
+		t.Fatal(err)
+	}
+	// The host withdraws the range, and the smaller snapshot is what gets saved.
+	if err := st.SaveRelayKnown(point.ID, source, &workeripc.ResourceSnapshot{Tunnel: "ipv4-l3"}); err != nil {
+		t.Fatal(err)
+	}
+	known, err := st.LoadRelayKnown(point.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newTestManager(t, (&fakeConnector{}).Connect, testConfig(point))
+	m.SeedRelayKnown(point.ID, known.Resources)
+	d := m.PreviewRoute(routing.Request{Network: "tcp", Address: "10.5.1.2:443", Entry: "统一代理"})
+	if d.Action == "direct" {
+		t.Fatalf("previously owned, then withdrawn resource falls back to direct after reload: %+v", d)
 	}
 }

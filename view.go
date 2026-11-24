@@ -59,6 +59,8 @@ func (a *app) view(c *ui.Context) {
 	a.syncWindowVisible()
 	// 日志回调只能读原子快照，这里在主线程算一次「日志面板是否在画」。
 	a.syncLogViewActive()
+	// 后台只写 Store；配置的发布点只有这里，主线程读写 a.cfg。
+	a.applyPendingConfigReload()
 	// 原型是暗色启动台，但颜色模式由设置里的偏好决定：
 	// 跟随系统时听系统的，浅色 / 深色则把外观固定下来。
 	c.SetTheme(a.appearanceTheme(c.Theme().Dark))

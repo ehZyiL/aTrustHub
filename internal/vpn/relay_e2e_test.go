@@ -144,7 +144,7 @@ func TestHeadlessLanRelayEndToEnd(t *testing.T) {
 	var saved *workeripc.ResourceSnapshot
 	bConnector := NewRelayConnector(RelayConnectorOptions{
 		Dial: relay.DirectDialer,
-		SaveSnapshot: func(pointID string, resources *workeripc.ResourceSnapshot) error {
+		SaveSnapshot: func(pointID string, source RelaySnapshotSource, resources *workeripc.ResourceSnapshot) error {
 			savedSnapshots++
 			saved = resources
 			return nil

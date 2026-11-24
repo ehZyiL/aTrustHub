@@ -27,6 +27,15 @@ type SessionUpdater interface {
 	Updates() <-chan SessionUpdate
 }
 
+// RelaySnapshotSource is the authenticated identity of the share a snapshot came
+// from, captured while the session was pinned at connect time. The persistence
+// hook verifies it against the stored node, so a late snapshot from a share the
+// user has since re-imported cannot be written.
+type RelaySnapshotSource struct {
+	ShareID     string
+	Fingerprint string
+}
+
 // RelayConnectorOptions wires the LAN client into the app: the original-network
 // dialer and the callback that must persist attribution before a snapshot may be
 // published.
@@ -34,7 +43,7 @@ type RelayConnectorOptions struct {
 	Dial relay.Dialer
 	// SaveSnapshot runs before the first online announcement and before every
 	// SessionUpdate. Returning an error refuses the snapshot.
-	SaveSnapshot func(pointID string, resources *workeripc.ResourceSnapshot) error
+	SaveSnapshot func(pointID string, source RelaySnapshotSource, resources *workeripc.ResourceSnapshot) error
 }
 
 // NewRelayConnector builds the importing connector for lan_relay nodes.
@@ -78,8 +87,9 @@ func connectRelay(ctx context.Context, opts RelayConnectorOptions, point model.A
 		return nil, friendlyRelayError(err)
 	}
 	raw := workerResources(state.Resources)
+	source := RelaySnapshotSource{ShareID: point.Relay.ShareID, Fingerprint: point.Relay.CertificateSHA256}
 	if opts.SaveSnapshot != nil {
-		if err := opts.SaveSnapshot(point.ID, raw); err != nil {
+		if err := opts.SaveSnapshot(point.ID, source, raw); err != nil {
 			client.Close()
 			return nil, fmt.Errorf("历史归属无法保存：%w", err)
 		}
@@ -98,6 +108,7 @@ func connectRelay(ctx context.Context, opts RelayConnectorOptions, point model.A
 		cancel:  sessCancel,
 		info:    relayInfo(point, state, raw),
 		save:    opts.SaveSnapshot,
+		source:  source,
 	}
 	s.seq.Store(1)
 	s.wg.Add(1)
@@ -160,7 +171,9 @@ type relaySession struct {
 	host    string
 	client  *relay.Client
 	token   string
-	save    func(string, *workeripc.ResourceSnapshot) error
+	save    func(string, RelaySnapshotSource, *workeripc.ResourceSnapshot) error
+	// source is the identity this session authenticated with.
+	source RelaySnapshotSource
 
 	mu    sync.RWMutex
 	state relay.SessionState
@@ -381,7 +394,7 @@ func (s *relaySession) refresh(status *relay.StatusResponse) error {
 	}
 	raw := workerResources(resp.Resources)
 	if s.save != nil {
-		if err := s.save(s.pointID, raw); err != nil {
+		if err := s.save(s.pointID, s.source, raw); err != nil {
 			return fmt.Errorf("历史归属无法保存：%w", err)
 		}
 	}

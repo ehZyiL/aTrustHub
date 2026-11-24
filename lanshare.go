@@ -778,14 +778,14 @@ func (a *app) copyLANShareCode() {
 // snapshot may be announced as usable, so a crash right after going online still
 // leaves the attribution behind: without it a known managed target could fall
 // back to the original network on the next start.
-func (a *app) saveRelaySnapshot(pointID string, resources *workeripc.ResourceSnapshot) error {
+func (a *app) saveRelaySnapshot(pointID string, ident vpn.RelaySnapshotSource, resources *workeripc.ResourceSnapshot) error {
 	if resources == nil {
 		return nil
 	}
-	source := ""
-	cfg := a.store.Config()
-	if p := cfg.Find(pointID); p != nil && p.Relay != nil {
-		source = p.Relay.CertificateSHA256 + "/" + p.Relay.ShareID
+	source := store.RelaySource{
+		ShareID:     ident.ShareID,
+		Fingerprint: ident.Fingerprint,
+		Label:       ident.Fingerprint + "/" + ident.ShareID,
 	}
 	if err := a.store.SaveRelayKnown(pointID, source, resources); err != nil {
 		// The protection gap must stay visible: the gate refuses unknown
@@ -796,15 +796,24 @@ func (a *app) saveRelaySnapshot(pointID string, resources *workeripc.ResourceSna
 		return err
 	}
 	a.mgr.SeedRelayKnown(pointID, resources)
-	if p := cfg.Find(pointID); p != nil && p.Relay != nil && !p.Relay.HistoryInitialized {
+	// The marker check reads the store, not a.cfg: this goroutine must not touch
+	// the UI-thread copy of the configuration.
+	initialized := false
+	persisted := a.store.Config()
+	if p := persisted.Find(pointID); p != nil && p.Relay != nil {
+		initialized = p.Relay.HistoryInitialized
+	}
+	if !initialized {
 		if err := a.store.SetRelayHistoryInitialized(pointID); err != nil {
 			// The protective cache exists, so the marker can be retried later;
 			// the snapshot must not be published as authorized until both steps
 			// succeeded.
 			return err
 		}
-		next := a.store.Config()
-		a.setConfig(next)
+		// The marker is visible in the panel, so the UI copy of the config has
+		// to catch up. It is re-read on the UI thread; this goroutine never
+		// writes a.cfg (see requestConfigReload).
+		a.requestConfigReload()
 	}
 	return nil
 }

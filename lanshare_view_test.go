@@ -489,7 +489,7 @@ func TestDeletingRelayNodeDropsCache(t *testing.T) {
 	a.setConfig(a.store.Config())
 	a.mgr.Apply(a.cfg)
 	point := a.cfg.Points[0]
-	if err := a.store.SaveRelayKnown(point.ID, "src", &workeripc.ResourceSnapshot{
+	if err := a.store.SaveRelayKnown(point.ID, store.RelaySource{ShareID: point.Relay.ShareID, Fingerprint: point.Relay.CertificateSHA256, Label: "src"}, &workeripc.ResourceSnapshot{
 		Tunnel:  "ipv4-l3",
 		IPRules: []workeripc.IPRule{{Min: "10.5.0.0", Max: "10.5.0.9", PortMin: 443, PortMax: 443, Protocol: "tcp"}},
 	}); err != nil {
@@ -535,11 +535,21 @@ func TestLoadRelayKnownProtectsAcrossRestart(t *testing.T) {
 		Tunnel:  "ipv4-l3",
 		IPRules: []workeripc.IPRule{{Min: "10.5.0.0", Max: "10.5.255.255", PortMin: 443, PortMax: 443, Protocol: "tcp"}},
 	}
-	if err := a.saveRelaySnapshot(point.ID, resources); err != nil {
+	ident := vpn.RelaySnapshotSource{ShareID: point.Relay.ShareID, Fingerprint: point.Relay.CertificateSHA256}
+	if err := a.saveRelaySnapshot(point.ID, ident, resources); err != nil {
 		t.Fatalf("saveRelaySnapshot: %v", err)
 	}
+	// The background hook only writes the Store and asks the UI thread to
+	// refresh; it must not touch the UI copy of the configuration itself.
+	if p := a.cfg.Points[0]; p.Relay != nil && p.Relay.HistoryInitialized {
+		t.Fatal("the background hook published the marker into the UI configuration")
+	}
+	if !a.cfgReload.Load() {
+		t.Fatal("a background config write did not request a UI reload")
+	}
+	a.applyPendingConfigReload() // what the UI thread does before rendering
 	if p := a.cfg.Points[0]; p.Relay == nil || !p.Relay.HistoryInitialized {
-		t.Fatal("history marker was not persisted after the first snapshot")
+		t.Fatal("history marker was not visible after the UI reload")
 	}
 	if a.mgr.RelayHistoryUnverified() {
 		t.Fatal("the gate should stay off after a successful cache write")
@@ -877,4 +887,92 @@ func echoListenerForTest(t *testing.T) (string, func()) {
 		}
 	}()
 	return ln.Addr().String(), func() { _ = ln.Close() }
+}
+
+// S1: the relay snapshot hook runs on a connection goroutine. It used to call
+// setConfig, replacing the UI-thread configuration while a render pass read it
+// (pointLabel and every other accessor take no lock). This is the review's
+// reproducer, kept as a regression under -race.
+func TestRelaySnapshotNeverWritesUIConfig(t *testing.T) {
+	a := testApp(t)
+	point := model.AccessPoint{
+		ID: "review-relay", Name: "review relay", Protocol: model.ProtocolLANRelay,
+		Server: "192.168.1.50", Port: 23456, InPool: true,
+		Relay: &model.RelayPointOptions{
+			Version:           1,
+			ShareID:           base64.RawURLEncoding.EncodeToString([]byte("aaaaaaaaaaaaaaaa")),
+			CertificateSHA256: strings.Repeat("ab", 32),
+		},
+	}
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Add(point)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.setConfig(a.store.Config())
+	a.mgr.Apply(a.cfg)
+	resources := &workeripc.ResourceSnapshot{
+		Tunnel:  "ipv4-l3",
+		IPRules: []workeripc.IPRule{{Min: "10.5.0.0", Max: "10.5.255.255", PortMin: 443, PortMax: 443, Protocol: "tcp"}},
+	}
+	ident := vpn.RelaySnapshotSource{ShareID: point.Relay.ShareID, Fingerprint: point.Relay.CertificateSHA256}
+	done := make(chan error, 1)
+	go func() { done <- a.saveRelaySnapshot(point.ID, ident, resources) }()
+	for {
+		// The real UI path: rendering a point label reads the configuration.
+		if got := a.pointLabel(point.ID); got != point.Name {
+			t.Fatalf("unexpected UI point name %q", got)
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Only the UI thread publishes; the hook must not have done it.
+			if p := a.cfg.Points[0]; p.Relay != nil && p.Relay.HistoryInitialized {
+				t.Fatal("the background hook published the marker itself")
+			}
+			a.applyPendingConfigReload()
+			if p := a.cfg.Points[0]; p.Relay == nil || !p.Relay.HistoryInitialized {
+				t.Fatal("the UI reload did not pick up the persisted marker")
+			}
+			return
+		default:
+		}
+	}
+}
+
+// S1: a queued reload must not roll back an edit saved after the notification,
+// because the UI thread re-reads the Store instead of accepting a captured copy.
+func TestPendingConfigReloadKeepsNewerEdits(t *testing.T) {
+	a := testApp(t)
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Add(model.AccessPoint{ID: "p1", Name: "编辑前", Protocol: model.ProtocolATrust, Server: "vpn.example.com", Port: 443, Username: "u", InPool: true})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.setConfig(a.store.Config())
+	// Background work finishes and asks for a reload...
+	a.requestConfigReload()
+	// ...but the user saves an edit before the next frame.
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		if p := cfg.Find("p1"); p != nil {
+			p.Name = "编辑后"
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	a.applyPendingConfigReload()
+	if got := a.pointLabel("p1"); got != "编辑后" {
+		t.Fatalf("UI config after reload = %q, want the newer edit", got)
+	}
+	if a.cfgReload.Load() {
+		t.Fatal("the reload flag was not consumed")
+	}
 }

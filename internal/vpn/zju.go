@@ -43,7 +43,7 @@ type ZJUOptions struct {
 	RelayDial relay.Dialer
 	// RelaySaveSnapshot persists the imported share's attribution before it is
 	// published as usable.
-	RelaySaveSnapshot func(pointID string, resources *workeripc.ResourceSnapshot) error
+	RelaySaveSnapshot func(pointID string, source RelaySnapshotSource, resources *workeripc.ResourceSnapshot) error
 }
 
 // NewZJUConnector returns a Connector that logs in with ZJU-Connect's

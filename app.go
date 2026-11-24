@@ -65,8 +65,12 @@ type app struct {
 	// configForBackground: a whole-struct reassignment while another goroutine
 	// reads a field is a data race, and Settings/Points/LocalApps are big enough
 	// to tear.
-	cfg          model.Config
-	cfgMu        sync.RWMutex
+	cfg   model.Config
+	cfgMu sync.RWMutex
+	// cfgReload asks the UI thread to re-read the Store because a background
+	// write made the in-memory copy stale. It is a flag, not a queued value: a
+	// queued snapshot could overwrite an edit the user saved in the meantime.
+	cfgReload    atomic.Bool
 	local        *localapps.Manager
 	resourceTUN  *resourceTUNController
 	localEditor  localAppDraft
@@ -987,6 +991,32 @@ func (a *app) setConfig(cfg model.Config) {
 	a.cfgMu.Lock()
 	a.cfg = cfg
 	a.cfgMu.Unlock()
+}
+
+// requestConfigReload tells the UI thread that the persisted configuration
+// changed and asks for a repaint. Background code calls this instead of writing
+// a.cfg: the UI thread owns that struct, and every reader of it (labels,
+// panels, the whole render pass) would otherwise race a background write.
+func (a *app) requestConfigReload() {
+	a.cfgReload.Store(true)
+	a.invalidate()
+}
+
+// applyPendingConfigReload runs on the UI thread before anything renders from
+// a.cfg. It re-reads the Store at that moment rather than accepting a copy
+// captured earlier, so a stale notification can never roll back a newer edit.
+func (a *app) applyPendingConfigReload() {
+	if !a.cfgReload.Swap(false) {
+		return
+	}
+	if a.store == nil {
+		return
+	}
+	next := a.store.Config()
+	a.setConfig(next)
+	if a.mgr != nil {
+		a.mgr.Apply(next)
+	}
 }
 
 // configForBackground returns a copy for goroutines that are not the UI thread.

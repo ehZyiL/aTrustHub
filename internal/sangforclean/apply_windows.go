@@ -19,10 +19,6 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-var (
-	procCertDeleteCertificateFromStore = modcrypt32.NewProc("CertDeleteCertificateFromStore")
-)
-
 // ApplyOptions 执行参数
 type ApplyOptions struct {
 	Plan          *Plan
@@ -406,29 +402,27 @@ func executeDeleteCert(f Finding) (ReportStatus, string) {
 			continue
 		}
 
-		var pCertContext uintptr
+		var prev *windows.CertContext
 		for {
-			pCertContext, _, _ = procCertEnumCertificatesInStore.Call(hStore, pCertContext)
-			if pCertContext == 0 {
+			certContext, err := windows.CertEnumCertificatesInStore(hStore, prev)
+			if err != nil || certContext == nil {
 				break
 			}
 
-			ctx := (*windows.CertContext)(unsafe.Pointer(pCertContext))
-			certBytes := unsafe.Slice(ctx.EncodedCert, ctx.Length)
-
+			certBytes := unsafe.Slice(certContext.EncodedCert, certContext.Length)
 			h := sha1.New()
 			h.Write(certBytes)
 			currThumb := hex.EncodeToString(h.Sum(nil))
 
 			if strings.EqualFold(currThumb, thumbprint) {
-				ret, _, _ := procCertDeleteCertificateFromStore.Call(pCertContext)
-				if ret != 0 {
+				if err := windows.CertDeleteCertificateFromStore(certContext); err == nil {
 					deleted = true
 				}
 				break
 			}
+			prev = certContext
 		}
-		procCertCloseStore.Call(hStore, CERT_CLOSE_STORE_FORCE_FLAG)
+		_ = windows.CertCloseStore(hStore, windows.CERT_CLOSE_STORE_FORCE_FLAG)
 	}
 
 	if deleted {

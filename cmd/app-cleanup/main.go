@@ -111,7 +111,11 @@ func main() {
 				fmt.Fprintln(os.Stderr, "还原需要管理员权限且禁止自提权")
 				os.Exit(4)
 			}
-			exe, _ := os.Executable()
+			exe, err := os.Executable()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "获取程序路径失败: %v\n", err)
+				os.Exit(1)
+			}
 			code, err := sangforclean.RunElevatedAndWait(exe, windows.ComposeCommandLine(os.Args[1:]), *hideFlag)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "提权启动失败: %v\n", err)
@@ -168,7 +172,11 @@ func main() {
 				fmt.Fprintln(os.Stderr, "执行清理需要管理员权限且禁止自提权")
 				os.Exit(4)
 			}
-			exe, _ := os.Executable()
+			exe, err := os.Executable()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "获取程序路径失败: %v\n", err)
+				os.Exit(1)
+			}
 			code, err := sangforclean.RunElevatedAndWait(exe, windows.ComposeCommandLine(os.Args[1:]), *hideFlag)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "提权失败: %v\n", err)
@@ -220,7 +228,11 @@ func runInteractiveMode(backupDir string, skipConfirm bool) {
 		debugLog("not elevated, hiding current console and spawning elevated instance")
 		hideCurrentConsole()
 
-		exe, _ := os.Executable()
+		exe, err := os.Executable()
+		if err != nil {
+			debugLog("os.Executable failed: %v", err)
+			os.Exit(1)
+		}
 		// 启动提权进程后立即退出自身，由提权后的全新控制台完全接管交互
 		if err := spawnElevatedAndDetach(exe, "--interactive-run"); err != nil {
 			debugLog("spawnElevatedAndDetach failed: %v", err)

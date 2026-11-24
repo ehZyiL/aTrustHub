@@ -216,30 +216,29 @@ func exportCertificate(storeName, thumbprint, destFile string) error {
 			continue
 		}
 
-		var pCertContext uintptr
+		var prev *windows.CertContext
 		found := false
 		for {
-			pCertContext, _, _ = procCertEnumCertificatesInStore.Call(hStore, pCertContext)
-			if pCertContext == 0 {
+			certContext, err := windows.CertEnumCertificatesInStore(hStore, prev)
+			if err != nil || certContext == nil {
 				break
 			}
+			prev = certContext
 
-			ctx := (*windows.CertContext)(unsafe.Pointer(pCertContext))
-			certBytes := unsafe.Slice(ctx.EncodedCert, ctx.Length)
-
+			certBytes := unsafe.Slice(certContext.EncodedCert, certContext.Length)
 			h := sha1.New()
 			h.Write(certBytes)
 			currThumb := hex.EncodeToString(h.Sum(nil))
 
 			if strings.EqualFold(currThumb, thumbprint) {
 				_ = os.WriteFile(destFile, certBytes, 0644)
-				procCertFreeCertificateContext.Call(pCertContext)
+				_ = windows.CertFreeCertificateContext(certContext)
 				found = true
 				break
 			}
 		}
 
-		procCertCloseStore.Call(hStore, CERT_CLOSE_STORE_FORCE_FLAG)
+		_ = windows.CertCloseStore(hStore, windows.CERT_CLOSE_STORE_FORCE_FLAG)
 		if found {
 			return nil
 		}

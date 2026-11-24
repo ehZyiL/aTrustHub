@@ -18,51 +18,31 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-var (
-	modcrypt32                      = windows.NewLazySystemDLL("crypt32.dll")
-	procCertOpenStore               = modcrypt32.NewProc("CertOpenStore")
-	procCertEnumCertificatesInStore = modcrypt32.NewProc("CertEnumCertificatesInStore")
-	procCertCloseStore              = modcrypt32.NewProc("CertCloseStore")
-	procCertGetNameStringW          = modcrypt32.NewProc("CertGetNameStringW")
-	procCertFreeCertificateContext  = modcrypt32.NewProc("CertFreeCertificateContext")
-)
-
-const (
-	CERT_STORE_PROV_SYSTEM_W        = 10
-	CERT_SYSTEM_STORE_LOCAL_MACHINE = 0x00020000
-	CERT_SYSTEM_STORE_CURRENT_USER  = 0x00010000
-	CERT_STORE_READONLY_FLAG        = 0x00008000
-	CERT_CLOSE_STORE_FORCE_FLAG     = 0x00000001
-
-	CERT_NAME_SIMPLE_DISPLAY_TYPE = 4
-	CERT_NAME_ISSUER_FLAG         = 1
-)
-
-func openSystemRootStore(localMachine bool) (uintptr, error) {
+func openSystemRootStore(localMachine bool) (windows.Handle, error) {
 	return openSystemRootStoreWithMode(localMachine, true)
 }
 
-func openSystemRootStoreWithMode(localMachine bool, readOnly bool) (uintptr, error) {
+func openSystemRootStoreWithMode(localMachine bool, readOnly bool) (windows.Handle, error) {
 	storeName, err := windows.UTF16PtrFromString("Root")
 	if err != nil {
 		return 0, err
 	}
-	flags := uintptr(CERT_SYSTEM_STORE_CURRENT_USER)
+	flags := uint32(windows.CERT_SYSTEM_STORE_CURRENT_USER)
 	if localMachine {
-		flags = uintptr(CERT_SYSTEM_STORE_LOCAL_MACHINE)
+		flags = uint32(windows.CERT_SYSTEM_STORE_LOCAL_MACHINE)
 	}
 	if readOnly {
-		flags |= uintptr(CERT_STORE_READONLY_FLAG)
+		flags |= uint32(windows.CERT_STORE_READONLY_FLAG)
 	}
 
-	hStore, _, err := procCertOpenStore.Call(
-		CERT_STORE_PROV_SYSTEM_W,
+	hStore, err := windows.CertOpenStore(
+		windows.CERT_STORE_PROV_SYSTEM_W,
 		0,
 		0,
 		flags,
 		uintptr(unsafe.Pointer(storeName)),
 	)
-	if hStore == 0 {
+	if err != nil {
 		return 0, err
 	}
 	return hStore, nil
@@ -455,40 +435,41 @@ func scanCertificates(plan *Plan) {
 			storeDesc = "CurrentUser"
 		}
 
-		var pCertContext uintptr
+		var prev *windows.CertContext
 		for {
-			pCertContext, _, _ = procCertEnumCertificatesInStore.Call(hStore, pCertContext)
-			if pCertContext == 0 {
+			certContext, err := windows.CertEnumCertificatesInStore(hStore, prev)
+			if err != nil || certContext == nil {
 				break
 			}
+			prev = certContext
 
 			// 获取 Subject
 			buf := make([]uint16, 256)
-			procCertGetNameStringW.Call(
-				pCertContext,
-				CERT_NAME_SIMPLE_DISPLAY_TYPE,
+			windows.CertGetNameString(
+				certContext,
+				windows.CERT_NAME_SIMPLE_DISPLAY_TYPE,
 				0,
-				0,
-				uintptr(unsafe.Pointer(&buf[0])),
-				uintptr(len(buf)),
+				nil,
+				&buf[0],
+				uint32(len(buf)),
 			)
 			subject := windows.UTF16ToString(buf)
 
 			// 获取 Issuer
-			procCertGetNameStringW.Call(
-				pCertContext,
-				CERT_NAME_SIMPLE_DISPLAY_TYPE,
-				CERT_NAME_ISSUER_FLAG,
-				0,
-				uintptr(unsafe.Pointer(&buf[0])),
-				uintptr(len(buf)),
+			bufIssuer := make([]uint16, 256)
+			windows.CertGetNameString(
+				certContext,
+				windows.CERT_NAME_SIMPLE_DISPLAY_TYPE,
+				windows.CERT_NAME_ISSUER_FLAG,
+				nil,
+				&bufIssuer[0],
+				uint32(len(bufIssuer)),
 			)
-			issuer := windows.UTF16ToString(buf)
+			issuer := windows.UTF16ToString(bufIssuer)
 
 			if MatchesKeyword(subject) || MatchesKeyword(issuer) {
-				certContext := (*windows.CertContext)(unsafe.Pointer(pCertContext))
-				h := sha1.New()
 				certBytes := unsafe.Slice(certContext.EncodedCert, certContext.Length)
+				h := sha1.New()
 				h.Write(certBytes)
 				thumbprint := hex.EncodeToString(h.Sum(nil))
 
@@ -509,7 +490,7 @@ func scanCertificates(plan *Plan) {
 				})
 			}
 		}
-		procCertCloseStore.Call(hStore, CERT_CLOSE_STORE_FORCE_FLAG)
+		_ = windows.CertCloseStore(hStore, windows.CERT_CLOSE_STORE_FORCE_FLAG)
 	}
 }
 

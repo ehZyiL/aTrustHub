@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // fakeFirewall is a controllable privileged executor. It records every operation
@@ -579,5 +581,129 @@ func TestReconcileCancelsPendingCreationWhenTheShareStops(t *testing.T) {
 	}
 	if journal.Find(rule.ID) != nil {
 		t.Fatalf("a late creation stayed in the journal: %+v", journal)
+	}
+}
+
+// S: the operation file is UTF-8, but Windows PowerShell 5.1 decodes Get-Content
+// with the system ANSI code page unless told otherwise, which would corrupt a
+// Chinese program path. Both directions must be explicit.
+func TestFirewallScriptUsesExplicitUTF8BothWays(t *testing.T) {
+	if strings.Contains(psFirewallScript, "Get-Content") {
+		t.Fatal("the script still reads the operation with the default encoding")
+	}
+	if !strings.Contains(psFirewallScript, "ReadAllText") || !strings.Contains(psFirewallScript, "UTF8Encoding($false)") {
+		t.Fatal("the script does not read the operation as UTF-8")
+	}
+	// The result side must stay BOM-less as well.
+	if !strings.Contains(psFirewallScript, "WriteAllText") {
+		t.Fatal("the result is not written explicitly")
+	}
+}
+
+// The operation file we hand the helper must be UTF-8 with no BOM, so the
+// explicit read above produces exactly what we marshalled.
+func TestFirewallOperationFileIsUTF8(t *testing.T) {
+	rule := firewallTestRule(23456)
+	rule.ProgramPath = `C:\Program Files\连接中心\connect-hub.exe`
+	data, err := json.Marshal(FirewallOperation{OperationID: "op", Op: FirewallOpApply, Rule: rule})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !utf8.Valid(data) {
+		t.Fatal("the operation JSON is not valid UTF-8")
+	}
+	if !bytes.HasPrefix(data, []byte("{")) {
+		t.Fatalf("the operation JSON starts with %q", data[:3])
+	}
+	if !bytes.Contains(data, []byte("连接中心")) {
+		t.Fatal("the Chinese path was not written literally")
+	}
+	// A decoder told it is UTF-8 must recover the path byte for byte.
+	if bytes.Contains(data, utf8BOM) {
+		t.Fatal("the operation file must not start with a BOM")
+	}
+	var back FirewallOperation
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatalf("decoding as UTF-8 failed: %v", err)
+	}
+	if back.Rule.ProgramPath != rule.ProgramPath {
+		t.Fatalf("path = %q", back.Rule.ProgramPath)
+	}
+}
+
+// S: deleting a rule that "does not exist yet" must not erase the record of a
+// creation that is still waiting behind the elevation prompt. The helper outlives
+// this process, so a rule can appear after we decided it was gone.
+func TestRemoveKeepsTheRecordWhileACreateIsInFlight(t *testing.T) {
+	dir := t.TempDir()
+	rule := firewallTestRule(23456)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	fake := &fakeFirewall{}
+	fake.handler = func(op FirewallOperation) (FirewallResult, error) {
+		switch op.Op {
+		case FirewallOpApply:
+			once.Do(func() { close(entered) })
+			<-release
+			return FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: FirewallCreated, State: matchingState(rule)}, nil
+		case FirewallOpDelete:
+			// The rule is not there yet: the create has not returned.
+			return FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: FirewallAbsent}, nil
+		}
+		return FirewallResult{Outcome: FirewallPresent}, nil
+	}
+	rules := NewRules(dir, fake, nil)
+	applyDone := make(chan struct{})
+	go func() {
+		_, _ = rules.Apply(context.Background(), rule)
+		close(applyDone)
+	}()
+	<-entered
+
+	// While the create is in flight, a cleanup runs (quit, source lost).
+	if err := rules.Remove(context.Background(), rule); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	journal, err := LoadFirewallJournal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := journal.Find(rule.ID)
+	if entry == nil {
+		t.Fatal("the record was dropped while a create was still in flight")
+	}
+	if entry.State == FirewallEntryConfirmed {
+		t.Fatalf("an unverified rule was confirmed: %+v", entry)
+	}
+
+	// The create now succeeds after everything asked it to go away. The record has
+	// to survive so the next start can find and delete the rule.
+	close(release)
+	<-applyDone
+	journal, err = LoadFirewallJournal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.Find(rule.ID) == nil {
+		t.Fatal("a late creation left no recovery record")
+	}
+	// And the next start recovers it: query says absent (it was deleted by the
+	// cancelled apply), so the record is cleaned up rather than leaking.
+	fake.handler = func(op FirewallOperation) (FirewallResult, error) {
+		if op.Op == FirewallOpQuery {
+			return FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: FirewallAbsent}, nil
+		}
+		return FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: FirewallRemoved}, nil
+	}
+	if _, errs := rules.Recover(context.Background(), nil); len(errs) != 0 {
+		t.Fatalf("recover: %v", errs)
+	}
+	journal, err = LoadFirewallJournal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.Find(rule.ID) != nil {
+		t.Fatal("the recovery record was not cleared after verification")
 	}
 }

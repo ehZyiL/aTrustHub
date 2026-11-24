@@ -3032,6 +3032,11 @@ func (a *app) removePoint(id string) {
 	// A relay node also leaves an attribution cache behind. Removing it is part
 	// of deleting the node; the deleted point cannot protect anything.
 	_ = a.store.DeleteRelayKnown(id)
+	// The node is gone, so nothing may keep the unknown-target gate on because of
+	// it: the user has no row left to release it from.
+	if a.mgr != nil {
+		a.mgr.BlockRelayAutoConnect(id, false)
+	}
 	// Its firewall rule (if the user approved one) belongs to the deleted share.
 	a.cancelPendingFirewallOps()
 	a.syncLanShareFirewall()

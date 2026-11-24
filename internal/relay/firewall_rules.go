@@ -36,6 +36,11 @@ type Rules struct {
 	// canceled holds operation ids whose result must be revoked on arrival: the
 	// user turned sharing off while the elevation prompt was still open.
 	canceled map[string]bool
+	// inflight counts the helper calls running right now, per rule. A delete that
+	// observes "absent" must not discard the record of a create that has not
+	// returned yet: the elevated helper outlives this process, so a rule can
+	// appear after we already decided it was gone.
+	inflight map[string]int
 }
 
 // NewRules builds the coordinator. dir is the app data directory.
@@ -43,7 +48,7 @@ func NewRules(dir string, exec FirewallExecutor, logf func(string, ...any)) *Rul
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	return &Rules{dir: dir, exec: exec, logf: logf, canceled: map[string]bool{}}
+	return &Rules{dir: dir, exec: exec, logf: logf, canceled: map[string]bool{}, inflight: map[string]int{}}
 }
 
 // Cancel marks an in-flight operation as unwanted. If it succeeds after this, the
@@ -82,7 +87,9 @@ func (r *Rules) Apply(ctx context.Context, rule FirewallRule) (FirewallResult, e
 	}
 	r.mu.Unlock()
 
+	r.beginOp(rule.ID)
 	result, err := r.exec.Run(ctx, op)
+	r.endOp(rule.ID)
 	result.OperationID = opID
 	result.Op = FirewallOpApply
 	result.Rule = rule
@@ -152,6 +159,13 @@ func (r *Rules) Remove(ctx context.Context, rule FirewallRule) error {
 	}
 	switch result.Outcome {
 	case FirewallRemoved, FirewallAbsent:
+		if r.inFlight(rule.ID) {
+			// A create for the same rule is still running (an elevation prompt the
+			// user may still answer after quitting). "Absent" is therefore not the
+			// final state: keep the record so the next start verifies it.
+			r.record(rule, rule.ID, FirewallEntryRemoving, "创建仍在进行，未确认最终状态")
+			return nil
+		}
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		journal, loadErr := LoadFirewallJournal(r.dir)
@@ -271,6 +285,30 @@ func (r *Rules) Pending() []FirewallJournalEntry {
 		}
 	}
 	return out
+}
+
+// beginOp/endOp track a running helper call, so a concurrent delete cannot
+// mistake "not there yet" for "gone for good".
+func (r *Rules) beginOp(ruleID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.inflight[ruleID]++
+}
+
+func (r *Rules) endOp(ruleID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.inflight[ruleID] <= 1 {
+		delete(r.inflight, ruleID)
+		return
+	}
+	r.inflight[ruleID]--
+}
+
+func (r *Rules) inFlight(ruleID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.inflight[ruleID] > 0
 }
 
 // wants reports whether rule is exactly one of the rules that should exist. The

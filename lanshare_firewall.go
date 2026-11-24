@@ -92,7 +92,7 @@ func (a *app) syncLanShareFirewall() {
 // would let the process exit before the rule was removed.
 func (a *app) awaitFirewallIdle(budget time.Duration) bool {
 	deadline := time.Now().Add(budget)
-	for a.fwRunning.Load() {
+	for !a.fwQueue.idle() {
 		if time.Now().After(deadline) {
 			return false
 		}
@@ -110,26 +110,67 @@ func (a *app) lanShareViewState() relay.View {
 	return a.lanShare.View()
 }
 
+// firewallQueue serialises reconciliations without a lost-wakeup window.
+//
+// The whole handover runs under one mutex: a request either sees a running worker
+// and marks it for one more pass, or it starts a new worker. There is no moment
+// where the worker has decided to stop but still looks busy to a new request.
+type firewallQueue struct {
+	mu      sync.Mutex
+	running bool
+	pending bool
+}
+
+// start reports whether the caller must launch the worker.
+func (q *firewallQueue) start() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.running {
+		q.pending = true
+		return false
+	}
+	q.running = true
+	return true
+}
+
+// more reports whether another pass is needed. A false result means the queue is
+// idle, so the next start() launches a new worker.
+func (q *firewallQueue) more() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.pending {
+		q.pending = false
+		return true
+	}
+	q.running = false
+	return false
+}
+
+// idle reports whether no worker is running.
+func (q *firewallQueue) idle() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return !q.running
+}
+
 // reconcileLanShareFirewall schedules the reconciliation off the UI thread.
 //
 // Cleanup can need elevation (deleting a rule is a privileged operation), so it
 // must never run inside a render pass or a click handler. Only one reconciliation
 // runs at a time; a request arriving while one is running is folded into the next
-// pass instead of queueing up.
-func (a *app) reconcileLanShareFirewall(view relay.View) {
-	if !a.fwRunning.CompareAndSwap(false, true) {
-		a.fwAgain.Store(true)
+// pass instead of queueing up. The worker always reads the current share state,
+// so a folded request can never be served with a stale view.
+func (a *app) reconcileLanShareFirewall(relay.View) {
+	if !a.fwQueue.start() {
 		return
 	}
 	go func() {
 		for {
-			a.doReconcileLanShareFirewall(view)
-			if !a.fwAgain.Swap(false) {
-				break
+			a.doReconcileLanShareFirewall(a.lanShareViewState())
+			if !a.fwQueue.more() {
+				return
 			}
-			view = a.lanShareViewState()
 		}
-		a.fwRunning.Store(false)
 	}()
 }
 

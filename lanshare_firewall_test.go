@@ -50,12 +50,8 @@ func installFirewall(t *testing.T, a *app, exec relay.FirewallExecutor) *relay.R
 // never blocks on it; tests do, so their assertions see the result.
 func (a *app) awaitFirewall(t *testing.T) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for a.fwRunning.Load() {
-		if time.Now().After(deadline) {
-			t.Fatal("firewall reconciliation did not finish")
-		}
-		time.Sleep(2 * time.Millisecond)
+	if !a.awaitFirewallIdle(10 * time.Second) {
+		t.Fatal("firewall reconciliation did not finish")
 	}
 }
 
@@ -313,5 +309,77 @@ func TestQuitWaitsForFirewallCleanup(t *testing.T) {
 	case <-released:
 	default:
 		t.Fatal("the delete never ran")
+	}
+}
+
+// S: the scheduler used two independent atomics, so a request arriving between
+// "no more work" and "release the running flag" was silently dropped while
+// quitting reported success. The handover is now one critical section.
+func TestFirewallQueueNeverLosesAWakeup(t *testing.T) {
+	var q firewallQueue
+	if !q.start() {
+		t.Fatal("the first request must launch a worker")
+	}
+	// A request that arrives while the worker runs must be remembered.
+	if q.start() {
+		t.Fatal("a second worker was launched")
+	}
+	if !q.more() {
+		t.Fatal("the folded request was lost")
+	}
+	if q.idle() {
+		t.Fatal("the queue claims to be idle while a pass is running")
+	}
+	// The follow-up pass ends the worker; from here a new request must launch.
+	if q.more() {
+		t.Fatal("an extra pass was scheduled")
+	}
+	if !q.idle() {
+		t.Fatal("the queue is not idle after the last pass")
+	}
+	if !q.start() {
+		t.Fatal("a request after idle did not launch a worker")
+	}
+	if q.more() {
+		t.Fatal("the last pass did not finish")
+	}
+}
+
+// The app-level queue must converge: after a burst of requests the final state is
+// applied and the queue reports idle, so quitting cannot report a false success.
+func TestFirewallSchedulerConverges(t *testing.T) {
+	a := testApp(t)
+	fake := &appFirewall{}
+	installFirewall(t, a, fake)
+	rule := firewallAppRule()
+	journal, err := relay.LoadFirewallJournal(a.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Put(a.dir, relay.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relay.FirewallEntryConfirmed}); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				a.syncLanShareFirewallIfNeeded()
+				return
+			}
+			a.reconcileLanShareFirewall(a.lanShareViewState())
+		}(i)
+	}
+	wg.Wait()
+	if !a.awaitFirewallIdle(10 * time.Second) {
+		t.Fatal("the queue never became idle")
+	}
+	journal, err = relay.LoadFirewallJournal(a.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.Find(rule.ID) != nil {
+		t.Fatal("the final cleanup request was dropped")
 	}
 }

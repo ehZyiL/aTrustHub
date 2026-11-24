@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sort"
@@ -949,6 +950,16 @@ func (a *app) saveRelaySnapshot(pointID string, ident vpn.RelaySnapshotSource, r
 	}
 	write, err := a.store.SaveRelayKnown(pointID, source, resources)
 	if err != nil {
+		if errors.Is(err, store.ErrRelayKnownStaleSource) {
+			// The node was deleted or re-imported while this session was running.
+			// Its snapshot can never be trusted for the current configuration, and
+			// turning on protection would refuse ordinary public traffic for a node
+			// the user can no longer see. Drop the callback instead.
+			if a.bus != nil {
+				a.bus.Add("app", "配置：已忽略已删除或已更换身份的分享的历史归属回调")
+			}
+			return err
+		}
 		// The protection gap must stay visible: the gate refuses unknown targets
 		// instead of pretending the history is intact.
 		if a.mgr != nil {

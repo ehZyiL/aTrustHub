@@ -396,7 +396,11 @@ func (m *Manager) Apply(cfg model.Config) {
 		}
 		m.stopEndpointLocked(id, &closes)
 		delete(m.points, id)
+		// A removed node cannot keep the unknown-target protection on: the user
+		// has no row left to release it from, so its state goes with it.
+		delete(m.autoConnectBlocked, id)
 	}
+	m.recomputeHistoryGateLocked()
 	order := m.order[:0]
 	for _, id := range m.order {
 		if _, ok := m.points[id]; ok {

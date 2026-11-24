@@ -373,3 +373,34 @@ func TestRealShareRevocationDoesNotAutoReconnect(t *testing.T) {
 		t.Fatalf("a revoked share was retried %d times", got)
 	}
 }
+
+// S: deleting a relay node must drop its protection state, otherwise the
+// unknown-target gate stays on forever with no UI row left to release it.
+func TestRemovingARelayNodeClearsItsProtection(t *testing.T) {
+	cfg := testConfig(
+		model.AccessPoint{ID: "r1", Name: "分享一", Protocol: model.ProtocolLANRelay, Server: "192.168.1.50", Port: 1, InPool: true},
+		model.AccessPoint{ID: "r2", Name: "分享二", Protocol: model.ProtocolLANRelay, Server: "192.168.1.51", Port: 2, InPool: true},
+	)
+	m := newTestManager(t, (&fakeConnector{}).Connect, cfg)
+	m.BlockRelayAutoConnect("r1", true)
+	m.BlockRelayAutoConnect("r2", true)
+	if !m.RelayHistoryUnverified() {
+		t.Fatal("the gate should be on while both nodes are unverified")
+	}
+	// Delete r1 only: the other node's protection still justifies the gate.
+	oneRemoved := testConfig(
+		model.AccessPoint{ID: "r2", Name: "分享二", Protocol: model.ProtocolLANRelay, Server: "192.168.1.51", Port: 2, InPool: true},
+	)
+	m.Apply(oneRemoved)
+	if m.RelayAutoConnectBlocked("r1") {
+		t.Fatal("a deleted node kept its auto-connect block")
+	}
+	if !m.RelayAutoConnectBlocked("r2") || !m.RelayHistoryUnverified() {
+		t.Fatal("deleting one node cleared the other's protection")
+	}
+	// Deleting the last one releases the gate.
+	m.Apply(testConfig())
+	if m.RelayHistoryUnverified() {
+		t.Fatal("the gate stayed on after every relay node was deleted")
+	}
+}

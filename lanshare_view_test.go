@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -1067,5 +1068,62 @@ func TestCorruptHistoryStaysProtectedAfterARepairSnapshot(t *testing.T) {
 	again.loadRelayKnown()
 	if again.mgr.RelayHistoryUnverified() {
 		t.Fatal("the explicit release did not persist")
+	}
+}
+
+// S: a late snapshot callback from a node that was already deleted must be
+// dropped. Treating it as "history damaged" used to turn the global protection
+// gate on for a node the user can no longer see, which then refused ordinary
+// public traffic with no way to release it.
+func TestRemovedNodeLateSnapshotDoesNotBlockPublicTraffic(t *testing.T) {
+	a := testApp(t)
+	point := model.AccessPoint{
+		ID: "relay-gone", Name: "同事分享", Protocol: model.ProtocolLANRelay,
+		Server: "192.168.1.50", Port: 23456, InPool: true,
+		Relay: &model.RelayPointOptions{
+			Version: 1, ShareID: base64.RawURLEncoding.EncodeToString([]byte("cccccccccccccccc")),
+			CertificateSHA256: strings.Repeat("ef", 32),
+		},
+	}
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Add(point)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	a.setConfig(a.store.Config())
+	a.mgr.Apply(a.cfg)
+
+	// The node is deleted while a session is still running.
+	a.removePoint(point.ID)
+	if a.mgr.RelayAutoConnectBlocked(point.ID) {
+		t.Fatal("the deleted node stayed blocked")
+	}
+	if a.mgr.RelayHistoryUnverified() {
+		t.Fatal("deleting the node left the protection gate on")
+	}
+
+	// Its late callback must not resurrect protection.
+	ident := vpn.RelaySnapshotSource{ShareID: point.Relay.ShareID, Fingerprint: point.Relay.CertificateSHA256}
+	resources := &workeripc.ResourceSnapshot{
+		Tunnel:  "ipv4-l3",
+		IPRules: []workeripc.IPRule{{Min: "10.5.0.0", Max: "10.5.255.255", PortMin: 443, PortMax: 443, Protocol: "tcp"}},
+	}
+	if err := a.saveRelaySnapshot(point.ID, ident, resources); err == nil {
+		t.Fatal("a deleted node's snapshot was accepted")
+	} else if !errors.Is(err, store.ErrRelayKnownStaleSource) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if a.mgr.RelayAutoConnectBlocked(point.ID) || a.mgr.RelayHistoryUnverified() {
+		t.Fatal("a late callback from a deleted node re-enabled protection")
+	}
+	// Ordinary unmanaged public traffic is not refused: the route decision stays
+	// "direct" instead of being turned into a gate refusal.
+	decision := a.mgr.PreviewRoute(routing.Request{Network: "tcp", Address: "203.0.113.9:443", Entry: "统一代理"})
+	if decision.Action != "direct" {
+		t.Fatalf("public traffic was blocked after the deleted node's callback: %+v", decision)
 	}
 }

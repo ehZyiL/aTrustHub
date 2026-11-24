@@ -11,7 +11,11 @@ package relay
 // which used to make a successful operation look unparseable.
 const psFirewallScript = `
 $ErrorActionPreference = 'Stop'
-$op = Get-Content -Raw -LiteralPath $env:CONNECT_HUB_FW_OP | ConvertFrom-Json
+# Read the operation as UTF-8 explicitly. The default text input decodes with the
+# system ANSI code page on Windows PowerShell 5.1, which turns a Chinese program
+# path into mojibake and makes the rule target the wrong file.
+$opText = [System.IO.File]::ReadAllText($env:CONNECT_HUB_FW_OP, (New-Object System.Text.UTF8Encoding($false)))
+$op = $opText | ConvertFrom-Json
 function Get-RuleState($name) {
   $r = Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue
   if ($null -eq $r) { return $null }

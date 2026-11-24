@@ -778,3 +778,26 @@ docker0 · 172.17.0.1 · 172.17.0.0/16（虚拟网卡，其他设备通常不可
 ```
 
 即：默认路由在隧道上时，推荐仍然落在真实局域网网卡，这正是之前会选错的那种环境。
+
+## 20. 第三轮复审 4 项问题的修复
+
+| 编号 | 问题 | 修复 | 回归（去掉修复即失败） |
+| --- | --- | --- | --- |
+| P1 [P2] | 助手读取操作 JSON 依赖默认编码；Windows PowerShell 5.1 用系统 ANSI 代码页解码，中文程序路径会变乱码 | 脚本改为 `[System.IO.File]::ReadAllText($path, (New-Object System.Text.UTF8Encoding($false)))`，与写出侧对称；Go 侧保证写入无 BOM 的 UTF-8 | `TestFirewallScriptUsesExplicitUTF8BothWays`、`TestFirewallOperationFileIsUTF8` |
+| P2 [P2] | 删除得到 `absent` 时立即清 journal，但同一规则的提权创建可能仍未返回；GUI 退出后迟到创建留下**无记录**的规则 | `Rules` 记录在途操作（`inflight`）。删除时若有同规则创建在跑，只把条目置为 `removing` 并保留，交给下次启动核对 | `TestRemoveKeepsTheRecordWhileACreateIsInFlight` |
+| P3 [P2] | 调度用两个独立原子量：`Swap(pending)` 与 `Store(running=false)` 之间存在丢唤醒窗口，退出等待可能误报完成 | 换成单一互斥的 `firewallQueue`（`start`/`more`/`idle`），「提交请求、启动任务、交还运行权」在同一临界区；worker 每轮重新读取当前状态 | `TestFirewallQueueNeverLosesAWakeup`、`TestFirewallSchedulerConverges` |
+| P4 [P2] | 节点删除后，迟到回调因 `ErrRelayKnownStaleSource` 被当作历史损坏，重新打开全局保护，而界面已无该节点可解除 | `saveRelaySnapshot` 直接丢弃失效身份的返回（只记日志）；`removePoint` 与 `Manager.Apply` 在节点消失时清除其阻断状态并重算全局门 | `TestRemovedNodeLateSnapshotDoesNotBlockPublicTraffic`、`TestRemovingARelayNodeClearsItsProtection` |
+
+### 20.1 仍然只有代码级证据
+
+- P1 的 Windows PowerShell 5.1 中文路径实测（脚本已对称读写 UTF-8，但未在实机跑过）。
+- P2 的「退出时创建仍在 UAC 等待」实机时序（单元测试用可控执行器确定性地覆盖了同一状态机）。
+- P3 的丢唤醒窗口本身（审查也未能在真实运行中复现；现在用状态机单元测试锁住语义）。
+
+### 20.2 验收
+
+```text
+go test ./...                      # 17 包全绿
+go test -race ./...                # 17 包全绿，0 DATA RACE
+GOOS=linux/windows/darwin go build ./...；go vet ./...（含 windows）
+```

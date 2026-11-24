@@ -7,6 +7,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -52,9 +54,10 @@ func (f *fakeSource) DialVPN(ctx context.Context, revision, target string) (net.
 	if fail != nil {
 		return nil, fail
 	}
-	// Mirror the real boundary: only authorized targets are recorded and
-	// dialed, so "source saw a dial" means "the share forwarded it".
-	if !strings.HasSuffix(target, ":443") || !strings.HasPrefix(target, "10.1.") {
+	// Mirror the real boundary: only targets the current snapshot authorizes are
+	// recorded and dialed, so "source saw a dial" means "the share forwarded it",
+	// and a withdrawn target is refused even if a client asks for it.
+	if !f.authorizes(target) {
 		return nil, NewError(CodeResourceDenied, "目标不在分享范围内")
 	}
 	f.mu.Lock()
@@ -82,6 +85,45 @@ func (f *fakeSource) setSnapshot(snap SourceSnapshot) {
 	case f.changes <- struct{}{}:
 	default:
 	}
+}
+
+// authorizes applies the snapshot's TCP rules to a host:port target, which is
+// the check the real strict source performs before it dials.
+func (f *fakeSource) authorizes(target string) bool {
+	host, portText, err := net.SplitHostPort(target)
+	if err != nil {
+		return false
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		return false
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.snap.Resources == nil {
+		return false
+	}
+	for _, rule := range f.snap.Resources.IPRules {
+		if rule.Protocol != "tcp" && rule.Protocol != "all" {
+			continue
+		}
+		if port < rule.PortMin || port > rule.PortMax {
+			continue
+		}
+		min, err1 := netip.ParseAddr(rule.Min)
+		max, err2 := netip.ParseAddr(rule.Max)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		if min.Is4() && max.Is4() && ip.Is4() && !ip.Less(min) && !max.Less(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeSource) dialed() []string {
@@ -138,6 +180,13 @@ type shareFixture struct {
 
 func startShareFixture(t *testing.T, token string) *shareFixture {
 	t.Helper()
+	return startShareFixtureWith(t, token, nil)
+}
+
+// startShareFixtureWith allows a test to wrap the share source, e.g. to make a
+// dial block until the client's lease is revoked.
+func startShareFixtureWith(t *testing.T, token string, wrap func(*fakeSource) Source) *shareFixture {
+	t.Helper()
 	identity, err := GenerateIdentity("127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
@@ -146,10 +195,14 @@ func startShareFixture(t *testing.T, token string) *shareFixture {
 	t.Cleanup(closeEcho)
 	source := newFakeSource(testSnapshot())
 	source.echo = echo
+	var src Source = source
+	if wrap != nil {
+		src = wrap(source)
+	}
 	shareID, _ := randomShareID()
 	server, err := StartServer(ServerOptions{
 		Identity:         identity,
-		Source:           source,
+		Source:           src,
 		Token:            token,
 		ShareID:          shareID,
 		ServerInstanceID: "instance-test",

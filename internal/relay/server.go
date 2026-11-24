@@ -114,6 +114,12 @@ func StartServer(opts ServerOptions) (*Server, error) {
 		tokenSHA: tokenDigest(opts.Token),
 		stopCh:   make(chan struct{}),
 	}
+	// A lease that stops being valid takes its client's tunnels and pending
+	// work with it, whichever path noticed the expiry.
+	s.clients.onEvict = func(c *client) {
+		c.cancel()
+		s.conns.stopClient(c.token)
+	}
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("/v1/sessions", s.handleSessions)
 	s.mux.HandleFunc("/v1/sessions/current", s.handleSessionCurrent)
@@ -298,7 +304,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, serr)
 		return
 	}
-	remaining := s.clients.touch(c, time.Now())
+	remaining, ok := s.clients.touch(c, time.Now())
+	if !ok {
+		writeError(w, NewError(CodeInvalidCredentials, "客户端会话已过期，请重新认证"))
+		return
+	}
 	resp := StatusResponse{
 		Version:          ProtocolVersion,
 		ShareID:          s.shareID,
@@ -394,10 +404,14 @@ func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	ctx, cancel := context.WithTimeout(r.Context(), ControlTimeout)
+	ctx, cancel := context.WithTimeout(c.ctx, ControlTimeout)
 	defer cancel()
 	answer, err := s.source.ExchangeDNS(ctx, snap.Revision, query)
 	if err != nil {
+		if c.ctx.Err() != nil {
+			writeError(w, NewError(CodeInvalidCredentials, "客户端会话已过期，请重新认证"))
+			return
+		}
 		writeError(w, err)
 		return
 	}
@@ -421,8 +435,8 @@ func (s *Server) handleSessionCurrent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	// Removing the lease also cancels its pending dials and closes its tunnels.
 	s.clients.remove(c.token)
-	s.conns.stopClient(c.token)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -464,32 +478,35 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	entry, err := s.conns.acquire(c.token)
+	entry, err := s.conns.acquire(c.token, snap.Epoch)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	defer s.conns.release(entry)
 
-	// The dial is bound to the share's lifecycle, not to this request: a
-	// revocation must abort a dial that has not completed yet, otherwise a late
-	// success would become a tunnel after 关闭共享.
-	ctx, cancel := context.WithTimeout(s.root, DialTimeout+TLSHandshakeTimeout)
+	// The dial is bound to the lease and to the share's lifecycle, not to this
+	// request: a revocation or an expired lease must abort a dial that has not
+	// completed yet, otherwise a late success would become a tunnel after the
+	// credential is gone.
+	ctx, cancel := context.WithTimeout(c.ctx, DialTimeout+TLSHandshakeTimeout)
 	upstream, err := s.source.DialVPN(ctx, snap.Revision, target)
 	cancel()
 	if err != nil {
-		if errors.Is(err, context.Canceled) || s.isStopped() {
+		switch {
+		case c.ctx.Err() != nil:
+			writeError(w, NewError(CodeInvalidCredentials, "客户端会话已过期，请重新认证"))
+		case errors.Is(err, context.Canceled) || s.isStopped():
 			writeError(w, NewError(CodeShareClosed, "分享已关闭"))
-			return
+		default:
+			writeError(w, err)
 		}
-		writeError(w, err)
 		return
 	}
-	entry.attach(upstream)
-
-	if s.isStopped() {
-		_ = upstream.Close()
-		writeError(w, NewError(CodeShareClosed, "分享已关闭"))
+	if !entry.attach(upstream) {
+		// The generation was retired or the lease was revoked while dialing;
+		// attach already closed the upstream connection.
+		s.writeRetiredError(w)
 		return
 	}
 
@@ -504,7 +521,10 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	down = WrapBuffered(down, buf.Reader)
-	entry.attach(down)
+	if !entry.attach(down) {
+		_ = down.Close()
+		return
+	}
 	_ = down.SetDeadline(time.Time{})
 
 	// A successful CONNECT response carries no Content-Length or
@@ -572,8 +592,10 @@ func relayTunnel(down, up net.Conn) {
 
 // ---- snapshot, shutdown --------------------------------------------------
 
-// snapshot reads the source's current scope, with a short cache so a burst of
-// requests cannot turn into a burst of VPN reads.
+// snapshot returns the authorized generation, with a short cache so a burst of
+// requests cannot turn into a burst of VPN reads. Any read that discovers a new
+// generation commits it through commitLocked, so revocation is never skipped
+// because a different request already refreshed the cache.
 func (s *Server) snapshot(ctx context.Context) (SourceSnapshot, error) {
 	s.snapMu.Lock()
 	defer s.snapMu.Unlock()
@@ -582,16 +604,42 @@ func (s *Server) snapshot(ctx context.Context) (SourceSnapshot, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, ControlTimeout)
 	defer cancel()
-	snap, err := s.source.Snapshot(ctx)
+	next, err := s.source.Snapshot(ctx)
 	if err != nil {
 		return SourceSnapshot{}, err
 	}
-	if err := snap.Validate(); err != nil {
+	if err := next.Validate(); err != nil {
 		return SourceSnapshot{}, err
 	}
-	s.snap = snap
+	s.commitLocked(next)
+	return s.snap, nil
+}
+
+// commitLocked publishes a snapshot as the authorized generation. The comparison
+// is always against the last committed snapshot, never against a fresh read:
+// re-reading the source after a change notification returns the new version and
+// would make the change look like a no-op.
+//
+// A generation switch retires the previous generation's tunnels before the new
+// snapshot becomes visible, so an in-flight dial either finishes under the old
+// generation and is closed, or is refused as stale.
+func (s *Server) commitLocked(next SourceSnapshot) {
+	cur := s.snap
+	if cur.Revision != "" {
+		if next.Epoch == cur.Epoch && next.Revision == cur.Revision {
+			s.snapAt = time.Now()
+			return
+		}
+		if next.Epoch < cur.Epoch {
+			// A stale answer must not roll the share back.
+			s.snapAt = time.Now()
+			return
+		}
+		s.logf("分享资源已更新（代次 %d），断开旧业务连接", next.Epoch)
+		s.conns.retireBefore(next.Epoch)
+	}
+	s.snap = next
 	s.snapAt = time.Now()
-	return snap, nil
 }
 
 func (s *Server) invalidateSnapshot() {
@@ -610,19 +658,19 @@ func (s *Server) watchChanges() {
 		case <-s.stopCh:
 			return
 		case <-s.source.Done():
+			// The source is gone: no generation is authorized any more, so no
+			// business connection may keep running on the old one.
 			s.invalidateSnapshot()
+			s.conns.closeAll()
 			return
 		case <-s.source.Changes():
-			before, _ := s.snapshot(s.root)
 			s.invalidateSnapshot()
-			after, err := s.snapshot(s.root)
-			if err != nil {
-				s.logf("分享资源刷新失败：%v", err)
-				continue
-			}
-			if after.Epoch != before.Epoch || after.Revision != before.Revision {
-				s.logf("分享资源已更新（代次 %d），断开旧业务连接", after.Epoch)
-				s.conns.stopAll()
+			if _, err := s.snapshot(s.root); err != nil {
+				// The new authorization cannot be read, so the old one may
+				// already be void. Stop carrying business traffic and keep the
+				// control leases so clients can refresh when it recovers.
+				s.logf("分享资源刷新失败，暂停新授权：%v", err)
+				s.conns.closeAll()
 			}
 		}
 	}
@@ -632,6 +680,15 @@ func (s *Server) isStopped() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stopped
+}
+
+// writeRetiredError distinguishes a permanent stop from a superseded generation.
+func (s *Server) writeRetiredError(w http.ResponseWriter) {
+	if s.isStopped() {
+		writeError(w, NewError(CodeShareClosed, "分享已关闭"))
+		return
+	}
+	writeError(w, NewError(CodeStaleResources, "分享资源已更新，请刷新后重试"))
 }
 
 // ActiveClients is the number of live client leases, not TCP connections.

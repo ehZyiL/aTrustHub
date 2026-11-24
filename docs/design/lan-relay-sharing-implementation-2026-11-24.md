@@ -623,7 +623,7 @@ go test -race ./internal/vpn -run 'Relay|Headless|Seed'  通过
 
 ### 17.1 逐项修复与证据
 
-| 编号 | 修复 | 回归证据（`e888e47` 上失败、现在通过） |
+| 编号 | 修复 | 回归证据（回归测试；哪些在修复前确实失败见 §17.4） |
 | --- | --- | --- |
 | S1 | `saveRelaySnapshot` 不再调用 `setConfig`：只写 Store 并 `requestConfigReload()`；UI 线程在 `view()` 里 `applyPendingConfigReload()` 重新读 `Store.Config()` 后发布 | `TestRelaySnapshotNeverWritesUIConfig`（`-race`）、`TestPendingConfigReloadKeepsNewerEdits`；原审查复现在 `e888e47` 上给出 3 条 DATA RACE |
 | S2 | 规则改由已提权的 `connect-hub-capture.exe` 一次性模式执行：结构化 JSON 参数、校验调用方父进程身份、只接受本程序规则名前缀、读回完整属性才算成功 | `TestFirewallRuleStateVerifiesEveryAttribute`、`TestFirewallOperationIsAClosedSet`、`TestFirewallRuleAcceptsSpacesAndChinesePaths`、`TestFirewallResultJSONRoundTrip`；`GOOS=windows go build/vet/test -c` 通过 |
@@ -663,10 +663,25 @@ GOOS=windows go test -c ./  ./internal/relay     # 交叉编译测试二进制�
 git diff --check
 ```
 
-用于证明「修复前确实失败」的证据：把仓库回到 `e888e47` / `49fb2e3` / `369b09b` 的
-worktree 上运行对应回归，得到与原审查一致的结果（stays Online、terminal 变成可重连、
-`Action: direct`、新代次 `share_closed`、旧流仍可读写、租约清零后隧道仍可用），
-修复后同一批用例通过。审查报告里 8 个 `/tmp` overlay 已转成仓库内测试，不再依赖临时文件。
+用于证明「修复前确实失败」的证据（在 `e888e47` / `49fb2e3` / `369b09b` 的 git worktree
+上运行对应回归，不是推断）：
+
+| 回归 | 旧树结果 |
+| --- | --- |
+| `TestDeadRelaySessionLeavesOnlineWithoutUpdates` | `e888e47`：超时，会话结束仍 Online |
+| `TestFriendlyRelayErrorKeepsTerminalClassification` | `e888e47`：`share_closed` 变成可重连 |
+| `TestFailedRelaySessionIsStillReaped` | `e888e47`：更新流从未关闭 |
+| `TestHistoryRetainsWithdrawnOwnershipAcrossRestart` | `e888e47`：`Action: direct` |
+| `TestReviewRelaySnapshotConfigRace`（审查原始复现） | `e888e47`：3 条 DATA RACE |
+| `TestResourceChangeKeepsServingTheNewGeneration` | `49fb2e3`：新代次 CONNECT 返回 `share_closed` |
+| `TestResourceChangeClosesTunnelsWhenCacheExpired` | `49fb2e3`：撤权后旧流仍可读写 |
+| `TestExpiredLeaseClosesItsTunnels` | `49fb2e3`：租约清零后旧流仍可读写 |
+| `TestReconnectResetsUpdateSequence` | 去掉 `updateSeq = 0` 后：新会话首条更新被丢弃 |
+
+其余新增用例（R3 迟到拨号、R4 请求抢先刷新、R5 槽位/重认证/多客户端、R1 监听退出与真实
+connector 终止路径、R2 门控重算与容量、S2 路径与 JSON、S3 生命周期矩阵）是在修复后补写的
+验收覆盖，用于锁住当前行为，**不声称曾在旧树上失败**。审查报告里 8 个 `/tmp` overlay 已转成
+仓库内测试，不再依赖临时文件。
 审查提供的 R3 复现脚本以 `conns.stopped == true` 作为「已处理」的等待条件，
 该条件本身编码了缺陷，修复后它不再成立；对应的行为断言由
 `TestResourceChangeKeepsServingTheNewGeneration` 覆盖。

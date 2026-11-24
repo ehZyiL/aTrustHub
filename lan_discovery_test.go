@@ -677,3 +677,131 @@ func TestAcceptanceOwnShareIsFilteredByAddress(t *testing.T) {
 		t.Fatalf("远端同名分享被误过滤：%d", got)
 	}
 }
+
+// End-to-end over real sockets: A publishes with the production backend, B
+// browses with it, joins with A's share code, and B's relay session goes online.
+// This is the closest a single machine gets to the two-computer acceptance run.
+func TestLiveDiscoveryJoinEndToEnd(t *testing.T) {
+	if testing.Short() {
+		t.Skip("短模式跳过真实组播端到端")
+	}
+	iface := localLANAddress(t)
+
+	// ---- A: the sharing host -------------------------------------------------
+	a := testApp(t)
+	echo, closeEcho := echoListenerForTest(t)
+	t.Cleanup(closeEcho)
+	installLANShareWith(t, a, &appTestSink{names: map[string]string{"p1": "公司 VPN"}, echo: echo}, lanAddresses{})
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Add(model.AccessPoint{ID: "p1", Name: "公司 VPN", Protocol: model.ProtocolATrust,
+			Server: "vpn.example.com", Port: 443, Username: "u", InPool: true})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.setConfig(a.store.Config())
+	a.mgr.Apply(a.cfg)
+	a.setupLANDiscovery()
+	t.Cleanup(a.shutdownLANDiscovery)
+	if err := a.lanShare.Enable(context.Background(), relay.EnableOptions{
+		PointID: "p1", InterfaceName: iface.Name, PreferredIPv4: iface.IPv4,
+		Discovery: true, DiscoveryName: "端到端分享",
+	}); err != nil {
+		t.Fatalf("A 开启共享失败：%v", err)
+	}
+	waitAppShare(t, a, relay.StateRunning)
+	code, err := a.lanShare.ShareCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitCondition(t, "A 已发布", func() bool {
+		return a.discoveryStatus().State == discovery.StatusPublished
+	})
+
+	// ---- B: the colleague ----------------------------------------------------
+	b := testApp(t)
+	b.mgr.Close()
+	b.mgr = vpn.NewManager(
+		vpn.NewProtocolConnector(vpn.ZJUOptions{
+			DataDir:           t.TempDir(),
+			RelayDial:         relay.DirectDialer,
+			RelaySaveSnapshot: b.saveRelaySnapshot,
+		}),
+		b.credentials, b.bus, b.invalidateCoalesced,
+	)
+	t.Cleanup(b.mgr.Close)
+	b.mgr.Apply(b.cfg)
+	b.setupLANDiscovery()
+	t.Cleanup(b.shutdownLANDiscovery)
+	b.openRelayImport()
+
+	waitCondition(t, "B 发现 A 的分享", func() bool {
+		b.drainLANDiscovery()
+		for _, cand := range b.lanDisc.ui.cands {
+			if cand.ShareID == a.lanShare.Settings().ShareID {
+				return true
+			}
+		}
+		return false
+	})
+
+	// Join through the discovered candidate with the real share code.
+	b.drainLANDiscovery()
+	var cand discovery.Candidate
+	for _, c := range b.lanDisc.ui.cands {
+		if c.ShareID == a.lanShare.Settings().ShareID {
+			cand = c
+		}
+	}
+	b.relayImport.pinned = cand
+	b.relayImport.pinnedKey = cand.Key()
+	b.relayImport.tab = 1
+	b.relayImport.text = code
+	b.parseRelayImport()
+	if err := b.relayImport.err; err != "" {
+		t.Fatalf("口令解析失败：%s", err)
+	}
+	b.submitRelayImport()
+	points := relayPoints(b)
+	if len(points) != 1 {
+		t.Fatalf("加入后没有节点：%+v", points)
+	}
+	point := points[0]
+	if point.Server != cand.Address || point.Port != cand.Port {
+		t.Fatalf("节点地址不是发现到的 endpoint：%+v vs %+v", point, cand)
+	}
+	waitCondition(t, "B 的会话上线", func() bool {
+		v, ok := b.mgr.View(point.ID)
+		return ok && v.State == vpn.StateOnline
+	})
+}
+
+// Review: the browsing interface list was built only when a share controller
+// existed, so a machine that had never shared anything reported "no LAN
+// interface" and could not discover at all - the entire colleague side.
+func TestAcceptanceBrowsingWorksWithoutSharing(t *testing.T) {
+	a := testApp(t) // no lanShare controller at all
+	backend := newTestDiscoveryBackend()
+	a.discoveryBackend = backend
+	a.setupLANDiscovery()
+	t.Cleanup(a.shutdownLANDiscovery)
+
+	ifaces := a.browseInterfaces("")
+	if len(ifaces) == 0 {
+		t.Skip("本机没有局域网网卡，跳过（需实机覆盖）")
+	}
+	a.openLANDiscovery()
+	if a.lanDisc.ui.err != "" {
+		t.Fatalf("没有开启共享也应能浏览：%s", a.lanDisc.ui.err)
+	}
+	a.openRelayImport()
+	if a.relayImport.tab != 0 {
+		t.Fatal("有网卡时应当默认进入发现页")
+	}
+	backend.mu.Lock()
+	browsed := len(backend.browsed)
+	backend.mu.Unlock()
+	if browsed == 0 {
+		t.Fatal("浏览会话没有启动")
+	}
+}

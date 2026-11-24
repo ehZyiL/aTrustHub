@@ -223,3 +223,24 @@ env GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./...
 | R2-3 [P2] | 标准 | 过期 ticker 是独立 goroutine，`Close` 之后仍可能推送一次快照到 UI | `TestBrowserDoesNotEmitAfterClose`（去掉守卫时仍推送 1 次） | `publish` 检查关闭状态；顺带删除未等待的 `tickerDone` |
 | R2-4 [P3] | 标准 | 后端返回 `(nil, nil)` 时被当成发布成功，面板显示「正在发布」但什么都没注册 | `TestPublisherRejectsANilRegistration` | 视为失败并进入退避 |
 | R2-5 [P2] | 规格 | 列表不过滤本机自己的实例（§9.1.5） | `TestAcceptanceOwnShareIsFilteredByAddress` | 仅当 sid 相同**且**地址是本机网卡地址时过滤；同 sid 的远端仍显示 |
+
+### 11.3 第三轮（端到端与验收矩阵）
+
+本轮新增两个真实链路用例，并因此发现一个会让整个同事端失效的缺陷。
+
+| 编号 | 轴 | 问题 | 证据 | 修复 |
+| --- | --- | --- | --- | --- |
+| R3-1 [P1] | 规格 | `browseInterfaces` 只在「本机也开启过共享」时才枚举网卡，于是**从未分享过的同事端一律显示「没有可用的局域网网卡」**，发现功能对客户端完全不可用 | `TestAcceptanceBrowsingWorksWithoutSharing`；端到端用例先复现「B tab=1、err=没有可用的局域网网卡」 | 网卡列表直接取自本机地址枚举，不再依赖共享控制器 |
+| R3-2 | 证据 | 缺少「发现 → 加入 → 真实会话」的链路证据 | 新增 `TestLiveDiscoveryJoinEndToEnd`：A 用生产后端发布并监听真实端口，B 用生产后端浏览、用 A 的口令加入、B 的中继会话真实上线 | — |
+
+`TestLiveDiscoveryJoinEndToEnd` 覆盖的链路：
+
+```text
+A: Enable(Discovery=true) → Running → Publisher → 真实 UDP 组播
+B: 打开发现页 → 真实组播收到 PTR/SRV/TXT/A → 候选出现
+B: 固定候选 + 粘贴口令 → sid/host/port 校验 → 写入节点 → 真实 TLS 连接 A 的分享服务
+B: mgr.View(point).State == online
+```
+
+单机跑通说明：协议、组播收发、候选装配、口令核对、导入事务与真实中继会话能串起来。
+它**不**替代两台真机的验收（跨机器、系统防火墙、macOS 权限仍属 §9 的未验证项）。

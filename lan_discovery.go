@@ -277,10 +277,9 @@ func (a *app) retryLANDiscoveryPreference() error {
 // and point-to-point links are not browsing targets by default: they are what
 // makes "I found my own VPN" a bug report.
 func (a *app) browseInterfaces(choice string) []discovery.Interface {
-	var source []relay.Interface
-	if a.lanShare != nil {
-		source = lanAddresses{}.LANCandidates()
-	}
+	// Browsing must work on a machine that never shared anything: the address
+	// list comes from the machine, not from the share controller.
+	source := lanAddresses{}.LANCandidates()
 	seen := make(map[string]bool)
 	var out []discovery.Interface
 	for _, cand := range source {

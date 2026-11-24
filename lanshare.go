@@ -333,6 +333,21 @@ func (a *app) openLANShare() {
 	a.invalidate()
 }
 
+// openLANShareFor opens the panel with one access point preselected, which is
+// what the per-point detail action does.
+func (a *app) openLANShareFor(pointID string) {
+	a.openLANShare()
+	d := &a.lanShareUI
+	if pointID != "" {
+		d.pointID = pointID
+		if p := a.cfg.Find(pointID); p != nil {
+			d.interfaceName = ""
+			_ = p
+		}
+	}
+	a.invalidate()
+}
+
 // shareablePoints lists the access points a share may bind.
 func (a *app) shareablePoints() []vpn.View {
 	var out []vpn.View

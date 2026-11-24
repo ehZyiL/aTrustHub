@@ -14,7 +14,9 @@ import (
 
 	"github.com/ehzyil/connect-hub/internal/model"
 	"github.com/ehzyil/connect-hub/internal/relay"
+	"github.com/ehzyil/connect-hub/internal/routing"
 	"github.com/ehzyil/connect-hub/internal/store"
+	"github.com/ehzyil/connect-hub/internal/vpn"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
@@ -72,6 +74,28 @@ func withLANShare(t *testing.T, a *app) *testRelaySink {
 		_ = ctrl.Shutdown(ctx)
 	})
 	return sink
+}
+
+// reopenTestApp builds a second app over an existing data directory, which is
+// what an application restart looks like to the manager and the store.
+func reopenTestApp(t *testing.T, dir string) *app {
+	t.Helper()
+	st, err := store.Open(dir, store.NewMemorySecrets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &app{store: st, dir: dir, bus: vpn.NewLogBus(50), icon: loadAppIcon()}
+	a.cfg = st.Config()
+	a.mgr = vpn.NewManager(
+		func(context.Context, model.AccessPoint, vpn.Credentials) (vpn.Session, error) {
+			return stubSession{ip: "10.10.1.23"}, nil
+		},
+		a.credentials, a.bus, a.invalidate,
+	)
+	t.Cleanup(a.mgr.Close)
+	a.mgr.Apply(a.cfg)
+	withLANShare(t, a)
+	return a
 }
 
 func sampleShareCode() string {
@@ -475,5 +499,67 @@ func TestDeletingRelayNodeDropsCache(t *testing.T) {
 	a.setConfig(a.store.Config())
 	if len(a.cfg.Points) != 0 {
 		t.Fatal("node was not deleted")
+	}
+}
+
+// TestLoadRelayKnownProtectsAcrossRestart is the B-side restart requirement: a
+// cached managed target must not become "direct" after the app restarts, and a
+// cache that disappeared must turn the protection gate on instead of silently
+// letting it through.
+func TestLoadRelayKnownProtectsAcrossRestart(t *testing.T) {
+	a := testApp(t)
+	withLANShare(t, a)
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		point := model.AccessPoint{
+			Name: "同事分享", Protocol: model.ProtocolLANRelay, Server: "192.168.1.50",
+			Port: 23456, InPool: true,
+			Relay: &model.RelayPointOptions{
+				Version: 1, ShareID: base64.RawURLEncoding.EncodeToString([]byte("aaaaaaaaaaaaaaaa")),
+				CertificateSHA256: strings.Repeat("ab", 32),
+			},
+		}
+		cfg.Add(point)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.setConfig(a.store.Config())
+	a.mgr.Apply(a.cfg)
+	point := a.cfg.Points[0]
+
+	// First run: a verified snapshot is stored and the marker is flipped.
+	resources := &workeripc.ResourceSnapshot{
+		Tunnel:  "ipv4-l3",
+		IPRules: []workeripc.IPRule{{Min: "10.5.0.0", Max: "10.5.255.255", PortMin: 443, PortMax: 443, Protocol: "tcp"}},
+	}
+	if err := a.saveRelaySnapshot(point.ID, resources); err != nil {
+		t.Fatalf("saveRelaySnapshot: %v", err)
+	}
+	if p := a.cfg.Points[0]; p.Relay == nil || !p.Relay.HistoryInitialized {
+		t.Fatal("history marker was not persisted after the first snapshot")
+	}
+	if a.mgr.RelayHistoryUnverified() {
+		t.Fatal("the gate should stay off after a successful cache write")
+	}
+
+	// Restart: the same data directory, a brand-new store and manager.
+	fresh := reopenTestApp(t, a.store.Dir())
+	fresh.loadRelayKnown()
+	if fresh.mgr.RelayHistoryUnverified() {
+		t.Fatal("a valid cache turned the gate on")
+	}
+	decision := fresh.mgr.PreviewRoute(routing.Request{Network: "tcp", Address: "10.5.1.2:443", Entry: "统一代理"})
+	if decision.Action == "direct" {
+		t.Fatalf("cached managed target became direct after restart: %+v", decision)
+	}
+
+	// A missing cache with the marker still set must be treated as a gap.
+	if err := a.store.DeleteRelayKnown(point.ID); err != nil {
+		t.Fatal(err)
+	}
+	after := reopenTestApp(t, a.store.Dir())
+	after.loadRelayKnown()
+	if !after.mgr.RelayHistoryUnverified() {
+		t.Fatal("a missing cache after initialisation did not enable the gate")
 	}
 }

@@ -1886,6 +1886,10 @@ func (a *app) pointTools(c *ui.Context, v vpn.View) {
 			if v.Protocol == model.ProtocolLANRelay && ui.Button(c, "连接诊断").Label("连接诊断 "+v.Name).FontSize(12).Clicked() {
 				a.openRelayDiagnose(v.ID)
 			}
+			if v.Protocol != model.ProtocolLANRelay && a.lanShare != nil &&
+				ui.Button(c, "局域网分享").Label("局域网分享 "+v.Name).FontSize(12).Clicked() {
+				a.openLANShareFor(v.ID)
+			}
 			if v.MonitorOn {
 				iconButton(c, refreshIcon, "立即检测会话是否仍有效", func() {
 					if a.mgr.CheckNow(v.ID) {

@@ -363,6 +363,8 @@ func newApp() (*app, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 显式将 mygo 内部的 PathUserData（窗口尺寸状态等）统一定向到应用主数据目录，避免在 AppData 下产生含空格的冗余目录
+	mygo.App.SetPath(mygo.PathUserData, dir)
 	// New profiles use the OS credential store, falling back to memory only.
 	// Preserve an explicit legacy file-store choice without copying it elsewhere.
 	secretKind := model.SecretStoreKeychain
@@ -481,9 +483,11 @@ func resolveDataDir() (string, error) {
 		return "", err
 	}
 	targetDir := filepath.Join(base, "connect-hub")
+	legacyNames := []string{"EasyConnectHub", "EasyConnect Hub", "Connect Hub"}
+
 	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
 		// 自动检查并迁移所有可能存在的历史旧目录（带空格或老名字）
-		for _, oldName := range []string{"EasyConnectHub", "EasyConnect Hub", "Connect Hub"} {
+		for _, oldName := range legacyNames {
 			oldDir := filepath.Join(base, oldName)
 			if fi, err := os.Stat(oldDir); err == nil && fi.IsDir() {
 				if renameErr := os.Rename(oldDir, targetDir); renameErr == nil {
@@ -491,8 +495,33 @@ func resolveDataDir() (string, error) {
 				}
 			}
 		}
+	} else {
+		// 若 targetDir 已存在，但系统中遗留了旧目录（如 Connect Hub），将其内部遗留文件（如 window-state.json）迁移合入并清理旧空目录
+		for _, oldName := range legacyNames {
+			oldDir := filepath.Join(base, oldName)
+			if fi, err := os.Stat(oldDir); err == nil && fi.IsDir() {
+				migrateAndCleanLegacyDir(oldDir, targetDir)
+			}
+		}
 	}
 	return targetDir, os.MkdirAll(targetDir, 0o700)
+}
+
+func migrateAndCleanLegacyDir(srcDir, dstDir string) {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		srcFile := filepath.Join(srcDir, entry.Name())
+		dstFile := filepath.Join(dstDir, entry.Name())
+		if _, err := os.Stat(dstFile); os.IsNotExist(err) {
+			_ = os.Rename(srcFile, dstFile)
+		} else if !entry.IsDir() {
+			_ = os.Remove(srcFile)
+		}
+	}
+	_ = os.Remove(srcDir)
 }
 
 // setupMenu installs the app menu. It keeps the usual App/Edit/Window menus

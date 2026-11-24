@@ -92,3 +92,33 @@ func TestBackupAndRestoreFiles(t *testing.T) {
 		t.Errorf("Restored content mismatch: got %q, want %q", string(restoredData), string(fileContent))
 	}
 }
+
+func TestMigrateLegacyBackups(t *testing.T) {
+	tmpDir := t.TempDir()
+	legacy := filepath.Join(tmpDir, "ConnectHub", "cleanup", "backups")
+	target := filepath.Join(tmpDir, "connect-hub", "cleanup", "backups")
+
+	mockBackupID := "20261124-100000"
+	mockBackupDir := filepath.Join(legacy, mockBackupID)
+	if err := os.MkdirAll(mockBackupDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	testManifest := filepath.Join(mockBackupDir, "manifest.json")
+	if err := os.WriteFile(testManifest, []byte(`{"version": 1}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	migrateLegacyBackups(legacy, target)
+
+	// 目标目录应已迁移成功
+	targetManifest := filepath.Join(target, mockBackupID, "manifest.json")
+	if _, err := os.Stat(targetManifest); err != nil {
+		t.Fatalf("expected migrated manifest at %s: %v", targetManifest, err)
+	}
+
+	// 旧目录结构应已被清理
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("expected legacy backup dir to be removed")
+	}
+}

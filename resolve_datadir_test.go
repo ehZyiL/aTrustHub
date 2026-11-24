@@ -77,3 +77,32 @@ func TestResolveDataDir_NoSpacesAndMigration(t *testing.T) {
 		t.Errorf("expected marker file in migrated newDir, got: %v", err)
 	}
 }
+
+func TestMigrateAndCleanLegacyDir(t *testing.T) {
+	base := t.TempDir()
+	src := filepath.Join(base, "Connect Hub")
+	dst := filepath.Join(base, "connect-hub")
+
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	testFile := filepath.Join(src, "window-state.json")
+	if err := os.WriteFile(testFile, []byte(`{"x": 100}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	migrateAndCleanLegacyDir(src, dst)
+
+	// 目标目录应收到文件
+	if _, err := os.Stat(filepath.Join(dst, "window-state.json")); err != nil {
+		t.Fatalf("expected window-state.json in dst: %v", err)
+	}
+	// 旧目录应已被删除
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Fatalf("expected src directory to be removed, but it still exists")
+	}
+}

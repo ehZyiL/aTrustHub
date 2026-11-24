@@ -20,13 +20,40 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// DefaultBackupRootDir 获取默认备份根目录
+// DefaultBackupRootDir 获取默认备份根目录（统一使用 connect-hub 主数据目录，并自动平滑兼容历史旧目录）
 func DefaultBackupRootDir() string {
 	appData := os.Getenv("APPDATA")
 	if appData == "" {
 		appData = os.TempDir()
 	}
-	return filepath.Join(appData, "ConnectHub", "cleanup", "backups")
+	target := filepath.Join(appData, "connect-hub", "cleanup", "backups")
+	legacy := filepath.Join(appData, "ConnectHub", "cleanup", "backups")
+	migrateLegacyBackups(legacy, target)
+	return target
+}
+
+// migrateLegacyBackups 平滑迁移历史旧目录中的备份并清理空目录
+func migrateLegacyBackups(legacyRoot, targetRoot string) {
+	entries, err := os.ReadDir(legacyRoot)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(targetRoot, 0755); err != nil {
+		return
+	}
+	for _, e := range entries {
+		src := filepath.Join(legacyRoot, e.Name())
+		dst := filepath.Join(targetRoot, e.Name())
+		if _, err := os.Stat(dst); os.IsNotExist(err) {
+			_ = os.Rename(src, dst)
+		}
+	}
+	// 尝试逐级清理已清空的旧目录
+	_ = os.Remove(legacyRoot)
+	cleanupParent := filepath.Dir(legacyRoot)
+	_ = os.Remove(cleanupParent)
+	connectHubParent := filepath.Dir(cleanupParent)
+	_ = os.Remove(connectHubParent)
 }
 
 // CreateBackup 执行全量快照备份并输出 BackupManifest

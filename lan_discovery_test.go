@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -842,4 +843,69 @@ func TestAcceptanceFailedOffSaveOffersARetry(t *testing.T) {
 	if got := a.store.Config().Settings.LANShare.DiscoveryEnabled; got == nil || *got {
 		t.Fatalf("重试后偏好仍不是 false：%v", got)
 	}
+}
+
+// The feature must cost nothing for users who never open it: no repaint timer,
+// and only the two coordinating goroutines (publisher worker + state watcher).
+func TestIdleDiscoveryIsFree(t *testing.T) {
+	a := testApp(t)
+	backend := newTestDiscoveryBackend()
+	a.discoveryBackend = backend
+	before := runtime.NumGoroutine()
+	a.setupLANDiscovery()
+	after := runtime.NumGoroutine()
+	if added := after - before; added > 2 {
+		t.Fatalf("空闲的发现功能新增了 %d 个 goroutine", added)
+	}
+	// Idle discovery must not hold a single file descriptor: no socket, no
+	// multicast membership, nothing for a user who never enables it.
+	if runtime.GOOS == "linux" {
+		beforeFD := openFDs(t)
+		time.Sleep(2100 * time.Millisecond) // at least one safety tick
+		if afterFD := openFDs(t); afterFD != beforeFD {
+			t.Fatalf("空闲发现持有 %d 个文件描述符（原 %d）", afterFD-beforeFD, beforeFD)
+		}
+	}
+	// No page is open and nothing is searching, so the coordinator must not ask
+	// for a frame - i.e. no permanent repaint for everyone.
+	if a.lanDiscoveryNeedsFrame() {
+		t.Fatal("空闲状态下仍然要求重绘")
+	}
+	// Even after the safety tick fires, nothing is painted.
+	time.Sleep(50 * time.Millisecond)
+	a.syncLANDiscovery()
+	if a.lanDiscoveryNeedsFrame() {
+		t.Fatal("兜底 tick 触发了重绘")
+	}
+	// While the page is open and still searching, one frame per tick is
+	// expected, and it stops once the window expires.
+	a.openLANDiscovery()
+	if !a.lanDiscoveryNeedsFrame() {
+		t.Fatal("搜索窗口内应当允许刷新搜索提示")
+	}
+	a.lanDisc.ui.searchWindow = 10 * time.Millisecond
+	time.Sleep(20 * time.Millisecond)
+	a.drainLANDiscovery()
+	if a.lanDiscoveryNeedsFrame() {
+		t.Fatal("搜索窗口结束后不应继续请求帧")
+	}
+	a.shutdownLANDiscovery()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && runtime.NumGoroutine() > before+2 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := runtime.NumGoroutine(); got > before+2 {
+		t.Fatalf("退出后发现仍有 %d 个多余 goroutine（基线 %d）", got-before, before)
+	}
+}
+
+// openFDs counts the process's open descriptors, so a test can prove the idle
+// feature holds no socket.
+func openFDs(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Skipf("无法读取 /proc/self/fd：%v", err)
+	}
+	return len(entries)
 }

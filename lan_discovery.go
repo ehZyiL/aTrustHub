@@ -118,9 +118,12 @@ func (a *app) setupLANDiscovery() {
 				return
 			case <-d.kick:
 			case <-ticker.C:
-				// A frame at least every two seconds keeps the time-based UI
-				// state (the first-seconds "searching" text) from going stale.
-				a.invalidateCoalesced()
+				// The ticker is a safety net for the publisher, not a paint
+				// timer: a user who never opens the page must never be
+				// repainted because discovery exists.
+				if a.lanDiscoveryNeedsFrame() {
+					a.invalidateCoalesced()
+				}
 			}
 			a.syncLANDiscovery()
 		}
@@ -733,4 +736,18 @@ func (a *app) withoutOwnShare(cands []discovery.Candidate) []discovery.Candidate
 		out = append(out, cand)
 	}
 	return out
+}
+
+// lanDiscoveryNeedsFrame reports whether time-based discovery state requires a
+// redraw. Only the open page has such state, and only while it is still inside
+// the "searching" window; everything else is event-driven.
+//
+// This is what keeps the feature free for users who never open it: no sockets,
+// no timers that paint, and no per-frame work.
+func (a *app) lanDiscoveryNeedsFrame() bool {
+	d := a.lanDisc
+	if d == nil {
+		return false
+	}
+	return d.ui.open && d.ui.searching
 }

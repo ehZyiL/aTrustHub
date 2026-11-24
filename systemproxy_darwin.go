@@ -3,10 +3,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -15,11 +17,77 @@ import (
 // tracks its own switch, so this is only used to seed the UI.
 func systemProxyEnabled() bool { return false }
 
+const macosBypassJournalFilename = "macos-proxy-bypass.json"
+
 // bypassMu guards originalBypassDomains.
 var (
 	bypassMu              sync.Mutex
 	originalBypassDomains = make(map[string][]string)
 )
+
+func bypassJournalPath() string {
+	if systemProxyJournalDir != "" {
+		return filepath.Join(systemProxyJournalDir, macosBypassJournalFilename)
+	}
+	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
+		return filepath.Join(dir, "connect-hub", macosBypassJournalFilename)
+	}
+	return filepath.Join(os.TempDir(), macosBypassJournalFilename)
+}
+
+// saveBypassSnapshot saves the original bypass domain mapping atomically to disk.
+func saveBypassSnapshot(snapshot map[string][]string) error {
+	path := bypassJournalPath()
+	data, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".macos-proxy-bypass-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		if tmp != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	tmp = nil
+	return os.Rename(tmpName, path)
+}
+
+// loadBypassSnapshot loads the persisted bypass mapping from disk if present.
+func loadBypassSnapshot() (map[string][]string, error) {
+	path := bypassJournalPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var snapshot map[string][]string
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
+// clearBypassSnapshot deletes the recovery snapshot file.
+func clearBypassSnapshot() {
+	_ = os.Remove(bypassJournalPath())
+}
 
 // networkServices lists the enabled macOS network services, which system
 // proxy settings are applied to.
@@ -158,6 +226,15 @@ func applySystemProxy(hostPort string, on bool) error {
 
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
+
+	// 关闭代理时，优先使用内存快照；若内存为空（如崩溃后重新拉起退出），从磁盘恢复
+	restores := originalBypassDomains
+	if !on && len(restores) == 0 {
+		if loaded, err := loadBypassSnapshot(); err == nil && len(loaded) > 0 {
+			restores = loaded
+		}
+	}
+
 	for _, svc := range services {
 		if on {
 			fmt.Fprintf(&b, "networksetup -setsocksfirewallproxy '%s' %s %s\n", svc, host, port)
@@ -178,12 +255,17 @@ func applySystemProxy(hostPort string, on bool) error {
 			fmt.Fprintf(&b, "networksetup -setsecurewebproxystate '%s' off\n", svc)
 
 			// 退出或关闭代理时还原用户原有的绕过列表
-			if orig, ok := originalBypassDomains[svc]; ok {
+			if orig, ok := restores[svc]; ok {
 				b.WriteString(formatBypassCmd(svc, orig))
-				delete(originalBypassDomains, svc)
 			}
 		}
 	}
+
+	if on {
+		// 持久化到磁盘，确保异常崩溃或被杀后配置不丢失
+		_ = saveBypassSnapshot(originalBypassDomains)
+	}
+
 	f, err := os.CreateTemp("", "atrust-proxy-*.sh")
 	if err != nil {
 		return err
@@ -201,6 +283,12 @@ func applySystemProxy(hostPort string, on bool) error {
 	out, err := exec.Command("osascript", "-e", script).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%v：%s", err, strings.TrimSpace(string(out)))
+	}
+
+	if !on {
+		// 还原成功后清除内存与磁盘持久化记录
+		originalBypassDomains = make(map[string][]string)
+		clearBypassSnapshot()
 	}
 	return nil
 }

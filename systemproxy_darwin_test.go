@@ -3,6 +3,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -63,5 +65,40 @@ func TestFormatBypassCmd(t *testing.T) {
 	expected := "networksetup -setproxybypassdomains 'DEMO Mobile Boardband' '127.0.0.1' 'localhost' '*.local'\n"
 	if cmdMulti != expected {
 		t.Errorf("unexpected cmdMulti:\ngot:  %s\nwant: %s", cmdMulti, expected)
+	}
+}
+
+func TestBypassSnapshotPersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir := systemProxyJournalDir
+	setSystemProxyJournalDir(tmpDir)
+	defer setSystemProxyJournalDir(origDir)
+
+	snapshot := map[string][]string{
+		"Wi-Fi":                 {"127.0.0.1", "192.168.0.0/16", "*.local"},
+		"DEMO Mobile Boardband": {"10.0.0.0/8", "localhost"},
+	}
+
+	if err := saveBypassSnapshot(snapshot); err != nil {
+		t.Fatalf("saveBypassSnapshot failed: %v", err)
+	}
+
+	journalFile := filepath.Join(tmpDir, macosBypassJournalFilename)
+	if _, err := os.Stat(journalFile); err != nil {
+		t.Fatalf("journal file not found at %s: %v", journalFile, err)
+	}
+
+	loaded, err := loadBypassSnapshot()
+	if err != nil {
+		t.Fatalf("loadBypassSnapshot failed: %v", err)
+	}
+
+	if !reflect.DeepEqual(loaded, snapshot) {
+		t.Errorf("loaded snapshot mismatch:\ngot:  %+v\nwant: %+v", loaded, snapshot)
+	}
+
+	clearBypassSnapshot()
+	if _, err := os.Stat(journalFile); !os.IsNotExist(err) {
+		t.Fatalf("clearBypassSnapshot did not remove the file: %v", err)
 	}
 }

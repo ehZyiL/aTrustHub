@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
+
+app_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+worker_root=${ZJU_CONNECT_ROOT:-$(cd -- "$app_root/../zju-connect" && pwd)}
+
+worker_cmd=./cmd/connect-hub-worker
+if [[ ! -d "$worker_root/cmd/connect-hub-worker" ]]; then
+  worker_cmd=./cmd/easyconnect-worker
+fi
+
+worker_commit=$(git -C "$worker_root" rev-parse --short HEAD 2>/dev/null || echo unknown)
+go_tool=${GO:-go}
+
+# 协议一致性校验：使用宿主机原生架构运行工具
+(cd "$app_root" && env GOOS="" GOARCH="" "$go_tool" run ./internal/workeripc/cmd/protogen -check -src "$worker_root/internal/desktop/protocol.go" -out ./internal/workeripc/protocol.go)
+
+target_arch=${GOARCH:-$($go_tool env GOARCH)}
+bundle_name=${EASYCONNECT_BUNDLE_NAME:-connect-hub-macos-$target_arch}
+
+if [[ ! "$bundle_name" =~ ^[a-zA-Z0-9._-]+$ || "$bundle_name" == "." || "$bundle_name" == ".." ]]; then
+  printf 'Invalid bundle name\n' >&2
+  exit 1
+fi
+
+mkdir -p "$app_root/build"
+bundle=$(mktemp -d "$app_root/build/.${bundle_name}.staging.XXXXXXXX")
+trap 'rm -rf -- "$bundle"' EXIT
+
+app_bundle="$bundle/Connect Hub.app"
+contents="$app_bundle/Contents"
+macos_bin="$contents/MacOS"
+resources="$contents/Resources"
+mkdir -p "$macos_bin/core" "$resources" "$bundle/LICENSES"
+
+cd "$app_root"
+app_version=$(sed -n 's/^const version = "\(.*\)"$/\1/p' "$app_root/app.go" | head -n1)
+app_version=${app_version:-0.1.0}
+
+# 1. 编译 GUI 主程序
+env GOOS=darwin GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$macos_bin/connect-hub" .
+
+# 2. 编译 Worker 协议核心
+(cd "$worker_root" && env GOWORK=off GOOS=darwin GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$macos_bin/core/connect-hub-worker" "$worker_cmd")
+
+# 3. 部署资源与图标
+install -m 0644 "$app_root/resources/icon.png" "$resources/icon.png"
+if [[ -f "$app_root/resources/icon.icns" ]]; then
+  install -m 0644 "$app_root/resources/icon.icns" "$resources/icon.icns"
+fi
+
+# 4. 生成 Info.plist
+cat > "$contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>Connect Hub</string>
+	<key>CFBundleExecutable</key>
+	<string>connect-hub</string>
+	<key>CFBundleIconFile</key>
+	<string>icon</string>
+	<key>CFBundleIdentifier</key>
+	<string>app.connect.hub</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Connect Hub</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$app_version</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
+</dict>
+</plist>
+EOF
+
+# 5. 许可文件与元数据
+install -m 0644 "$app_root/LICENSE" "$bundle/LICENSES/aTrustHub-AGPL-3.0.txt"
+install -m 0644 "$worker_root/LICENSE" "$bundle/LICENSES/ZJU-Connect-AGPL-3.0.txt"
+install -m 0644 "$worker_root/third_party/utls/LICENSE" "$bundle/LICENSES/uTLS.txt"
+
+cat > "$bundle/COMPONENTS.txt" <<EOF
+Connect Hub macOS bundle
+Architecture: $target_arch
+Worker IPC protocol: 7
+Worker source commit: $worker_commit
+Scope: VPN tunnel, proxy and browser login on macOS.
+Layout: Connect Hub.app/Contents/MacOS/connect-hub with core/connect-hub-worker.
+EOF
+
+chmod +x "$macos_bin/connect-hub" "$macos_bin/core/connect-hub-worker"
+
+# 如果在 macOS 环境且具备 codesign 工具，应用 Ad-hoc 自签名以兼容 Apple Silicon
+if command -v codesign >/dev/null 2>&1; then
+  codesign --force --deep -s - "$app_bundle" || true
+fi
+
+cd "$bundle"
+find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
+
+cd "$app_root/build"
+final_bundle="$app_root/build/$bundle_name"
+if [[ -e "$final_bundle" || -L "$final_bundle" ]]; then
+  rm -rf -- "$final_bundle"
+fi
+mv -- "$bundle" "$final_bundle"
+trap - EXIT
+
+# 生成 .tar.gz 便携分发包
+archive_tar="$app_root/build/$bundle_name.tar.gz"
+tar -czf "$archive_tar" -C "$app_root/build" "$bundle_name"
+
+# 如果处于 macOS 环境且存在 hdiutil 命令，生成包含 Applications 快捷方式的标准 DMG 安装镜像
+if command -v hdiutil >/dev/null 2>&1; then
+  dmg_out="$app_root/build/$bundle_name.dmg"
+  dmg_staging=$(mktemp -d "$app_root/build/.dmg_staging.XXXXXXXX")
+  trap 'rm -rf -- "$dmg_staging"' EXIT
+
+  cp -R "$final_bundle/Connect Hub.app" "$dmg_staging/"
+  ln -s /Applications "$dmg_staging/Applications"
+
+  rm -f "$dmg_out"
+  hdiutil create -volname "Connect Hub" -srcfolder "$dmg_staging" -ov -format UDZO "$dmg_out"
+  rm -rf -- "$dmg_staging"
+  trap - EXIT
+  printf 'Created DMG: %s\n' "$dmg_out"
+fi
+
+printf 'macOS bundle created: %s (%s)\n' "$final_bundle" "$archive_tar"

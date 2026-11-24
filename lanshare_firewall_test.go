@@ -167,12 +167,9 @@ func TestQuitKeepsTheShareIntentButCleansRules(t *testing.T) {
 	a.shutdownLANShare()
 	a.awaitFirewall(t)
 
-	if !a.cfg.Settings.LANShare.Enabled {
-		// The enable intent is persisted by the controller, not by the shutdown.
-		settings := a.store.Config().Settings.LANShare
-		if !settings.Enabled {
-			t.Fatal("quit discarded the share intent")
-		}
+	// The enable intent survives: only the rule goes with the closed listener.
+	if settings := a.store.Config().Settings.LANShare; !settings.Enabled {
+		t.Fatal("quit discarded the share intent")
 	}
 	journal, _ = relay.LoadFirewallJournal(a.dir)
 	if journal.Find(rule.ID) != nil {

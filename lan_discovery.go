@@ -38,7 +38,10 @@ type lanDiscovery struct {
 	// up later.
 	mu         sync.Mutex
 	suppressed bool
-	shutDown   bool
+	// suppressedGen ties the suppression to the share instance it was made for:
+	// a new enable is a new decision and must not inherit it.
+	suppressedGen uint64
+	shutDown      bool
 	// frameWanted is the background-readable copy of "the open page is still
 	// searching", so the coordinator never touches UI-thread fields.
 	frameWanted bool
@@ -182,8 +185,16 @@ func (a *app) syncLANDiscovery() {
 	if d == nil || a.lanShare == nil {
 		return
 	}
+	generation := a.lanShare.View().Operation
 	d.mu.Lock()
 	suppressed := d.suppressed
+	stale := suppressed && d.suppressedGen != 0 && d.suppressedGen != generation
+	if stale {
+		// The share instance changed since the user stopped discovery: the
+		// suppression belonged to the old one.
+		d.suppressed = false
+		suppressed = false
+	}
 	d.mu.Unlock()
 	if suppressed {
 		d.pub.Clear()
@@ -254,6 +265,7 @@ func (a *app) setLANDiscoveryPreference(enabled bool, name string) error {
 	}
 	d.mu.Lock()
 	d.suppressed = true
+	d.suppressedGen = a.lanShare.View().Operation
 	d.mu.Unlock()
 	d.pub.Clear()
 	if err := a.lanShare.SetDiscovery(false, name); err != nil {

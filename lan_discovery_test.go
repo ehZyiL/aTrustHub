@@ -104,6 +104,12 @@ func (b *testDiscoveryBackend) announcements() []discovery.Announcement {
 	return append([]discovery.Announcement(nil), b.anns...)
 }
 
+func (b *testDiscoveryBackend) closedCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.closed
+}
+
 func (b *testDiscoveryBackend) liveCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -136,7 +142,7 @@ func localLANAddress(t *testing.T) relay.Interface {
 // discoveryApp builds an app with the LAN share controller and the discovery
 // machine wired to the in-memory backend, exactly like the production wiring
 // but without multicast sockets.
-func discoveryApp(t *testing.T) (*app, *testDiscoveryBackend, relay.Interface) {
+func discoveryApp(t *testing.T) (*app, *testDiscoveryBackend, relay.Interface, *appTestSink) {
 	t.Helper()
 	a := testApp(t)
 	backend := newTestDiscoveryBackend()
@@ -155,10 +161,11 @@ func discoveryApp(t *testing.T) (*app, *testDiscoveryBackend, relay.Interface) {
 	t.Cleanup(closeEcho)
 	// The real address provider: a share that can be announced must bind an
 	// address that exists on this machine.
-	installLANShareWith(t, a, &appTestSink{names: map[string]string{"p1": "公司 VPN"}, echo: echo}, lanAddresses{})
+	sink := &appTestSink{names: map[string]string{"p1": "公司 VPN"}, echo: echo}
+	installLANShareWith(t, a, sink, lanAddresses{})
 	a.setupLANDiscovery()
 	t.Cleanup(a.shutdownLANDiscovery)
-	return a, backend, iface
+	return a, backend, iface, sink
 }
 
 // enableShare turns the share on with the given discovery choice and waits for
@@ -226,7 +233,7 @@ func relayPoints(a *app) []model.AccessPoint {
 // A2: an upgraded configuration that was already sharing must not start
 // broadcasting just because the feature exists now.
 func TestAcceptanceUpgradeDoesNotAnnounce(t *testing.T) {
-	a, backend, _ := discoveryApp(t)
+	a, backend, _, _ := discoveryApp(t)
 	if _, err := a.store.Update(func(cfg *model.Config) error {
 		cfg.Add(model.AccessPoint{ID: "p1", Name: "公司 VPN", Protocol: model.ProtocolATrust,
 			Server: "vpn.example.com", Port: 443, Username: "u", InPool: true})
@@ -262,7 +269,7 @@ func TestAcceptanceUpgradeDoesNotAnnounce(t *testing.T) {
 
 // A3/A4: the enable form's checkbox is an explicit choice saved with the intent.
 func TestAcceptanceEnableFormSavesTheChoice(t *testing.T) {
-	a, _, _ := discoveryApp(t)
+	a, _, _, _ := discoveryApp(t)
 
 	// Nothing chosen yet: the form shows the box checked, but opening the panel
 	// writes nothing.
@@ -297,7 +304,7 @@ func TestAcceptanceEnableFormSavesTheChoice(t *testing.T) {
 // B11: stopping discovery must not touch the token, the certificate, the
 // connection or the share intent.
 func TestAcceptanceStoppingDiscoveryKeepsTheShare(t *testing.T) {
-	a, _, iface := discoveryApp(t)
+	a, _, iface, _ := discoveryApp(t)
 	enableShare(t, a, iface, true, "会议室")
 	before := a.lanShare.Settings()
 	if err := a.lanShare.SetDiscovery(true, "会议室"); err != nil {
@@ -322,7 +329,7 @@ func TestAcceptanceStoppingDiscoveryKeepsTheShare(t *testing.T) {
 
 // B8/B10: only a fully committed Running share may be announced.
 func TestAcceptanceOnlyRunningAnnounces(t *testing.T) {
-	a, _, iface := discoveryApp(t)
+	a, _, iface, _ := discoveryApp(t)
 	enableShare(t, a, iface, true, "")
 	view := a.lanShare.View()
 	if view.State == relay.StateRunning {
@@ -346,7 +353,7 @@ func TestAcceptanceOnlyRunningAnnounces(t *testing.T) {
 // A6: a failed save never leaves an announcement behind, and a failed "off"
 // save still stops the network for this run.
 func TestAcceptanceFailedSaveSemantics(t *testing.T) {
-	a, backend, iface := discoveryApp(t)
+	a, backend, iface, _ := discoveryApp(t)
 	// The share starts with discovery off, so nothing is announced yet.
 	enableShare(t, a, iface, false, "")
 
@@ -402,7 +409,7 @@ func TestAcceptanceFailedSaveSemantics(t *testing.T) {
 // D22: a code that does not match the candidate is refused, and nothing is
 // written.
 func TestAcceptanceCandidateMismatchIsRefused(t *testing.T) {
-	a, _, _ := discoveryApp(t)
+	a, _, _, _ := discoveryApp(t)
 	code := sampleShareCode()
 	a.openRelayImport()
 	a.relayImport.tab = 1
@@ -437,7 +444,7 @@ func TestAcceptanceCandidateMismatchIsRefused(t *testing.T) {
 // D23/D26: discovery never rewrites a saved node, and a forged announcement
 // cannot make the app connect somewhere else.
 func TestAcceptanceDiscoveryDoesNotTouchSavedNodes(t *testing.T) {
-	a, backend, _ := discoveryApp(t)
+	a, backend, _, _ := discoveryApp(t)
 	a.openRelayImport()
 	a.relayImport.tab = 1
 	a.relayImport.text = sampleShareCode()
@@ -505,7 +512,7 @@ func TestAcceptanceDiscoveryDoesNotTouchSavedNodes(t *testing.T) {
 // C21: browsing a flood of forged candidates must not dial, read credentials or
 // write configuration.
 func TestAcceptanceBrowsingNeverDials(t *testing.T) {
-	a, backend, _ := discoveryApp(t)
+	a, backend, _, _ := discoveryApp(t)
 	before := a.store.Config()
 	// Anything that tried to connect would move a point out of "未登录" or
 	// create one; nothing here may change either.
@@ -585,7 +592,7 @@ func TestAcceptanceMacPackageDeclaresDiscovery(t *testing.T) {
 // A9/E30 (spec §9.1.3): the first seconds must read as "still searching", not
 // as "there is nothing", and the transition must happen without a user action.
 func TestAcceptanceFirstSecondsReadAsSearching(t *testing.T) {
-	a, _, _ := discoveryApp(t)
+	a, _, _, _ := discoveryApp(t)
 	a.lanDisc.ui.searchWindow = 40 * time.Millisecond
 	a.openRelayImport()
 	a.relayImport.tab = 0
@@ -612,7 +619,7 @@ func TestAcceptanceFirstSecondsReadAsSearching(t *testing.T) {
 // A6 (spec §4): a failed "off" save keeps the name the user chose, so a retry
 // does not silently drop it.
 func TestAcceptanceRetryKeepsThePublicName(t *testing.T) {
-	a, _, iface := discoveryApp(t)
+	a, _, iface, _ := discoveryApp(t)
 	enableShare(t, a, iface, true, "会议室")
 	unblock := blockStoreSaves(t, a)
 	if err := a.setLANDiscoveryPreference(false, ""); err == nil {
@@ -636,7 +643,7 @@ func TestAcceptanceRetryKeepsThePublicName(t *testing.T) {
 // Review: shutting discovery down twice must not panic, and a late page-open
 // must not start browsing again after the sockets are gone.
 func TestAcceptanceShutdownIsIdempotent(t *testing.T) {
-	a, _, _ := discoveryApp(t)
+	a, _, _, _ := discoveryApp(t)
 	a.openRelayImport()
 	a.shutdownLANDiscovery()
 	a.shutdownLANDiscovery()
@@ -650,7 +657,7 @@ func TestAcceptanceShutdownIsIdempotent(t *testing.T) {
 // Spec §9.1.5: this machine's own share must not appear in its own list, but a
 // colleague who reports the same share ID from another address must.
 func TestAcceptanceOwnShareIsFilteredByAddress(t *testing.T) {
-	a, backend, iface := discoveryApp(t)
+	a, backend, iface, _ := discoveryApp(t)
 	enableShare(t, a, iface, true, "本机共享")
 	own := a.lanShare.Settings()
 	a.openRelayImport()
@@ -810,7 +817,7 @@ func TestAcceptanceBrowsingWorksWithoutSharing(t *testing.T) {
 // Spec §4/§12 A6: when the switch-off cannot be saved, the panel must offer a
 // retry instead of claiming the preference was stored.
 func TestAcceptanceFailedOffSaveOffersARetry(t *testing.T) {
-	a, _, iface := discoveryApp(t)
+	a, _, iface, _ := discoveryApp(t)
 	enableShare(t, a, iface, true, "会议室")
 	a.openLANShare()
 	unblock := blockStoreSaves(t, a)
@@ -914,7 +921,7 @@ func openFDs(t *testing.T) int {
 // interfaces per frame, and the browsing set must carry the interface subnet so
 // reflected announcements can be dropped.
 func TestAcceptanceBrowsingSetIsCachedAndCarriesTheSubnet(t *testing.T) {
-	a, _, _ := discoveryApp(t)
+	a, _, _, _ := discoveryApp(t)
 	ifaces := a.browseInterfaces("")
 	if len(ifaces) == 0 {
 		t.Skip("本机没有局域网网卡，跳过")
@@ -942,7 +949,7 @@ func TestAcceptanceBrowsingSetIsCachedAndCarriesTheSubnet(t *testing.T) {
 // The picker must list every adapter even though browsing is bounded, otherwise
 // an interface beyond the bound could never be selected.
 func TestAcceptanceInterfacePickerIsNotCapped(t *testing.T) {
-	a, _, _ := discoveryApp(t)
+	a, _, _, _ := discoveryApp(t)
 	all := a.allLANInterfaces()
 	browsed := a.browseInterfaces("")
 	if len(all) < len(browsed) {
@@ -957,4 +964,93 @@ func TestAcceptanceInterfacePickerIsNotCapped(t *testing.T) {
 			t.Fatalf("选择项 %q 没有对应网卡", label)
 		}
 	}
+}
+
+// Spec §8.2: a waiting share announces as soon as the same instance starts
+// running, driven by the controller's change notification - no kick, no frame.
+func TestAcceptanceWaitingShareAnnouncesWhenItStarts(t *testing.T) {
+	a, backend, iface, sink := discoveryApp(t)
+	sink.setOffline(true)
+	if err := a.lanShare.Enable(context.Background(), relay.EnableOptions{
+		PointID: "p1", InterfaceName: iface.Name, PreferredIPv4: iface.IPv4,
+		Discovery: true, DiscoveryName: "会议室",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitAppShare(t, a, relay.StateWaiting)
+	time.Sleep(50 * time.Millisecond)
+	if got := backend.announcements(); len(got) != 0 {
+		t.Fatalf("等待状态发布了：%+v", got)
+	}
+
+	// The access point comes up. Nothing here calls the discovery coordinator:
+	// the controller's notification must be what starts the announcement.
+	sink.setOffline(false)
+	if err := a.lanShare.Retry(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitAppShare(t, a, relay.StateRunning)
+	waitCondition(t, "announcement after running", func() bool {
+		return a.discoveryStatus().State == discovery.StatusPublished
+	})
+	anns := backend.announcements()
+	if len(anns) == 0 || anns[len(anns)-1].Name != "会议室" {
+		t.Fatalf("恢复后没有发布：%+v", anns)
+	}
+	if anns[len(anns)-1].Port != a.lanShare.View().Port {
+		t.Fatalf("公告端口不是实际绑定端口：%d vs %d", anns[len(anns)-1].Port, a.lanShare.View().Port)
+	}
+}
+
+// Spec §8.4: quitting withdraws the announcement before the listener goes away.
+func TestAcceptanceShutdownWithdrawsTheAnnouncement(t *testing.T) {
+	a, backend, iface, _ := discoveryApp(t)
+	enableShare(t, a, iface, true, "会议室")
+	waitCondition(t, "published", func() bool {
+		return a.discoveryStatus().State == discovery.StatusPublished
+	})
+	if backend.liveCount() != 1 {
+		t.Fatalf("前置条件：应当有一条公告，实际 %d", backend.liveCount())
+	}
+	a.shutdownLANShare()
+	if backend.liveCount() != 0 {
+		t.Fatalf("退出后仍有 %d 条公告", backend.liveCount())
+	}
+	if got := backend.closedCount(); got == 0 {
+		t.Fatal("退出时没有撤销公告")
+	}
+}
+
+// Round 6: a failed switch-off keeps announcing suppressed for this run. If the
+// user then turns the share off and on again with discovery checked, the new
+// explicit enable must announce - the old suppression belongs to the previous
+// instance.
+func TestAcceptanceReEnableClearsTheFailedOffSuppression(t *testing.T) {
+	a, backend, iface, _ := discoveryApp(t)
+	enableShare(t, a, iface, true, "会议室")
+	waitCondition(t, "published", func() bool {
+		return a.discoveryStatus().State == discovery.StatusPublished
+	})
+
+	// The switch-off cannot be saved: the network stops, the preference stays.
+	unblock := blockStoreSaves(t, a)
+	a.toggleLANDiscovery(false)
+	waitCondition(t, "suppressed", func() bool {
+		a.drainLANShareResults()
+		return !a.lanShareUI.discoveryBusy
+	})
+	if backend.liveCount() != 0 {
+		t.Fatal("前置条件：关闭发现后应已撤销公告")
+	}
+
+	// The disk recovers; the user closes the share and enables it again with
+	// discovery checked.
+	unblock()
+	if err := a.lanShare.Disable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	enableShare(t, a, iface, true, "会议室")
+	waitCondition(t, "announcement after re-enable", func() bool {
+		return backend.liveCount() == 1
+	})
 }

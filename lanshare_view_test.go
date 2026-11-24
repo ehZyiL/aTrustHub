@@ -721,9 +721,10 @@ func (s *appTestSource) Close() error {
 
 // appTestSink binds every point to a fresh source.
 type appTestSink struct {
-	mu    sync.Mutex
-	names map[string]string
-	echo  string
+	mu      sync.Mutex
+	names   map[string]string
+	echo    string
+	offline bool
 }
 
 func (s *appTestSink) AcquireSource(ctx context.Context, id string) (relay.Source, error) {
@@ -732,7 +733,17 @@ func (s *appTestSink) AcquireSource(ctx context.Context, id string) (relay.Sourc
 	if _, ok := s.names[id]; !ok {
 		return nil, relay.ErrPointMissing
 	}
+	if s.offline {
+		return nil, relay.ErrPointNotReady
+	}
 	return newAppTestSource(s.echo), nil
+}
+
+// setOffline simulates the access point not being connected yet.
+func (s *appTestSink) setOffline(v bool) {
+	s.mu.Lock()
+	s.offline = v
+	s.mu.Unlock()
 }
 
 func (s *appTestSink) PointName(id string) string {

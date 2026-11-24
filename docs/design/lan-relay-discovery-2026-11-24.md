@@ -169,6 +169,7 @@ env GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./...
 | B8/B10 | `TestAcceptanceOnlyRunningAnnounces`、`TestDiscoverySnapshotNeedsChoiceAndRunning` |
 | B11 | `TestAcceptanceStoppingDiscoveryKeepsTheShare`、`TestDisableKeepsTheDiscoveryPreference` |
 | B12/B13 | `TestPublisherDropsALateRegistration`、`TestPublisherRenameDuringRegistration` |
+| B8/B10（端到端） | `TestAcceptanceWaitingShareAnnouncesWhenItStarts`、`TestAcceptanceShutdownWithdrawsTheAnnouncement` |
 | B14/B15 | `TestPublisherRetriesAndStopsWhenCleared`、`TestPublisherCloseRespectsItsBudget` |
 | C16/C17/C18 | `TestCandidateNeedsEveryRecord`、`TestCandidateGoesAwayOnGoodbyeAndExpiry`、`TestUnusableRecordsAreRefused`、`TestSameInstanceOnTwoInterfaces` |
 | C19/C20 | `TestBrowserCloseWithPacketsInFlight`、`TestBrowserCyclesDoNotLeak` |
@@ -340,3 +341,13 @@ PTR 留下 2432 个 `entries`、4096 个 owner 留下 4096 个 `hosts`。
 
 R4-1 的两层落点：`OnLink`（纯函数，覆盖同网段/异网段/公网/坏输入/无子网/坏子网六种情形）
 与浏览器记录过滤（用真实回调注入异网段 A 记录，列表保持为空，换成同网段后立即出现）。
+
+## 15. 第六轮复审（自查）
+
+| 编号 | 轴 | 问题 | 证据 | 修复 |
+| --- | --- | --- | --- | --- |
+| R5-1 [P2] | 规格 | 关闭发现时**保存失败**会让"本次运行不再广播"的抑制状态一直留着。用户随后关掉共享、再带着勾选重新开启，控制器认为已允许、面板显示「等待发布」，但**永远不会广播**，只能重启应用才能恢复 | `TestAcceptanceReEnableClearsTheFailedOffSuppression`（去掉修复后 3 秒超时） | 抑制状态记录它所属的分享代次（`suppressedGen`）；代次变了（新的 Enable/Suspend/Restore）抑制自动失效。面板开关显式打开时仍立即清除 |
+| R5-2 | 证据 | 「等待 → 同一实例恢复 → 自动发布」与「退出先撤销公告」两条 §8.2 的路径此前没有端到端用例 | 新增 `TestAcceptanceWaitingShareAnnouncesWhenItStarts`（不调用任何 kick，只靠控制器的变更通知）、`TestAcceptanceShutdownWithdrawsTheAnnouncement` | — |
+
+R5-1 的判定规则是"抑制属于某一次决定，不属于之后的所有决定"，实现上以 `View().Operation`
+作为代次依据，避免它依赖某条具体的 UI 路径。

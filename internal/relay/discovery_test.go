@@ -136,3 +136,42 @@ func TestSetDiscoveryOnAClosedController(t *testing.T) {
 		t.Fatal("退出后不应还能改偏好")
 	}
 }
+
+// Spec §8.2: a share that is Waiting (VPN not connected yet) publishes nothing,
+// and starts publishing once the same instance reaches Running - without the UI
+// being involved.
+func TestWaitingSharePublishesWhenItBecomesRunning(t *testing.T) {
+	p, sink, _, c, _ := setupShare(t)
+	sink.setOffline(true)
+	if err := c.Enable(context.Background(), EnableOptions{
+		PointID: "p1", Discovery: true, DiscoveryName: "会议室",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.View().State; got != StateWaiting {
+		t.Fatalf("离线时状态 = %s，want waiting", got)
+	}
+	if _, ok := c.DiscoverySnapshot(); ok {
+		t.Fatal("等待状态不应有公告")
+	}
+	if got := p.ShareSettings().DiscoveryEnabled; got == nil || !*got {
+		t.Fatal("等待状态不应丢掉发现偏好")
+	}
+
+	// The access point comes up; the same identity resumes.
+	sink.setOffline(false)
+	if err := c.Retry(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, c, StateRunning)
+	ann, ok := c.DiscoverySnapshot()
+	if !ok {
+		t.Fatal("Running 后没有公告")
+	}
+	if ann.ShareID != c.Settings().ShareID || ann.Address == "" || ann.Port == 0 {
+		t.Fatalf("公告内容不对：%+v", ann)
+	}
+	if ann.Name != "会议室" {
+		t.Fatalf("公告名称不对：%q", ann.Name)
+	}
+}

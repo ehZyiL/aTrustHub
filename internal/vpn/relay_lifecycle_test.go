@@ -204,11 +204,11 @@ func TestHistoryRetainsWithdrawnOwnershipAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := store.RelaySource{ShareID: point.Relay.ShareID, Fingerprint: point.Relay.CertificateSHA256}
-	if err := st.SaveRelayKnown(point.ID, source, corpResources()); err != nil {
+	if _, err := st.SaveRelayKnown(point.ID, source, corpResources()); err != nil {
 		t.Fatal(err)
 	}
 	// The host withdraws the range, and the smaller snapshot is what gets saved.
-	if err := st.SaveRelayKnown(point.ID, source, &workeripc.ResourceSnapshot{Tunnel: "ipv4-l3"}); err != nil {
+	if _, err := st.SaveRelayKnown(point.ID, source, &workeripc.ResourceSnapshot{Tunnel: "ipv4-l3"}); err != nil {
 		t.Fatal(err)
 	}
 	known, err := st.LoadRelayKnown(point.ID)

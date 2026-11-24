@@ -221,7 +221,12 @@ type connEntry struct {
 	token string
 	// epoch is the resource generation this tunnel was authorized under. A
 	// generation switch retires exactly the entries of older generations.
-	epoch  uint64
+	epoch uint64
+	// ctx is cancelled when the entry is closed, so a dial that is still in
+	// flight when its generation is retired is aborted instead of running to
+	// completion and being thrown away.
+	ctx    context.Context
+	cancel context.CancelFunc
 	mu     sync.Mutex
 	closed bool
 	conns  []net.Conn
@@ -245,13 +250,21 @@ func (e *connEntry) attach(conn net.Conn) bool {
 	return true
 }
 
-// close is irreversible: later attaches are refused instead of accepted.
+// close is irreversible: later attaches are refused instead of accepted, and any
+// dial still running for this entry is cancelled.
 func (e *connEntry) close() {
 	e.mu.Lock()
+	already := e.closed
 	e.closed = true
 	conns := e.conns
 	e.conns = nil
 	e.mu.Unlock()
+	if e.cancel != nil {
+		e.cancel()
+	}
+	if already {
+		return
+	}
 	for _, c := range conns {
 		_ = c.Close()
 	}
@@ -288,7 +301,8 @@ func (t *connTable) acquire(token string, epoch uint64) (*connEntry, error) {
 	if t.total >= t.maxTotal || t.perClient[token] >= t.maxEach {
 		return nil, NewError(CodeBusy, "分享主机的并发连接已满")
 	}
-	e := &connEntry{token: token, epoch: epoch}
+	ctx, cancel := context.WithCancel(context.Background())
+	e := &connEntry{token: token, epoch: epoch, ctx: ctx, cancel: cancel}
 	t.entries[e] = struct{}{}
 	t.perClient[token]++
 	t.total++

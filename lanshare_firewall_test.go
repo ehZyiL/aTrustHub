@@ -254,3 +254,64 @@ func TestDesiredRulesMatchTheRunningShareExactly(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// S: the share state seen by the firewall coordinator is written from action
+// goroutines (启用/关闭共享) and from the render path. It must be race-free.
+func TestFirewallSeenStateIsRaceFree(t *testing.T) {
+	a := testApp(t)
+	installFirewall(t, a, &appFirewall{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			a.syncLanShareFirewall()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			a.syncLanShareFirewallIfNeeded()
+		}
+	}()
+	wg.Wait()
+	a.awaitFirewall(t)
+}
+
+// S: quitting must give the scheduled cleanup a bounded chance to finish instead
+// of returning while the goroutine is still running.
+func TestQuitWaitsForFirewallCleanup(t *testing.T) {
+	a := testApp(t)
+	released := make(chan struct{})
+	fake := &appFirewall{handler: func(op relay.FirewallOperation) (relay.FirewallResult, error) {
+		if op.Op == relay.FirewallOpDelete {
+			time.Sleep(120 * time.Millisecond)
+			select {
+			case <-released:
+			default:
+				close(released)
+			}
+		}
+		return relay.FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: relay.FirewallRemoved}, nil
+	}}
+	installFirewall(t, a, fake)
+	rule := firewallAppRule()
+	journal, _ := relay.LoadFirewallJournal(a.dir)
+	if err := journal.Put(a.dir, relay.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relay.FirewallEntryConfirmed}); err != nil {
+		t.Fatal(err)
+	}
+	a.shutdownLANShare()
+	// No awaitFirewall here on purpose: shutdown itself must have waited.
+	journal, err := relay.LoadFirewallJournal(a.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.Find(rule.ID) != nil {
+		t.Fatal("quit returned before the rule was cleaned up")
+	}
+	select {
+	case <-released:
+	default:
+		t.Fatal("the delete never ran")
+	}
+}

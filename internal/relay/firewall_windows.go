@@ -3,6 +3,7 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -181,6 +182,7 @@ func readFirewallResult(path string) (FirewallResult, error) {
 		return FirewallResult{Outcome: FirewallFailed, Detail: err.Error()}, err
 	}
 	var result FirewallResult
+	data = bytes.TrimPrefix(data, utf8BOM)
 	if err := json.Unmarshal(data, &result); err != nil {
 		return FirewallResult{Outcome: FirewallFailed, Detail: "系统助手返回的结果无法读取"}, nil
 	}
@@ -323,78 +325,6 @@ func FirewallHelperMain(opPath, resultPath string) error {
 	return os.Rename(tmp, resultPath)
 }
 
-// psFirewallScript is the only script this helper runs. The operation arrives as
-// a JSON file and every value is passed to a cmdlet as a parameter, so no user
-// text is ever interpolated into a command line.
-const psFirewallScript = `
-$ErrorActionPreference = 'Stop'
-$op = Get-Content -Raw -LiteralPath $env:CONNECT_HUB_FW_OP | ConvertFrom-Json
-function Get-RuleState($name) {
-  $r = Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue
-  if ($null -eq $r) { return $null }
-  $app  = $r | Get-NetFirewallApplicationFilter
-  $port = $r | Get-NetFirewallPortFilter
-  $addr = $r | Get-NetFirewallAddressFilter
-  return [pscustomobject]@{
-    name      = [string]$r.DisplayName
-    direction = [string]$r.Direction
-    action    = [string]$r.Action
-    enabled   = [bool]$r.Enabled
-    profile   = [string]$r.Profile
-    program   = [string]$app.Program
-    protocol  = [string]$port.Protocol
-    localPort = [string]$port.LocalPort
-    remote    = [string]($addr.RemoteAddress -join ',')
-  }
-}
-$result = [ordered]@{ outcome = 'failed'; detail = ''; state = $null }
-try {
-  switch ($op.op) {
-    'apply' {
-      $rule = $op.rule
-      $existing = Get-NetFirewallRule -DisplayName $rule.id -ErrorAction SilentlyContinue
-      if ($null -ne $existing) { Remove-NetFirewallRule -DisplayName $rule.id }
-      $profileArg = @($rule.profile -split ',' | ForEach-Object { $_.Trim() })
-      $params = @{
-        DisplayName = $rule.id
-        Direction   = 'Inbound'
-        Action      = 'Allow'
-        Program     = $rule.programPath
-        Protocol    = 'TCP'
-        LocalPort   = [int]$rule.port
-        Profile     = $profileArg
-        Enabled     = 'True'
-      }
-      if ($rule.remoteIp) { $params['RemoteAddress'] = $rule.remoteIp }
-      New-NetFirewallRule @params | Out-Null
-      $state = Get-RuleState $rule.id
-      if ($null -eq $state) { $result.outcome = 'failed'; $result.detail = '规则创建后读不到' }
-      else { $result.outcome = 'created'; $result.state = $state }
-    }
-    'query' {
-      $state = Get-RuleState $op.ruleId
-      if ($null -eq $state) { $result.outcome = 'absent' }
-      else { $result.outcome = 'present'; $result.state = $state }
-    }
-    'delete' {
-      $existing = Get-NetFirewallRule -DisplayName $op.ruleId -ErrorAction SilentlyContinue
-      if ($null -eq $existing) { $result.outcome = 'absent' }
-      else {
-        Remove-NetFirewallRule -DisplayName $op.ruleId
-        $state = Get-RuleState $op.ruleId
-        if ($null -eq $state) { $result.outcome = 'removed' }
-        else { $result.outcome = 'failed'; $result.detail = '规则删除后仍然存在' }
-      }
-    }
-    default { $result.outcome = 'failed'; $result.detail = '不支持的操作' }
-  }
-} catch {
-  $result.outcome = 'failed'
-  $result.detail = $_.Exception.Message
-}
-$result | ConvertTo-Json -Compress -Depth 5 | Set-Content -LiteralPath $env:CONNECT_HUB_FW_OUT -Encoding UTF8
-`
-
 // executeFirewallOperation runs the script above and maps its JSON answer.
 func executeFirewallOperation(op FirewallOperation) FirewallResult {
 	result := FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: FirewallFailed}
@@ -435,42 +365,13 @@ func executeFirewallOperation(op FirewallOperation) FirewallResult {
 		result.Detail = "规则结果无法读取：" + readErr.Error()
 		return result
 	}
-	var scriptAnswer struct {
-		Outcome string `json:"outcome"`
-		Detail  string `json:"detail"`
-		State   *struct {
-			Name      string `json:"name"`
-			Direction string `json:"direction"`
-			Action    string `json:"action"`
-			Enabled   bool   `json:"enabled"`
-			Profile   string `json:"profile"`
-			Program   string `json:"program"`
-			Protocol  string `json:"protocol"`
-			LocalPort string `json:"localPort"`
-			Remote    string `json:"remote"`
-		} `json:"state"`
+	parsed, parseErr := ParseFirewallScriptAnswer(data)
+	parsed.OperationID = op.OperationID
+	parsed.Op = op.Op
+	parsed.Rule = op.Rule
+	if parseErr != nil {
+		parsed.Detail = parseErr.Error()
+		parsed.Outcome = FirewallFailed
 	}
-	if err := json.Unmarshal(data, &scriptAnswer); err != nil {
-		result.Detail = "规则结果无法解析"
-		return result
-	}
-	result.Outcome = scriptAnswer.Outcome
-	result.Detail = scriptAnswer.Detail
-	if scriptAnswer.State != nil {
-		result.State = FirewallRuleState{
-			Name:          scriptAnswer.State.Name,
-			Direction:     scriptAnswer.State.Direction,
-			Action:        scriptAnswer.State.Action,
-			Enabled:       scriptAnswer.State.Enabled,
-			Profile:       scriptAnswer.State.Profile,
-			Program:       scriptAnswer.State.Program,
-			Protocol:      scriptAnswer.State.Protocol,
-			LocalPort:     scriptAnswer.State.LocalPort,
-			RemoteAddress: scriptAnswer.State.Remote,
-		}
-	}
-	if result.Outcome == "" {
-		result.Outcome = FirewallFailed
-	}
-	return result
+	return parsed
 }

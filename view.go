@@ -138,6 +138,7 @@ func (a *app) view(c *ui.Context) {
 	a.relayImportView(c)
 	a.relayDiagnoseView(c)
 	a.relayPointView(c)
+	a.relayHistoryConfirmView(c)
 }
 
 // qrCard was removed: WeCom's QR login now uses a WebView popup.

@@ -153,16 +153,19 @@ func (a *app) resumeLANShare() {
 // shutdownLANShare stops serving but keeps the enable intent, so the next start
 // resumes it.
 func (a *app) shutdownLANShare() {
-	if a.lanShare == nil {
-		return
+	if a.lanShare != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = a.lanShare.Shutdown(ctx)
+		cancel()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = a.lanShare.Shutdown(ctx)
 	// The listener is closed, so the rule no longer serves anything. A failure
-	// keeps the journal entry for the next start; it must not block quitting.
+	// keeps the journal entry for the next start; it must not block quitting —
+	// but it does get a bounded chance to finish before the process exits.
 	a.cancelPendingFirewallOps()
-	a.reconcileLanShareFirewall(a.lanShare.View())
+	a.reconcileLanShareFirewall(a.lanShareViewState())
+	if !a.awaitFirewallIdle(relay.FirewallShutdownBudget) {
+		a.tunLogf("局域网分享：防火墙规则清理未在退出前完成，已保留待处理记录")
+	}
 }
 
 // lanShareEnabled reports whether the share intent is on.
@@ -796,15 +799,23 @@ func (a *app) saveRelaySnapshot(pointID string, ident vpn.RelaySnapshotSource, r
 		Fingerprint: ident.Fingerprint,
 		Label:       ident.Fingerprint + "/" + ident.ShareID,
 	}
-	if err := a.store.SaveRelayKnown(pointID, source, resources); err != nil {
-		// The protection gap must stay visible: the gate refuses unknown
-		// targets instead of pretending the history is intact.
+	write, err := a.store.SaveRelayKnown(pointID, source, resources)
+	if err != nil {
+		// The protection gap must stay visible: the gate refuses unknown targets
+		// instead of pretending the history is intact.
 		if a.mgr != nil {
-			a.mgr.SetRelayHistoryUnverified(true)
+			a.mgr.BlockRelayAutoConnect(pointID, true)
 		}
 		return err
 	}
-	a.mgr.SeedRelayKnown(pointID, resources)
+	if write.Incomplete {
+		// The cache this snapshot merged into was corrupt or missing, so targets
+		// owned by the lost history are unknowable. Protect what is known and
+		// keep the node blocked until the user decides otherwise.
+		a.mgr.SeedRelayKnownIncomplete(pointID, resources)
+	} else {
+		a.mgr.SeedRelayKnown(pointID, resources)
+	}
 	// The marker check reads the store, not a.cfg: this goroutine must not touch
 	// the UI-thread copy of the configuration.
 	initialized := false
@@ -833,7 +844,6 @@ func (a *app) loadRelayKnown() {
 	if a.mgr == nil {
 		return
 	}
-	unverified := false
 	for _, p := range a.cfg.Points {
 		if p.Protocol != model.ProtocolLANRelay {
 			continue
@@ -842,7 +852,6 @@ func (a *app) loadRelayKnown() {
 		known, err := a.store.LoadRelayKnown(p.ID)
 		switch {
 		case err != nil:
-			unverified = true
 			a.mgr.BlockRelayAutoConnect(p.ID, true)
 			if a.bus != nil {
 				a.bus.Add("app", fmt.Sprintf("配置：局域网分享「%s」的历史归属无法读取，已暂停自动连接（可手动登录修复）：%v", p.Name, err))
@@ -851,17 +860,82 @@ func (a *app) loadRelayKnown() {
 			if initialized {
 				// A node that had a cache and lost it cannot prove which
 				// targets are managed.
-				unverified = true
 				a.mgr.BlockRelayAutoConnect(p.ID, true)
 				if a.bus != nil {
 					a.bus.Add("app", fmt.Sprintf("配置：局域网分享「%s」的历史归属缺失，已暂停自动连接并暂缓未知目标直连", p.Name))
 				}
 			}
+		case known.Incomplete:
+			// The file exists but is known to be missing entries: the node stays
+			// out of automatic login and the gate stays on.
+			a.mgr.SeedRelayKnownIncomplete(p.ID, known.Resources)
+			if a.bus != nil {
+				a.bus.Add("app", fmt.Sprintf("配置：局域网分享「%s」的历史归属不完整，已暂停自动连接；旧目标仍不会直连", p.Name))
+			}
 		default:
 			a.mgr.SeedRelayKnown(p.ID, known.Resources)
 		}
 	}
-	a.mgr.SetRelayHistoryUnverified(unverified)
+}
+
+// clearRelayHistoryProtection is the explicit user decision to accept that the
+// lost history cannot be recovered: their old owned targets will no longer be
+// recognised as managed. Nothing calls this automatically.
+// relayHistoryConfirmView asks before dropping the protection for a node: the
+// consequence is that targets from the lost history stop being recognised.
+func (a *app) relayHistoryConfirmView(c *ui.Context) {
+	if a.askingClearRelayHistory == "" {
+		return
+	}
+	id := a.askingClearRelayHistory
+	p := a.cfg.Find(id)
+	if p == nil {
+		a.askingClearRelayHistory = ""
+		return
+	}
+	t := c.Theme()
+	open := true
+	ui.Modal(c, &open, func() {
+		ui.Column(c).Width(dialogRegular).Gap(10).Children(func() {
+			dialogHeader(c, "解除历史保护", p.Name)
+			ui.Text(c, "该分享的历史归属缓存已损坏或缺失，无法证明哪些地址以前属于这个接入点。").
+				FontSize(12).Wrap()
+			ui.Text(c, "解除后，这些地址将不再被视为受管目标，可能按普通公网从本机直连。").
+				FontSize(12).TextColor(t.Warning).Wrap()
+			dialogFooter(c, func() {
+				if ui.Button(c, "保持保护").FontSize(11).Clicked() {
+					a.askingClearRelayHistory = ""
+					a.invalidate()
+				}
+				ui.Row(c).Grow(1)
+				if ui.PrimaryButton(c, "确认解除").FontSize(11).Clicked() {
+					a.askingClearRelayHistory = ""
+					if err := a.clearRelayHistoryProtection(id); err != nil {
+						a.toast = "解除失败：" + err.Error()
+					}
+					a.invalidate()
+				}
+			})
+		})
+	})
+	if !open {
+		a.askingClearRelayHistory = ""
+		a.invalidate()
+	}
+}
+
+func (a *app) clearRelayHistoryProtection(pointID string) error {
+	if a.store != nil {
+		if err := a.store.ClearRelayKnownIncomplete(pointID); err != nil {
+			return err
+		}
+	}
+	if a.mgr != nil {
+		a.mgr.BlockRelayAutoConnect(pointID, false)
+	}
+	a.toast = "已解除该分享的历史保护：之前归属不明目标今后按普通规则处理"
+	a.invalidate()
+	return nil
 }
 
 // relayDiagnoseDraft is the connection check panel for an imported node.
@@ -1086,6 +1160,18 @@ func (a *app) relayPointView(c *ui.Context) {
 					}
 					if view.Error != "" {
 						ui.Text(c, view.Error).FontSize(12).TextColor(t.Danger).Wrap()
+					}
+					// A node whose history is unknown or incomplete stays out of
+					// automatic login and keeps unknown targets off the direct
+					// path. Only the user can accept that loss.
+					if blocked := a.mgr.RelayAutoConnectBlocked(p.ID); blocked {
+						ui.Text(c, "历史归属不完整或无法读取：本节点不自动连接，未知目标不会直连。恢复可信历史前保持此状态。").
+							FontSize(11).TextColor(t.Warning).Wrap()
+						if ui.Button(c, "解除历史保护…").FontSize(11).Clicked() {
+							d.open = false
+							a.askingClearRelayHistory = p.ID
+							a.invalidate()
+						}
 					}
 					// System proxy is a separate, explicit step: connecting a
 					// share never changes it on its own.

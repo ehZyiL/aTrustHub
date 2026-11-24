@@ -477,3 +477,107 @@ func TestFirewallResultJSONRoundTrip(t *testing.T) {
 		t.Fatalf("round trip changed the result: %+v", back)
 	}
 }
+
+// S: Windows PowerShell 5.1 writes a BOM with "-Encoding UTF8". A strict JSON
+// decoder then turned a successful rule operation into "结果无法解析". The parser
+// must tolerate a BOM, and the helper script must stop writing one.
+func TestParseFirewallScriptAnswerToleratesBOM(t *testing.T) {
+	rule := firewallTestRule(23456)
+	state := matchingState(rule)
+	payload := map[string]any{"outcome": "created", "detail": "", "state": map[string]any{
+		"name": state.Name, "direction": state.Direction, "action": state.Action,
+		"enabled": state.Enabled, "profile": state.Profile, "program": state.Program,
+		"protocol": state.Protocol, "localPort": state.LocalPort, "remote": state.RemoteAddress,
+	}}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string][]byte{
+		"plain":          body,
+		"utf8 bom":       append(append([]byte{}, utf8BOM...), body...),
+		"crlf + spaces":  append(append([]byte("\r\n  "), body...), []byte(" \r\n")...),
+		"trailing nul":   append(append([]byte{}, body...), 0, 0),
+		"bom + newlines": append(append(append([]byte{}, utf8BOM...), body...), '\r', '\n'),
+	}
+	for name, data := range cases {
+		result, err := ParseFirewallScriptAnswer(data)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if result.Outcome != FirewallCreated {
+			t.Fatalf("%s: outcome = %s", name, result.Outcome)
+		}
+		if err := result.State.Matches(rule); err != nil {
+			t.Fatalf("%s: state lost through decoding: %v", name, err)
+		}
+	}
+	// UTF-16 output is reported, not silently misparsed.
+	if _, err := ParseFirewallScriptAnswer([]byte{0xFF, 0xFE, '{', '}'}); err == nil {
+		t.Fatal("UTF-16 output was accepted")
+	}
+	if _, err := ParseFirewallScriptAnswer(nil); err == nil {
+		t.Fatal("an empty answer was accepted")
+	}
+}
+
+// The helper script must write BOM-less UTF-8: the parser tolerates a BOM, but a
+// new helper should not rely on that.
+func TestFirewallScriptWritesBomlessUTF8(t *testing.T) {
+	if !strings.Contains(psFirewallScript, "UTF8Encoding($false)") {
+		t.Fatal("the script does not request BOM-less UTF-8")
+	}
+	if strings.Contains(psFirewallScript, "Set-Content") {
+		t.Fatal("the script still uses Set-Content, which prepends a BOM on 5.1")
+	}
+	if !strings.Contains(psFirewallScript, "WriteAllText") {
+		t.Fatal("the script does not write the result explicitly")
+	}
+}
+
+// S: pausing a share must revoke a creation that is still waiting for approval.
+func TestReconcileCancelsPendingCreationWhenTheShareStops(t *testing.T) {
+	dir := t.TempDir()
+	rule := firewallTestRule(23456)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	fake := &fakeFirewall{}
+	fake.handler = func(op FirewallOperation) (FirewallResult, error) {
+		switch op.Op {
+		case FirewallOpApply:
+			once.Do(func() { close(entered) })
+			<-release
+			return FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: FirewallCreated, State: matchingState(rule)}, nil
+		case FirewallOpQuery:
+			return FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: FirewallAbsent}, nil
+		case FirewallOpDelete:
+			return FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: FirewallRemoved}, nil
+		}
+		return FirewallResult{Outcome: FirewallPresent}, nil
+	}
+	rules := NewRules(dir, fake, nil)
+	done := make(chan FirewallResult, 1)
+	go func() {
+		result, _ := rules.Apply(context.Background(), rule)
+		done <- result
+	}()
+	<-entered
+
+	// The share stops running (source lost / VPN offline): nothing is desired.
+	if _, errs := rules.Reconcile(context.Background(), nil); len(errs) != 0 {
+		t.Fatalf("reconcile failed: %v", errs)
+	}
+	close(release)
+	result := <-done
+	if result.Outcome != FirewallCanceled {
+		t.Fatalf("a creation approved after the share stopped reported %s", result.Outcome)
+	}
+	journal, err := LoadFirewallJournal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.Find(rule.ID) != nil {
+		t.Fatalf("a late creation stayed in the journal: %+v", journal)
+	}
+}

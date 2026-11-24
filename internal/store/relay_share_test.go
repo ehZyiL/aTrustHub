@@ -123,7 +123,7 @@ func TestRelayKnownCacheRoundTripAndCorruption(t *testing.T) {
 	if err != nil || known != nil {
 		t.Fatalf("missing cache should be (nil,nil): %+v %v", known, err)
 	}
-	if err := st.SaveRelayKnown("r1", source, resources); err != nil {
+	if _, err := st.SaveRelayKnown("r1", source, resources); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := st.LoadRelayKnown("r1")
@@ -152,7 +152,7 @@ func TestRelayKnownCacheRoundTripAndCorruption(t *testing.T) {
 		t.Fatalf("corrupt cache not reported: %v", err)
 	}
 	// Deleting the node removes the cache.
-	if err := st.SaveRelayKnown("r1", source, resources); err != nil {
+	if _, err := st.SaveRelayKnown("r1", source, resources); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.DeleteRelayKnown("r1"); err != nil {
@@ -216,11 +216,11 @@ func TestRelayKnownKeepsWithdrawnHistory(t *testing.T) {
 			{Domain: "git.corp.example", PortMin: 22, PortMax: 22, Protocol: "tcp"},
 		},
 	}
-	if err := st.SaveRelayKnown(point.ID, source, full); err != nil {
+	if _, err := st.SaveRelayKnown(point.ID, source, full); err != nil {
 		t.Fatal(err)
 	}
 	// The host withdraws everything: an empty snapshot must not erase history.
-	if err := st.SaveRelayKnown(point.ID, source, &workeripc.ResourceSnapshot{Tunnel: "ipv4-l3"}); err != nil {
+	if _, err := st.SaveRelayKnown(point.ID, source, &workeripc.ResourceSnapshot{Tunnel: "ipv4-l3"}); err != nil {
 		t.Fatal(err)
 	}
 	known, err := st.LoadRelayKnown(point.ID)
@@ -232,7 +232,7 @@ func TestRelayKnownKeepsWithdrawnHistory(t *testing.T) {
 	}
 	// Re-saving the same snapshot must not grow the cache.
 	for i := 0; i < 5; i++ {
-		if err := st.SaveRelayKnown(point.ID, source, full); err != nil {
+		if _, err := st.SaveRelayKnown(point.ID, source, full); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -265,7 +265,7 @@ func TestRelayKnownConcurrentSavesKeepEveryRule(t *testing.T) {
 				Tunnel:  "ipv4-l3",
 				IPRules: []workeripc.IPRule{{Min: fmt.Sprintf("10.%d.0.0", w), Max: fmt.Sprintf("10.%d.255.255", w), PortMin: 443, PortMax: 443, Protocol: "tcp"}},
 			}
-			if err := st.SaveRelayKnown(point.ID, source, snap); err != nil {
+			if _, err := st.SaveRelayKnown(point.ID, source, snap); err != nil {
 				t.Errorf("save %d: %v", w, err)
 			}
 		}(w)
@@ -296,12 +296,12 @@ func TestRelayKnownRefusesStaleSource(t *testing.T) {
 		IPRules: []workeripc.IPRule{{Min: "10.5.0.0", Max: "10.5.255.255", PortMin: 443, PortMax: 443, Protocol: "tcp"}},
 	}
 	good := RelaySource{ShareID: point.Relay.ShareID, Fingerprint: point.Relay.CertificateSHA256}
-	if err := st.SaveRelayKnown(point.ID, good, snap); err != nil {
+	if _, err := st.SaveRelayKnown(point.ID, good, snap); err != nil {
 		t.Fatal(err)
 	}
 	// A different share id or fingerprint is a different node identity.
 	other := RelaySource{ShareID: strings.Repeat("z", 22), Fingerprint: strings.Repeat("cd", 32)}
-	if err := st.SaveRelayKnown(point.ID, other, snap); !errors.Is(err, ErrRelayKnownStaleSource) {
+	if _, err := st.SaveRelayKnown(point.ID, other, snap); !errors.Is(err, ErrRelayKnownStaleSource) {
 		t.Fatalf("a snapshot from another share was accepted: %v", err)
 	}
 	// Deleting the node invalidates a session that is still running.
@@ -314,7 +314,7 @@ func TestRelayKnownRefusesStaleSource(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SaveRelayKnown(point.ID, good, snap); !errors.Is(err, ErrRelayKnownStaleSource) {
+	if _, err := st.SaveRelayKnown(point.ID, good, snap); !errors.Is(err, ErrRelayKnownStaleSource) {
 		t.Fatalf("a snapshot recreated the cache of a deleted node: %v", err)
 	}
 	if known, err := st.LoadRelayKnown(point.ID); err != nil || known != nil {
@@ -350,7 +350,7 @@ func TestRelayKnownBoundsAndCorruptCacheBehavior(t *testing.T) {
 		Tunnel:  "ipv4-l3",
 		IPRules: []workeripc.IPRule{{Min: "10.7.0.0", Max: "10.7.255.255", PortMin: 443, PortMax: 443, Protocol: "tcp"}},
 	}
-	if err := st.SaveRelayKnown(point.ID, source, small); err != nil {
+	if _, err := st.SaveRelayKnown(point.ID, source, small); err != nil {
 		t.Fatalf("a corrupt cache blocked a verified snapshot: %v", err)
 	}
 	known, err := st.LoadRelayKnown(point.ID)
@@ -366,11 +366,114 @@ func TestRelayKnownBoundsAndCorruptCacheBehavior(t *testing.T) {
 			PortMin: 443, PortMax: 443, Protocol: "tcp",
 		})
 	}
-	if err := st.SaveRelayKnown(point.ID, source, huge); err == nil {
+	if _, err := st.SaveRelayKnown(point.ID, source, huge); err == nil {
 		t.Fatal("an oversized history was accepted")
 	}
 	known, err = st.LoadRelayKnown(point.ID)
 	if err != nil || known == nil || len(known.Resources.IPRules) != 1 {
 		t.Fatalf("a refused save damaged the existing cache: %+v %v", known, err)
+	}
+}
+
+// S: a corrupt cache must not be silently "repaired" by the next snapshot. The
+// loss is persisted so the protection gate stays on until the user decides.
+func TestRelayKnownCorruptionIsPersistedAsIncomplete(t *testing.T) {
+	st := relayTestStore(t)
+	point := relayTestPoint()
+	if _, err := st.Update(func(cfg *model.Config) error { cfg.Add(point); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Save(); err != nil {
+		t.Fatal(err)
+	}
+	source := RelaySource{ShareID: point.Relay.ShareID, Fingerprint: point.Relay.CertificateSHA256}
+	full := &workeripc.ResourceSnapshot{
+		Tunnel:  "ipv4-l3",
+		IPRules: []workeripc.IPRule{{Min: "10.5.0.0", Max: "10.5.255.255", PortMin: 443, PortMax: 443, Protocol: "tcp"}},
+	}
+	if _, err := st.SaveRelayKnown(point.ID, source, full); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetRelayHistoryInitialized(point.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// The cache is damaged outside the app.
+	if err := os.WriteFile(st.RelayKnownPath(point.ID), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The next verified snapshot cannot prove what the lost history owned.
+	write, err := st.SaveRelayKnown(point.ID, source, &workeripc.ResourceSnapshot{Tunnel: "ipv4-l3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !write.Incomplete {
+		t.Fatal("a save over a corrupt cache was reported as complete history")
+	}
+	known, err := st.LoadRelayKnown(point.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if known == nil || !known.Incomplete {
+		t.Fatalf("the incompleteness was not persisted: %+v", known)
+	}
+	// It stays incomplete across further snapshots: only recovery or the user can
+	// clear it.
+	write, err = st.SaveRelayKnown(point.ID, source, full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !write.Incomplete {
+		t.Fatal("a later snapshot silently cleared the incomplete history")
+	}
+	// The explicit user decision clears it.
+	if err := st.ClearRelayKnownIncomplete(point.ID); err != nil {
+		t.Fatal(err)
+	}
+	known, err = st.LoadRelayKnown(point.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if known.Incomplete {
+		t.Fatal("clearing the protection did not persist")
+	}
+	// History itself is still a union; clearing the mark does not forget rules.
+	if len(known.Resources.IPRules) != 1 {
+		t.Fatalf("clearing the mark changed the stored history: %+v", known.Resources)
+	}
+}
+
+// A missing cache for a node that was already initialised is also a loss.
+func TestRelayKnownMissingAfterInitialisationIsIncomplete(t *testing.T) {
+	st := relayTestStore(t)
+	point := relayTestPoint()
+	if _, err := st.Update(func(cfg *model.Config) error { cfg.Add(point); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Save(); err != nil {
+		t.Fatal(err)
+	}
+	source := RelaySource{ShareID: point.Relay.ShareID, Fingerprint: point.Relay.CertificateSHA256}
+	// First run: nothing stored yet, so the snapshot is the whole truth.
+	write, err := st.SaveRelayKnown(point.ID, source, &workeripc.ResourceSnapshot{Tunnel: "ipv4-l3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if write.Incomplete {
+		t.Fatal("a first snapshot was marked incomplete")
+	}
+	if err := st.SetRelayHistoryInitialized(point.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteRelayKnown(point.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Second run: the node had history and the cache is gone.
+	write, err = st.SaveRelayKnown(point.ID, source, &workeripc.ResourceSnapshot{Tunnel: "ipv4-l3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !write.Incomplete {
+		t.Fatal("a lost cache was treated as a first snapshot")
 	}
 }

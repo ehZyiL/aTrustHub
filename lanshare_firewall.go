@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -36,11 +37,30 @@ func (a *app) firewallRules() *relay.Rules {
 
 // fwSeenState remembers the share state whose rules were already reconciled, so
 // the per-frame check does no disk work unless something actually changed.
+//
+// It is written from the render path and from background action goroutines
+// (启用/关闭共享), so it carries its own lock instead of relying on the UI
+// thread: sharing state is read by both sides.
 type fwSeenState struct {
+	mu      sync.Mutex
 	init    bool
 	state   relay.State
 	port    int
 	address string
+}
+
+// changed records view and reports whether it differs from the last reconciled
+// state. One call both compares and updates, so two callers cannot interleave a
+// stale read with a fresh write.
+func (s *fwSeenState) changed(view relay.View) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.init && s.state == view.State && s.port == view.Port && s.address == view.Address {
+		return false
+	}
+	s.init = true
+	s.state, s.port, s.address = view.State, view.Port, view.Address
+	return true
 }
 
 // syncLanShareFirewallIfNeeded reconciles on state changes only. It never asks
@@ -50,11 +70,9 @@ func (a *app) syncLanShareFirewallIfNeeded() {
 		return
 	}
 	view := a.lanShareViewState()
-	if a.fwSeen.init && a.fwSeen.state == view.State && a.fwSeen.port == view.Port && a.fwSeen.address == view.Address {
+	if !a.fwSeen.changed(view) {
 		return
 	}
-	a.fwSeen.init = true
-	a.fwSeen.state, a.fwSeen.port, a.fwSeen.address = view.State, view.Port, view.Address
 	a.reconcileLanShareFirewall(view)
 }
 
@@ -65,9 +83,22 @@ func (a *app) syncLanShareFirewall() {
 		return
 	}
 	view := a.lanShareViewState()
-	a.fwSeen.init = true
-	a.fwSeen.state, a.fwSeen.port, a.fwSeen.address = view.State, view.Port, view.Address
+	a.fwSeen.changed(view)
 	a.reconcileLanShareFirewall(view)
+}
+
+// awaitFirewallIdle waits for the scheduled reconciliation to finish, up to
+// budget. It exists for shutdown: leaving right after starting the goroutine
+// would let the process exit before the rule was removed.
+func (a *app) awaitFirewallIdle(budget time.Duration) bool {
+	deadline := time.Now().Add(budget)
+	for a.fwRunning.Load() {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return true
 }
 
 // lanShareViewState is the share state for firewall purposes. No controller means
@@ -306,6 +337,9 @@ func (a *app) allowLanShareFirewall(view relay.View) {
 			}
 			a.invalidate()
 		})
+		// A prompt answered after the share stopped running must not leave a
+		// rule behind: reconcile against the state as it is now.
+		a.syncLanShareFirewall()
 	}()
 }
 

@@ -489,7 +489,7 @@ func TestDeletingRelayNodeDropsCache(t *testing.T) {
 	a.setConfig(a.store.Config())
 	a.mgr.Apply(a.cfg)
 	point := a.cfg.Points[0]
-	if err := a.store.SaveRelayKnown(point.ID, store.RelaySource{ShareID: point.Relay.ShareID, Fingerprint: point.Relay.CertificateSHA256, Label: "src"}, &workeripc.ResourceSnapshot{
+	if _, err := a.store.SaveRelayKnown(point.ID, store.RelaySource{ShareID: point.Relay.ShareID, Fingerprint: point.Relay.CertificateSHA256, Label: "src"}, &workeripc.ResourceSnapshot{
 		Tunnel:  "ipv4-l3",
 		IPRules: []workeripc.IPRule{{Min: "10.5.0.0", Max: "10.5.0.9", PortMin: 443, PortMax: 443, Protocol: "tcp"}},
 	}); err != nil {
@@ -977,5 +977,88 @@ func TestPendingConfigReloadKeepsNewerEdits(t *testing.T) {
 	}
 	if a.cfgReload.Load() {
 		t.Fatal("the reload flag was not consumed")
+	}
+}
+
+// S: the reported regression — a corrupt cache must not be "repaired" by a newer
+// (smaller) snapshot, because the current authorization cannot prove which
+// targets the lost history owned. Otherwise a restart after the repair treats an
+// old VPN target as an ordinary direct connection.
+func TestCorruptHistoryStaysProtectedAfterARepairSnapshot(t *testing.T) {
+	a := testApp(t)
+	point := model.AccessPoint{
+		ID: "relay-corrupt", Name: "同事分享", Protocol: model.ProtocolLANRelay,
+		Server: "192.168.1.50", Port: 23456, InPool: true,
+		Relay: &model.RelayPointOptions{
+			Version: 1, ShareID: base64.RawURLEncoding.EncodeToString([]byte("bbbbbbbbbbbbbbbb")),
+			CertificateSHA256: strings.Repeat("cd", 32), HistoryInitialized: true,
+		},
+	}
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Add(point)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	a.setConfig(a.store.Config())
+	a.mgr.Apply(a.cfg)
+
+	// The cache exists but is unreadable.
+	dir := filepath.Dir(a.store.RelayKnownPath(point.ID))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(a.store.RelayKnownPath(point.ID), []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.loadRelayKnown()
+	if !a.mgr.RelayHistoryUnverified() {
+		t.Fatal("a corrupt cache did not enable the protection gate")
+	}
+	if !a.mgr.RelayAutoConnectBlocked(point.ID) {
+		t.Fatal("a corrupt cache did not block automatic login")
+	}
+
+	// The user manually logs in; the share now authorizes nothing (the old range
+	// was withdrawn). That snapshot must not be treated as the whole truth.
+	ident := vpn.RelaySnapshotSource{ShareID: point.Relay.ShareID, Fingerprint: point.Relay.CertificateSHA256}
+	if err := a.saveRelaySnapshot(point.ID, ident, &workeripc.ResourceSnapshot{Tunnel: "ipv4-l3"}); err != nil {
+		t.Fatalf("saveRelaySnapshot: %v", err)
+	}
+	a.applyPendingConfigReload()
+	if !a.mgr.RelayAutoConnectBlocked(point.ID) {
+		t.Fatal("a repair snapshot unblocked a node with lost history")
+	}
+	if !a.mgr.RelayHistoryUnverified() {
+		t.Fatal("a repair snapshot lifted the protection gate")
+	}
+
+	// Restart: the loss is still known, so the node stays blocked and protected.
+	// The store itself must still report the loss.
+	stored, err := a.store.LoadRelayKnown(point.ID)
+	if err != nil || stored == nil || !stored.Incomplete {
+		t.Fatalf("stored history after the repair snapshot: %+v %v", stored, err)
+	}
+	fresh := reopenTestApp(t, a.store.Dir())
+	fresh.loadRelayKnown()
+	if !fresh.mgr.RelayAutoConnectBlocked(point.ID) || !fresh.mgr.RelayHistoryUnverified() {
+		t.Fatalf("the incomplete history was forgotten across a restart (blocked=%v gate=%v)",
+			fresh.mgr.RelayAutoConnectBlocked(point.ID), fresh.mgr.RelayHistoryUnverified())
+	}
+
+	// Only the explicit user decision clears it.
+	if err := fresh.clearRelayHistoryProtection(point.ID); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.mgr.RelayAutoConnectBlocked(point.ID) {
+		t.Fatal("the explicit release did not unblock the node")
+	}
+	again := reopenTestApp(t, a.store.Dir())
+	again.loadRelayKnown()
+	if again.mgr.RelayHistoryUnverified() {
+		t.Fatal("the explicit release did not persist")
 	}
 }

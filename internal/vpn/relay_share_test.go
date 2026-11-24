@@ -535,3 +535,71 @@ func TestTerminalShareErrorStopsAutoReconnect(t *testing.T) {
 	m2.ConnectAll(true)
 	waitFor(t, "transient retries", func() bool { mu2.Lock(); defer mu2.Unlock(); return transient >= 2 })
 }
+
+// slowDNSSession answers one query only after the test releases it, so a
+// revocation can land while the query is still in flight.
+type slowDNSSession struct {
+	*dnsCapableSession
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *slowDNSSession) ExchangeDNS(ctx context.Context, packet []byte) ([]byte, error) {
+	s.once.Do(func() { close(s.entered) })
+	select {
+	case <-s.release:
+		return s.dnsCapableSession.ExchangeDNS(ctx, packet)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// S: an answer that arrives after the name was withdrawn must not be served. The
+// old code only checked that the session still existed, not the revision.
+func TestLateDNSAnswerAfterRevocationIsRefused(t *testing.T) {
+	base := &dnsCapableSession{fakeSession: newFakeSession("p1")}
+	base.info.Resources = shareTestResources()
+	sess := &slowDNSSession{dnsCapableSession: base, entered: make(chan struct{}), release: make(chan struct{})}
+	m, _ := startShareTestPointWithSession(t, sharePointConfig(), sess)
+	src, err := m.AcquireRelayShareSource("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	snap, err := src.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		answer []byte
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		answer, err := src.ExchangeDNS(context.Background(), snap.Revision, dnsQuery(t, "git.corp.test"))
+		done <- result{answer: answer, err: err}
+	}()
+	<-sess.entered
+
+	// The host withdraws the corporate domain while the query is running.
+	m.mu.Lock()
+	ep := m.points["p1"]
+	ep.rawResources = &workeripc.ResourceSnapshot{Tunnel: "ipv4-l3"}
+	ep.publishResourcesLocked()
+	m.mu.Unlock()
+	close(sess.release)
+
+	select {
+	case got := <-done:
+		if got.err == nil {
+			t.Fatal("a withdrawn name was still resolved through the share")
+		}
+		var re *relay.Error
+		if !errors.As(got.err, &re) || re.Code != relay.CodeStaleResources {
+			t.Fatalf("want stale_resources, got %v", got.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the late DNS answer was never rejected")
+	}
+}

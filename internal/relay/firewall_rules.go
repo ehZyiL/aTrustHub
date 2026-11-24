@@ -189,6 +189,13 @@ func (r *Rules) Reconcile(ctx context.Context, desired []FirewallRule) (kept int
 			continue
 		}
 		stale = append(stale, entry.Rule)
+		if entry.State != FirewallEntryConfirmed {
+			// A create may still be sitting behind an elevation prompt. The
+			// share no longer wants it, so a late success must be revoked
+			// instead of being confirmed. Without this, pausing a share could
+			// leave a rule behind after the prompt was answered.
+			r.canceled[entry.OperationID] = true
+		}
 	}
 	r.mu.Unlock()
 
@@ -322,3 +329,8 @@ func (r *Rules) dropIfAbsent(id string, result FirewallResult) {
 // FirewallOpBudget is how long one elevated operation may take, including the
 // time the user spends deciding on the UAC prompt.
 const FirewallOpBudget = 2 * time.Minute
+
+// FirewallShutdownBudget bounds how long quitting waits for a rule cleanup. An
+// unfinished cleanup keeps its journal entry and is retried on the next start;
+// quitting must never hang on an unanswered elevation prompt.
+const FirewallShutdownBudget = 5 * time.Second

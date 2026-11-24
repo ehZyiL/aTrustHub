@@ -56,6 +56,9 @@ type app struct {
 	relayImport   relayImportDraft
 	relayDiagnose relayDiagnoseDraft
 	relayPoint    relayPointDraft
+	// askingClearRelayHistory is the node whose protection the user is about to
+	// drop; it drives the confirmation dialog.
+	askingClearRelayHistory string
 	// firewallBusy / firewallNotice / firewallErr are the Windows firewall action
 	// state; the fields exist on every platform so the panel code is portable.
 	firewallBusy   bool

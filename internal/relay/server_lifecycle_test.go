@@ -525,3 +525,45 @@ func TestTouchCannotReviveAnExpiredLease(t *testing.T) {
 		t.Fatal("a replaced lease renewed itself")
 	}
 }
+
+// S: a dial that is still running when its resource generation is retired must be
+// cancelled by the generation switch, not left to finish and be thrown away.
+func TestGenerationChangeCancelsAnInFlightDial(t *testing.T) {
+	blocking := &blockingDialSource{started: make(chan struct{})}
+	fx := startShareFixtureWith(t, "review-token", func(f *fakeSource) Source {
+		blocking.fakeSource = f
+		return blocking
+	})
+	client := fx.client(t)
+	ctx := context.Background()
+	state, token, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	dialErr := make(chan error, 1)
+	go func() {
+		_, err := client.Dial(ctx, token, state.Epoch, state.Revision, "10.1.2.3:443")
+		dialErr <- err
+	}()
+	<-blocking.started
+	fx.source.setSnapshot(nextGeneration())
+	select {
+	case err := <-dialErr:
+		if err == nil {
+			t.Fatal("a dial under the retired generation succeeded")
+		}
+		var re *Error
+		if errors.As(err, &re) && re.Code != CodeStaleResources && re.Code != CodeShareClosed {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// It must end because the generation was retired, not because the dial
+		// timeout expired.
+		if elapsed := time.Since(start); elapsed > DialTimeout {
+			t.Fatalf("the dial was not cancelled by the generation change (took %s)", elapsed)
+		}
+	case <-time.After(DialTimeout + time.Second):
+		t.Fatal("the dial was not cancelled by the generation change")
+	}
+	waitRelay(t, "the slot is released", func() bool { return fx.server.conns.count() == 0 })
+}

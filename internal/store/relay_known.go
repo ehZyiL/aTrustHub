@@ -50,6 +50,12 @@ type RelayKnown struct {
 	Fingerprint string                      `json:"fingerprint,omitempty"`
 	SavedAt     int64                       `json:"savedAt"`
 	Resources   *workeripc.ResourceSnapshot `json:"resources"`
+	// Incomplete records that this history is known to be missing entries: the
+	// cache was corrupt or lost while the node had already been initialised.
+	// It is sticky across saves, because a newer authorization snapshot cannot
+	// prove which targets the lost history used to own. Only verified recovery
+	// or an explicit user decision clears it.
+	Incomplete bool `json:"incomplete,omitempty"`
 }
 
 // RelayKnownPath is where a point's cache lives. The directory is private to the
@@ -111,6 +117,13 @@ func (s *Store) loadRelayKnown(pointID string) (*RelayKnown, error) {
 	return &known, nil
 }
 
+// RelayKnownWrite reports what the save produced.
+type RelayKnownWrite struct {
+	// Incomplete is true while the stored history is known to be missing
+	// entries. The caller must keep the protection gate on in that case.
+	Incomplete bool
+}
+
 // SaveRelayKnown records a verified snapshot as the newest attribution history.
 //
 // It never replaces what is already known: the stored cache is the union of the
@@ -121,27 +134,40 @@ func (s *Store) loadRelayKnown(pointID string) (*RelayKnown, error) {
 //
 // A snapshot whose source no longer matches the stored node is refused:
 // re-importing or deleting a node invalidates any session that is still running.
-func (s *Store) SaveRelayKnown(pointID string, source RelaySource, resources *workeripc.ResourceSnapshot) error {
+func (s *Store) SaveRelayKnown(pointID string, source RelaySource, resources *workeripc.ResourceSnapshot) (RelayKnownWrite, error) {
+	var out RelayKnownWrite
 	if resources == nil {
-		return nil
+		return out, nil
 	}
 	s.relayKnown.Lock()
 	defer s.relayKnown.Unlock()
 
 	if err := s.checkRelaySource(pointID, source); err != nil {
-		return err
+		return out, err
 	}
 	history := resources
-	if old, err := s.loadRelayKnown(pointID); err != nil {
-		// A broken cache is kept on disk as evidence, but it must not stop a
-		// verified snapshot from being stored: refusing would lose even the
-		// history the caller still has in memory.
+	incomplete := false
+	old, err := s.loadRelayKnown(pointID)
+	switch {
+	case err != nil:
+		// A broken cache is kept as evidence and must not stop a verified
+		// snapshot from being stored (refusing would lose even what the caller
+		// still holds), but the history it should have contained is gone. That
+		// loss is persisted: without it, a later empty snapshot would look like
+		// the whole truth and old owned targets would fall back to direct.
 		if !errors.Is(err, ErrRelayKnownCorrupt) {
-			return err
+			return out, err
 		}
-	} else if old != nil {
+		incomplete = true
+	case old != nil:
 		history = attribution.Merge(old.Resources, resources)
+		incomplete = old.Incomplete
+	default:
+		// No cache at all. If the node was already initialised, its history was
+		// lost; only a first-time snapshot can be trusted to be complete.
+		incomplete = s.relayHistoryInitialized(pointID)
 	}
+	out.Incomplete = incomplete
 	known := RelayKnown{
 		Schema:      RelayKnownSchema,
 		PointID:     pointID,
@@ -150,19 +176,53 @@ func (s *Store) SaveRelayKnown(pointID string, source RelaySource, resources *wo
 		Fingerprint: source.Fingerprint,
 		SavedAt:     time.Now().Unix(),
 		Resources:   history,
+		Incomplete:  incomplete,
 	}
+	data, err := json.MarshalIndent(known, "", "  ")
+	if err != nil {
+		return out, err
+	}
+	if len(data) > RelayKnownMaxBytes {
+		return out, fmt.Errorf("局域网分享的历史归属超过 %d 字节，未保存", RelayKnownMaxBytes)
+	}
+	dir := filepath.Join(s.dir, "relay-known")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return out, err
+	}
+	return out, writeFileAtomic(filepath.Join(dir, safePointFile(pointID)+".json"), append(data, '\n'), 0o600)
+}
+
+// relayHistoryInitialized reports whether the node had a first verified snapshot
+// stored, which is what makes a missing cache a *loss* rather than a first run.
+func (s *Store) relayHistoryInitialized(pointID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	point := s.cfg.Find(pointID)
+	return point != nil && point.Relay != nil && point.Relay.HistoryInitialized
+}
+
+// ClearRelayKnownIncomplete drops the "history may be missing entries" mark.
+//
+// This is the explicit user decision the protection gate waits for: they accept
+// that targets owned in the lost history will no longer be recognised. It is
+// never called automatically.
+func (s *Store) ClearRelayKnownIncomplete(pointID string) error {
+	s.relayKnown.Lock()
+	defer s.relayKnown.Unlock()
+	known, err := s.loadRelayKnown(pointID)
+	if err != nil {
+		return err
+	}
+	if known == nil || !known.Incomplete {
+		return nil
+	}
+	known.Incomplete = false
+	known.SavedAt = time.Now().Unix()
 	data, err := json.MarshalIndent(known, "", "  ")
 	if err != nil {
 		return err
 	}
-	if len(data) > RelayKnownMaxBytes {
-		return fmt.Errorf("局域网分享的历史归属超过 %d 字节，未保存", RelayKnownMaxBytes)
-	}
-	dir := filepath.Join(s.dir, "relay-known")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	return writeFileAtomic(filepath.Join(dir, safePointFile(pointID)+".json"), append(data, '\n'), 0o600)
+	return writeFileAtomic(filepath.Join(s.dir, "relay-known", safePointFile(pointID)+".json"), append(data, '\n'), 0o600)
 }
 
 // checkRelaySource refuses a snapshot that does not belong to the stored node.

@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -178,6 +179,69 @@ func (r FirewallResult) Confirmed() bool {
 		return true
 	}
 	return false
+}
+
+// firewallScriptAnswer is the helper script's JSON answer. It is decoded here so
+// the wire shape and its quirks (BOM, CRLF) are covered by portable tests.
+type firewallScriptAnswer struct {
+	Outcome string `json:"outcome"`
+	Detail  string `json:"detail"`
+	State   *struct {
+		Name      string `json:"name"`
+		Direction string `json:"direction"`
+		Action    string `json:"action"`
+		Enabled   bool   `json:"enabled"`
+		Profile   string `json:"profile"`
+		Program   string `json:"program"`
+		Protocol  string `json:"protocol"`
+		LocalPort string `json:"localPort"`
+		Remote    string `json:"remote"`
+	} `json:"state"`
+}
+
+// utf8BOM is what Windows PowerShell 5.1 prepends to a file written with
+// -Encoding UTF8. encoding/json rejects it, which used to turn a successful rule
+// operation into "结果无法解析".
+var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
+
+// ParseFirewallScriptAnswer decodes the helper's answer.
+//
+// The script writes BOM-less UTF-8, but a BOM is still tolerated: an older
+// packaged helper (or a future edit) must not make a created rule look failed.
+// UTF-16 output is reported as such instead of being silently misparsed.
+func ParseFirewallScriptAnswer(data []byte) (FirewallResult, error) {
+	if len(data) >= 2 && ((data[0] == 0xFF && data[1] == 0xFE) || (data[0] == 0xFE && data[1] == 0xFF)) {
+		return FirewallResult{Outcome: FirewallFailed}, errors.New("防火墙结果使用了 UTF-16 编码，应为 UTF-8")
+	}
+	data = bytes.TrimPrefix(data, utf8BOM)
+	data = bytes.TrimFunc(data, func(r rune) bool {
+		return r == 0 || r == '\r' || r == '\n' || r == '\t' || r == ' '
+	})
+	if len(data) == 0 {
+		return FirewallResult{Outcome: FirewallFailed}, errors.New("防火墙结果为空")
+	}
+	var answer firewallScriptAnswer
+	if err := json.Unmarshal(data, &answer); err != nil {
+		return FirewallResult{Outcome: FirewallFailed}, fmt.Errorf("防火墙结果无法解析：%w", err)
+	}
+	result := FirewallResult{Outcome: answer.Outcome, Detail: answer.Detail}
+	if result.Outcome == "" {
+		result.Outcome = FirewallFailed
+	}
+	if answer.State != nil {
+		result.State = FirewallRuleState{
+			Name:          answer.State.Name,
+			Direction:     answer.State.Direction,
+			Action:        answer.State.Action,
+			Enabled:       answer.State.Enabled,
+			Profile:       answer.State.Profile,
+			Program:       answer.State.Program,
+			Protocol:      answer.State.Protocol,
+			LocalPort:     answer.State.LocalPort,
+			RemoteAddress: answer.State.Remote,
+		}
+	}
+	return result, nil
 }
 
 // FirewallRuleState is the full attribute set read back from the system. Only

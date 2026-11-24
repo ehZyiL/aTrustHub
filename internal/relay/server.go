@@ -485,17 +485,22 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.conns.release(entry)
 
-	// The dial is bound to the lease and to the share's lifecycle, not to this
-	// request: a revocation or an expired lease must abort a dial that has not
-	// completed yet, otherwise a late success would become a tunnel after the
-	// credential is gone.
-	ctx, cancel := context.WithTimeout(c.ctx, DialTimeout+TLSHandshakeTimeout)
+	// The dial is bound to the lease, the share's lifecycle and this entry's
+	// resource generation, not to this request: a revocation, an expired lease
+	// or a generation switch must abort a dial that has not completed yet,
+	// otherwise a late success would become a tunnel the share already withdrew.
+	dialCtx, dialCancel := context.WithTimeout(c.ctx, DialTimeout+TLSHandshakeTimeout)
+	ctx, cancel := mergeCancel(dialCtx, entry.ctx)
 	upstream, err := s.source.DialVPN(ctx, snap.Revision, target)
 	cancel()
+	dialCancel()
 	if err != nil {
 		switch {
 		case c.ctx.Err() != nil:
 			writeError(w, NewError(CodeInvalidCredentials, "客户端会话已过期，请重新认证"))
+		case entry.ctx.Err() != nil && !s.isStopped():
+			// The generation changed while this dial was running.
+			s.writeRetiredError(w)
 		case errors.Is(err, context.Canceled) || s.isStopped():
 			writeError(w, NewError(CodeShareClosed, "分享已关闭"))
 		default:
@@ -680,6 +685,16 @@ func (s *Server) isStopped() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stopped
+}
+
+// mergeCancel returns a context cancelled when either parent is done.
+func mergeCancel(a, b context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(a)
+	stop := context.AfterFunc(b, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 // writeRetiredError distinguishes a permanent stop from a superseded generation.

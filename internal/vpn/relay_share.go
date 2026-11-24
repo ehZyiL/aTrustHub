@@ -227,7 +227,7 @@ func (s *RelayShareSource) DialVPN(ctx context.Context, revision, target string)
 	m.mu.RLock()
 	stillCurrent := s.currentLocked() != nil
 	current := m.points[s.pointID]
-	stillSameRevision := revision == "" || current == nil || current.shareRevision == revision
+	stillSameRevision := revision == "" || (current != nil && current.shareRevision == revision)
 	m.mu.RUnlock()
 	if !stillCurrent || !stillSameRevision {
 		_ = conn.Close()
@@ -272,11 +272,22 @@ func (s *RelayShareSource) ExchangeDNS(ctx context.Context, revision string, que
 	if err != nil {
 		return nil, relay.NewError(relay.CodeTargetUnreachable, "内网 DNS 查询失败：%v", err)
 	}
+	// The answer is only valid for the generation it was asked under. A query
+	// can outlive a revocation, so re-check both the session and the resource
+	// revision before handing the answer to the client: otherwise a name that
+	// was just withdrawn would still be resolved through the share.
 	m.mu.RLock()
 	stillCurrent := s.currentLocked() != nil
+	var revisionNow string
+	if cur := m.points[s.pointID]; cur != nil {
+		revisionNow = cur.shareRevision
+	}
 	m.mu.RUnlock()
 	if !stillCurrent {
 		return nil, relay.NewError(relay.CodeShareClosed, "分享已撤销")
+	}
+	if revision != "" && revisionNow != revision {
+		return nil, relay.NewError(relay.CodeStaleResources, "资源版本已变化，请刷新后重试")
 	}
 	return answer, nil
 }
@@ -331,6 +342,28 @@ func (m *Manager) closeShareSourcesLocked(pointID string) {
 
 // SeedRelayKnown loads persisted attribution into Known before any node starts.
 // Known only stops automatic direct dialing; it never authorizes a dial.
+// SeedRelayKnownIncomplete seeds what is known while the node's history is known
+// to be missing entries. Attribution still protects the targets in this snapshot,
+// but the node stays out of the automatic login set and the gate stays on: a
+// current authorization can never prove what was withdrawn earlier.
+func (m *Manager) SeedRelayKnownIncomplete(pointID string, resources *workeripc.ResourceSnapshot) {
+	if resources == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ep := m.points[pointID]
+	if ep == nil {
+		return
+	}
+	ep.knownResources = rememberResources(ep.knownResources, resources)
+	if m.autoConnectBlocked == nil {
+		m.autoConnectBlocked = map[string]bool{}
+	}
+	m.autoConnectBlocked[pointID] = true
+	m.recomputeHistoryGateLocked()
+}
+
 func (m *Manager) SeedRelayKnown(pointID string, resources *workeripc.ResourceSnapshot) {
 	if resources == nil {
 		return

@@ -1054,3 +1054,21 @@ func TestAcceptanceReEnableClearsTheFailedOffSuppression(t *testing.T) {
 		return backend.liveCount() == 1
 	})
 }
+
+// Round 7: the enable form must not render the same control text twice, and the
+// disclosure sentence has to be there (the user is choosing to broadcast).
+func TestAcceptanceEnableFormHasNoDuplicateDiscoveryLabel(t *testing.T) {
+	a, _, _, _ := discoveryApp(t)
+	a.openLANShare()
+	texts := ui.NewTester(a.view, 1120, 900).Texts()
+	joined := strings.Join(texts, "|")
+	if got := strings.Count(joined, "允许同一网络的同事发现"); got != 1 {
+		t.Fatalf("勾选项文字出现 %d 次：%s", got, joined)
+	}
+	if !strings.Contains(joined, "加入仍需分享口令") {
+		t.Fatalf("缺少公开范围说明：%s", joined)
+	}
+	if !strings.Contains(joined, "不会使用 VPN 名称") {
+		t.Fatalf("缺少默认名称说明：%s", joined)
+	}
+}

@@ -719,8 +719,7 @@ func (a *app) lanShareEnableForm(c *ui.Context, d *lanShareDraft) {
 			FontSize(12).TextColor(c.Theme().Warning).Wrap()
 	}
 	ui.Column(c).Gap(4).Children(func() {
-		ui.Checkbox(c, &d.discovery, "允许同一网络的同事发现").
-			Label("允许同一网络的同事发现这条分享")
+		ui.Checkbox(c, &d.discovery, "允许同一网络的同事发现")
 		ui.Text(c, "同一网络的其他设备可以看到公开名称和连接地址；加入仍需分享口令。").
 			FontSize(11).TextColor(c.Theme().TextMuted).Wrap()
 		if d.discovery {

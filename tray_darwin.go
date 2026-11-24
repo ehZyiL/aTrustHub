@@ -44,6 +44,7 @@ func (a *app) setupTray() {
 		IconIsTemplate: true,
 		Menu: mygo.NewMenu([]*mygo.MenuItem{
 			{Label: "显示窗口", Click: func(*mygo.MenuItem, *mygo.Window) { a.showWindow() }},
+			{Label: "局域网分享…", Click: func(*mygo.MenuItem, *mygo.Window) { a.lanShareFromTray() }},
 			mygo.Separator(),
 			{Label: "退出", Click: func(*mygo.MenuItem, *mygo.Window) { a.quitFromTray() }},
 		}),

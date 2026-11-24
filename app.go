@@ -26,6 +26,7 @@ import (
 
 	"github.com/ehzyil/connect-hub/internal/localapps"
 	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/relay"
 	"github.com/ehzyil/connect-hub/internal/store"
 	"github.com/ehzyil/connect-hub/internal/vpn"
 )
@@ -48,6 +49,12 @@ type app struct {
 	store *store.Store
 	mgr   *vpn.Manager
 	bus   *vpn.LogBus
+	// lanShare owns A's 局域网分享 lifecycle; lanShareUI and relayImport are its
+	// panel drafts (UI thread only).
+	lanShare      *relay.Controller
+	lanShareUI    lanShareDraft
+	relayImport   relayImportDraft
+	relayDiagnose relayDiagnoseDraft
 	// cfg is what the UI thread reads and writes. Background loops must use
 	// configForBackground: a whole-struct reassignment while another goroutine
 	// reads a field is a data race, and Settings/Points/LocalApps are big enough
@@ -434,6 +441,10 @@ func newApp() (*app, error) {
 		vpn.NewProtocolConnector(vpn.ZJUOptions{
 			DataDir: dir,
 			Debug:   os.Getenv("EASYCONNECT_DEBUG") != "",
+			// A relay node's control channel must never go through the local
+			// proxy or a capture adapter, or it would recurse into itself.
+			RelayDial:         relay.DirectDialer,
+			RelaySaveSnapshot: a.saveRelaySnapshot,
 		}),
 		a.credentials,
 		a.bus,
@@ -441,6 +452,11 @@ func newApp() (*app, error) {
 		a.invalidateCoalesced,
 	)
 	a.mgr.Apply(a.cfg)
+	a.setupLANShare()
+	// Load attribution history before anything may connect or be taken over:
+	// a missing or broken cache must be known before the first dial decides
+	// whether an unowned target may go direct.
+	a.loadRelayKnown()
 	a.setupResourceTUN()
 	return a, nil
 }
@@ -563,6 +579,9 @@ func (a *app) start() {
 	// 上一轮如果被强杀，root helper 可能还占着 127.0.0.1:53。
 	a.cleanupStaleHelper()
 	a.mgr.Start()
+	// A share switched on before the restart resumes here; one that was
+	// switched off stays off, and an offline access point leaves it waiting.
+	a.resumeLANShare()
 	// Recovery runs before the app decides whether it currently owns the system
 	// proxy, and it never depends on the aggregate listener: the recorded address
 	// is read from the record. Both recoveries are idempotent, so a clean start
@@ -740,6 +759,9 @@ func (a *app) shutdown() {
 		}
 		// 退出时两件事必须做到：TUN 的 utun/路由/DNS 全部还原，系统代理关掉。
 		// 否则用户下次开机就是「没网」，而且看不出是谁干的。
+		// Stop the share before the VPN sessions it borrows go away, keeping
+		// the enable intent so the next start resumes it.
+		a.shutdownLANShare()
 		a.teardownTUNOnExit()
 		a.disableSystemProxyOnExit()
 		if a.local != nil {

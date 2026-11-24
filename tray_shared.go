@@ -17,6 +17,18 @@ func (a *app) showWindow() {
 	a.showFromTray()
 }
 
+// lanShareFromTray opens the 管理局域网分享 panel from the tray. The window comes
+// back first so the modal has something to sit on; a running share keeps running
+// either way.
+func (a *app) lanShareFromTray() {
+	a.showWindow()
+	if a.win == nil || a.win.IsDestroyed() {
+		return
+	}
+	a.win.Update(func() { a.openLANShare() })
+	a.invalidate()
+}
+
 // quitFromTray quits for real, instead of hiding the window.
 func (a *app) quitFromTray() { a.askQuit() }
 

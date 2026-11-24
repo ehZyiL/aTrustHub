@@ -87,6 +87,9 @@ func (a *app) view(c *ui.Context) {
 		a.toolbar(c)
 		// 操作栏与内容之间一条发丝线。
 		ui.Divider(c)
+		if !a.settings.open {
+			a.lanShareStrip(c)
+		}
 		a.launcherBody(c)
 		if !a.settings.open {
 			if !a.simpleMode() {
@@ -126,6 +129,9 @@ func (a *app) view(c *ui.Context) {
 	a.localAppEditorView(c)
 	a.localAppDeleteView(c)
 	a.certificateProbeView(c)
+	a.lanShareView(c)
+	a.relayImportView(c)
+	a.relayDiagnoseView(c)
 }
 
 // qrCard was removed: WeCom's QR login now uses a WebView popup.
@@ -1153,9 +1159,14 @@ func (a *app) emptyState(c *ui.Context) {
 			TextColor(t.TextMuted).Wrap().MaxWidth(460)
 		ui.Text(c, "多个接入点可以填同一账号的不同网关，也可以填不同账号。").
 			FontSize(13).TextColor(t.TextMuted).Wrap().MaxWidth(460)
-		if ui.PrimaryButton(c, "添加第一个接入点").Clicked() {
-			a.openNewEditor()
-		}
+		ui.Row(c).Gap(8).Children(func() {
+			if ui.PrimaryButton(c, "添加第一个接入点").Clicked() {
+				a.openNewEditor()
+			}
+			if ui.Button(c, "导入同事分享").FontSize(11).Clicked() {
+				a.openRelayImport()
+			}
+		})
 	})
 }
 
@@ -1805,6 +1816,14 @@ func (a *app) editorView(c *ui.Context) {
 			})
 			// 底部：删除在左，取消与保存在右。
 			dialogFooter(c, func() {
+				if d.editingID == "" {
+					// The other source of an access point: a LAN relay node
+					// imported from a colleague's share code.
+					if ui.Button(c, "导入同事分享…").FontSize(11).Clicked() {
+						d.open = false
+						a.openRelayImport()
+					}
+				}
 				if d.editingID != "" {
 					if ui.Button(c, "删除此接入点").FontSize(11).Background(t.Danger).
 						TextColor(t.AccentText).
@@ -1862,6 +1881,9 @@ func (a *app) pointTools(c *ui.Context, v vpn.View) {
 			}
 			if v.Protocol == model.ProtocolEasyConnect && ui.Button(c, "DNS 诊断").Label("DNS 诊断 "+v.Name).FontSize(12).Clicked() {
 				a.openDNSProbe(v.ID, v.Name)
+			}
+			if v.Protocol == model.ProtocolLANRelay && ui.Button(c, "连接诊断").Label("连接诊断 "+v.Name).FontSize(12).Clicked() {
+				a.openRelayDiagnose(v.ID)
 			}
 			if v.MonitorOn {
 				iconButton(c, refreshIcon, "立即检测会话是否仍有效", func() {
@@ -1951,6 +1973,7 @@ func (a *app) generalSection(c *ui.Context) {
 	settingsGroup(c, "启动与连接", func() {
 		a.commonSwitches(c)
 	})
+	a.lanShareSection(c)
 	if !a.simpleMode() {
 		settingsGroup(c, "代理与分流", func() {
 			a.proxySettings(c)

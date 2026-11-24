@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/ehzyil/connect-hub/internal/lanname"
@@ -147,7 +148,9 @@ type Candidate struct {
 // interface, the address and the port all participate: two hosts that claim the
 // same share ID are different endpoints, and neither may evict the other.
 func (c Candidate) Key() string {
-	return fmt.Sprintf("%s|%s|%s|%d", c.Instance, c.Interface, c.Address, c.Port)
+	// DNS names are case-insensitive, so two spellings of one instance must be
+	// the same entry. Addresses and ports are already canonical.
+	return fmt.Sprintf("%s|%s|%s|%d", strings.ToLower(c.Instance), c.Interface, c.Address, c.Port)
 }
 
 // Compatible reports whether this build may act on the candidate. An unknown

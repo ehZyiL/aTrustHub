@@ -279,3 +279,51 @@ B: mgr.View(point).State == online
 
 若要把空闲成本压到 0，可把协调器改成首次使用时创建（约 30 行），代价是新增一条
 生命周期路径——上一轮复审的 P1 恰好出在这类路径上，因此默认不做。
+
+## 13. 第四轮复审（外部评审 `8e62e00` 的两项 P2）
+
+### 13.1 R1 [P2] 缓存上限没有覆盖未完成状态
+
+评审指出：`roomFor()` 只数完成候选，只有 PTR 的实例、以及每个不同 owner 名的 A 记录桶都
+不受 128 限制，且完成时不再复核总量；`TestCacheBoundsUnderAFlood` 的 ID 生成器每 64 个
+重复一次，从未真正触到边界。按生产 `parseRecords`/`apply`/`expire` 定点复现，4096 个
+PTR 留下 2432 个 `entries`、4096 个 owner 留下 4096 个 `hosts`。
+
+修复：
+
+| 项 | 现在 |
+| --- | --- |
+| 未完成实例 | `MaxPartialInstances = 128`，满时拒绝新实例，不清已知条目 |
+| 地址宿主桶 | `MaxHostBuckets = 128` |
+| 候选总量 | 完成时再次检查 `MaxCandidates`，满时不加入、不驱逐 |
+| 半成品寿命 | `partialTTL = 60s` 后丢弃（合法响应在毫秒级完成，不必留到 PTR 的 75 分钟） |
+
+回归：`TestPartialPTRFloodIsBounded`、`TestUniqueAddressOwnerFloodIsBounded`、
+`TestCompletingBeyondTheCapKeepsTheCap`、`TestPartialInstancesExpire`，并把
+`TestCacheBoundsUnderAFlood` 的生成器改为真正互不相同、断言「正好守住 128」。
+三处守卫撤掉后分别报 4096 / 4096 / 129，已验证。
+
+顺带修掉一处一致性问题：`Candidate.Key()` 对实例名区分大小写，而缓存键不区分，
+同一实例的两种大小写写法会生成两个候选。现在两边都按 DNS 规则小写比较。
+
+### 13.2 S1 [P2] 提权助手的调用身份可伪造
+
+评审指出：`VerifyLaunchCaller` 只比对命令行里的 PID/创建时间与镜像路径，同用户进程可以
+读取真实桌面的身份并自行请求提权；配合自定义 JSON，助手会在用户同意 UAC 后为**任意程序**
+创建规则。
+
+在同一用户下，操作系统没有可靠办法区分"真正的桌面"与"同用户的另一个进程"，所以修复不
+追求识别调用者，而是（a）让助手自己决定能授权什么，（b）收窄提权写的落点：
+
+| 层 | 规则 |
+| --- | --- |
+| 程序路径 | 助手从**自己的安装位置**推导允许的桌面程序（`core/../connect-hub.exe`），操作里的 `ProgramPath` 必须与之相同，否则拒绝；推导不出就失败关闭 |
+| 规则形状 | 只允许 apply 的入站、`private`/`private,domain`、单端口、RFC1918 网段、前缀 ≥ /8、规则 ID 必须是本程序前缀 |
+| 文件落点 | 操作文件与结果文件必须同目录，目录名必须以 `connect-hub-firewall-` 开头，操作文件必须是**已存在的普通文件**（拒绝符号链接）；因为该文件必须由调用者创建，提权写入只能落在调用者本来就能写的目录 |
+
+残余风险（据实记录）：同用户进程仍可让用户在 UAC 弹窗里批准一次「为 Connect Hub 自己
+在某个私有网段开一个端口」。这不构成权限提升（提权者本来就能直接改防火墙），也不再能
+把端口开给别的程序。Windows 实机仍未验证。
+
+实现：`internal/relay/firewall_helper_policy.go`（平台中立，可在 Linux 上测试）+
+`FirewallHelperMain` 在读取操作文件前先校验路径、读取后校验操作内容。

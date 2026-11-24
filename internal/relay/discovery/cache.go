@@ -60,6 +60,23 @@ func (s *instanceState) live(now time.Time) bool {
 // Address records are keyed by (interface, host) because an A record names the
 // SRV target host, not the instance; keeping them separate is what lets the
 // four record types arrive in any order.
+// Bounds on the *incomplete* state, not only on finished candidates. A
+// PTR-only instance and an address record for an unknown owner are both memory a
+// sender can fill without ever producing a usable share, so they get the same
+// kind of ceiling as the candidate list.
+const (
+	// MaxPartialInstances bounds instances that have not become candidates yet.
+	MaxPartialInstances = MaxCandidates
+	// MaxHostBuckets bounds the distinct owner names that carry address records.
+	MaxHostBuckets = MaxCandidates
+)
+
+// partialTTL is how long an instance may stay incomplete. A responder that sends
+// PTR and then answers the follow-up query completes within milliseconds; one
+// that never answers is dropped instead of being kept for the 75 minute PTR TTL.
+// It is a variable so tests can shorten it.
+var partialTTL = 60 * time.Second
+
 type cache struct {
 	// mu guards every field below. The receive loop writes while the UI asks
 	// for snapshots, so the cache is the synchronisation point.
@@ -115,7 +132,9 @@ func (c *cache) apply(rec Record) []Event {
 		if rec.Gone() {
 			return nil
 		}
-		if !c.roomFor() {
+		if len(c.entries) >= MaxPartialInstances {
+			// Full of half-assembled instances: refuse the new one instead of
+			// evicting an instance that may already be serving the user.
 			return nil
 		}
 		state = &instanceState{
@@ -180,6 +199,9 @@ func (c *cache) applyAddress(rec Record, exp, now time.Time) []Event {
 		delete(addrs, rec.IPv4)
 	} else {
 		if addrs == nil {
+			if len(c.hosts) >= MaxHostBuckets {
+				return nil
+			}
 			addrs = make(map[string]address)
 			c.hosts[key] = addrs
 		}
@@ -228,18 +250,17 @@ func (c *cache) transitions(key string) []Event {
 	}
 	prev, existed := c.emitted[cand.Key()]
 	if !existed {
+		if len(c.emitted) >= c.max {
+			// The candidate list is full. Completing one more instance must not
+			// push out an entry the user may already be looking at.
+			return events
+		}
 		events = append(events, Event{Kind: EventAdded, Candidate: cand})
 	} else if !sameCandidate(prev, cand) {
 		events = append(events, Event{Kind: EventUpdated, Candidate: cand})
 	}
 	c.emitted[cand.Key()] = cand
 	return events
-}
-
-// roomFor refuses a new endpoint once the cache is full, but never refuses an
-// update to an endpoint that is already known.
-func (c *cache) roomFor() bool {
-	return len(c.emitted) < c.max
 }
 
 func (c *cache) candidate(s *instanceState, now time.Time) (Candidate, bool) {
@@ -343,6 +364,18 @@ func (c *cache) expire() []Event {
 	sort.Strings(keys)
 	var events []Event
 	for _, k := range keys {
+		state := c.entries[k]
+		if state != nil && !state.live(now) && now.Sub(state.observed) > partialTTL {
+			// An instance that never completed is garbage, not a candidate.
+			for _, prev := range c.emitted {
+				if strings.EqualFold(prev.Instance, state.instance) && prev.Interface == state.iface {
+					events = append(events, Event{Kind: EventRemoved, Candidate: prev})
+					delete(c.emitted, prev.Key())
+				}
+			}
+			delete(c.entries, k)
+			continue
+		}
 		events = append(events, c.transitions(k)...)
 	}
 	// Address records and empty host buckets have their own lifetime.

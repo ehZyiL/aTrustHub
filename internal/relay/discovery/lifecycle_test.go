@@ -156,16 +156,18 @@ func TestCacheBoundsUnderAFlood(t *testing.T) {
 	real := testAnnouncement(1, "真实分享")
 	applyAll(c, recordsFor(real, "en0"))
 
-	for i := 0; i < MaxCandidates*2; i++ {
-		sid := fakeShareID(i)
+	// 300 genuinely different instances: the old generator repeated every 64
+	// IDs, so this test never actually reached the cap.
+	for i := 0; i < MaxCandidates*2+44; i++ {
+		sid := uniqueShareID(i)
 		flood := testAnnouncement(1, "刷屏 "+sid)
 		flood.ShareID = sid
-		flood.Address = "192.168.31." + itoa(i%250+1)
+		flood.Address = "192.168." + itoa(i/250+1) + "." + itoa(i%250+1)
 		applyAll(c, recordsFor(flood, "en0"))
 	}
 	cands := c.snapshot()
-	if len(cands) > MaxCandidates {
-		t.Fatalf("缓存无界：%d > %d", len(cands), MaxCandidates)
+	if len(cands) != MaxCandidates {
+		t.Fatalf("候选数 = %d，want %d（上限必须正好守住）", len(cands), MaxCandidates)
 	}
 	found := false
 	for _, cand := range cands {
@@ -175,6 +177,96 @@ func TestCacheBoundsUnderAFlood(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("洪泛把真实条目挤掉了")
+	}
+}
+
+// R1: a flood of PTR-only names must not grow the incomplete state either.
+func TestPartialPTRFloodIsBounded(t *testing.T) {
+	clk := newClock()
+	c := newCache(clk.now)
+	for i := 0; i < 4096; i++ {
+		c.apply(Record{
+			Kind: KindPTR, Instance: InstanceName(uniqueShareID(i)),
+			TTL: uint32(TTLOther.Seconds()), Interface: "en0",
+		})
+	}
+	// Compared against the specification limit, not against the implementation
+	// constant: raising the constant must not make this test pass.
+	if got := len(c.entries); got > MaxCandidates {
+		t.Fatalf("未完成实例 %d 个，超过规格上限 %d", got, MaxCandidates)
+	}
+	if got := len(c.snapshot()); got != 0 {
+		t.Fatalf("只有 PTR 却产生了 %d 个候选", got)
+	}
+}
+
+// R1: address records for distinct owner names create one bucket each; that is
+// state a sender controls too.
+func TestUniqueAddressOwnerFloodIsBounded(t *testing.T) {
+	clk := newClock()
+	c := newCache(clk.now)
+	for i := 0; i < 4096; i++ {
+		c.apply(Record{
+			Kind: KindA, Host: "ch-" + itoa(i) + ".local.",
+			IPv4: "192.168.31." + itoa(i%250+2),
+			TTL:  uint32(TTLHost.Seconds()), Interface: "en0",
+		})
+	}
+	if got := len(c.hosts); got > MaxCandidates {
+		t.Fatalf("地址宿主桶 %d 个，超过规格上限 %d", got, MaxCandidates)
+	}
+	if got := len(c.snapshot()); got != 0 {
+		t.Fatalf("孤立地址产生了 %d 个候选", got)
+	}
+}
+
+// R1: completing instances beyond the cap must not evict known candidates.
+func TestCompletingBeyondTheCapKeepsTheCap(t *testing.T) {
+	clk := newClock()
+	c := newCache(clk.now)
+	first := uniqueShareID(0)
+	for i := 0; i < MaxCandidates; i++ {
+		ann := testAnnouncement(1, "分享 "+itoa(i))
+		ann.ShareID = uniqueShareID(i)
+		applyAll(c, recordsFor(ann, "en0"))
+	}
+	// One more completes now: the list stays full and keeps the first entry.
+	extra := testAnnouncement(1, "多余")
+	extra.ShareID = uniqueShareID(MaxCandidates + 1)
+	applyAll(c, recordsFor(extra, "en0"))
+	cands := c.snapshot()
+	if len(cands) != MaxCandidates {
+		t.Fatalf("候选数 = %d，want %d", len(cands), MaxCandidates)
+	}
+	found := false
+	for _, cand := range cands {
+		if cand.ShareID == first {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("上限之外的完成把已知条目挤掉了")
+	}
+}
+
+// R1: a partially assembled instance that never completes is dropped instead of
+// being kept for the PTR TTL.
+func TestPartialInstancesExpire(t *testing.T) {
+	oldTTL := partialTTL
+	partialTTL = 50 * time.Millisecond
+	defer func() { partialTTL = oldTTL }()
+
+	clk := newClock()
+	c := newCache(clk.now)
+	c.apply(Record{Kind: KindPTR, Instance: InstanceName(uniqueShareID(7)),
+		TTL: uint32(TTLOther.Seconds()), Interface: "en0"})
+	if len(c.entries) != 1 {
+		t.Fatal("前置条件：应当留下一个未完成实例")
+	}
+	clk.advance(partialTTL + time.Second)
+	c.expire()
+	if len(c.entries) != 0 {
+		t.Fatalf("未完成实例没有被回收：%d", len(c.entries))
 	}
 }
 
@@ -257,6 +349,25 @@ func manyFields(n int, extra ...string) []string {
 		out = append(out, "k"+itoa(i)+"=v")
 	}
 	return append(out, extra...)
+}
+
+// uniqueShareID builds a distinct, well-formed 22 character share ID for i.
+// Only digits are used so that two IDs never differ merely by case: DNS
+// instance names are case-insensitive, and a case-only difference would collapse
+// into one cache entry.
+func uniqueShareID(i int) string {
+	out := make([]byte, 22)
+	for j := range out {
+		out[j] = 'A'
+	}
+	for j := 21; j >= 0; j-- {
+		out[j] = byte('0' + i%10)
+		i /= 10
+		if i == 0 {
+			break
+		}
+	}
+	return string(out)
 }
 
 func fakeShareID(i int) string {

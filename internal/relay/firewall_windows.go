@@ -71,7 +71,7 @@ func (e *ElevatedFirewall) Run(ctx context.Context, op FirewallOperation) (Firew
 	if err != nil {
 		return FirewallResult{Outcome: FirewallFailed, Detail: err.Error()}, err
 	}
-	dir, err := os.MkdirTemp("", "connect-hub-firewall-")
+	dir, err := os.MkdirTemp("", FirewallOpDirPrefix)
 	if err != nil {
 		return FirewallResult{Outcome: FirewallFailed, Detail: err.Error()}, err
 	}
@@ -298,17 +298,7 @@ func desktopProgramPath() string {
 
 // sameProgram compares two paths the way Windows does: case-insensitive, and
 // tolerant of 8.3 short names or a trailing separator.
-func sameProgram(a, b string) bool {
-	if a == "" || b == "" {
-		return false
-	}
-	ca, errA := filepath.Abs(a)
-	cb, errB := filepath.Abs(b)
-	if errA != nil || errB != nil {
-		return false
-	}
-	return strings.EqualFold(filepath.Clean(ca), filepath.Clean(cb))
-}
+func sameProgram(a, b string) bool { return sameProgramPath(a, b) }
 
 // ProcessIdentity is the pid + creation time pair that ties a launched helper to
 // the process that launched it.
@@ -358,6 +348,12 @@ func FirewallHelperMain(opPath, resultPath string) error {
 	if !token.IsElevated() {
 		return errors.New("防火墙操作需要管理员权限")
 	}
+	// The helper never trusts its inputs: the files must sit in the directory
+	// this app creates, and the operation must describe a rule for this
+	// installation only.
+	if err := ValidateHelperPaths(opPath, resultPath); err != nil {
+		return err
+	}
 	data, err := os.ReadFile(opPath)
 	if err != nil {
 		return err
@@ -366,7 +362,7 @@ func FirewallHelperMain(opPath, resultPath string) error {
 	if err := json.Unmarshal(data, &op); err != nil {
 		return errors.New("防火墙操作参数无法读取")
 	}
-	if err := op.Validate(); err != nil {
+	if err := ValidateHelperOperation(op, desktopProgramPath()); err != nil {
 		return err
 	}
 	result := executeFirewallOperation(op)

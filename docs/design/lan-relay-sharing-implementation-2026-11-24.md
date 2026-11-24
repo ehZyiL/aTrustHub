@@ -507,7 +507,14 @@ go test -race ./internal/relay ./internal/vpn ./internal/store
 | 3 | T05/T06/T07 | 分享服务（会话/状态/资源/DNS/撤销/CONNECT）、连接登记、租约、限流；控制器状态机（Enable/Restore/等待/Disable/Shutdown）；B 端 client 与 `relaySession`；历史归属缓存与 `relayHistoryUnverified` 门控 |
 | 4 | T08/T09 | 「局域网分享」入口与面板、状态条、托盘入口、同事分享导入；分层诊断、防火墙指引与 Windows 最小规则工具 |
 | 5 | T10 | 资源接管排除、文档同步、全量测试与竞态检查 |
-| 6 | 收尾修复 | relay 节点改用只读详情面板（避免 VPN 表单静默改写协议、丢掉分享身份）；删除节点时清理历史缓存并先关闭共享；仅 Waiting 自动重试（Blocked 需用户重试、CleanupPending 不重新监听）；心跳成功后清空不可达预算 |
+| 6 | 收尾修复（`869cc36`） | relay 节点改用只读详情面板（避免 VPN 表单静默改写协议、丢掉分享身份）；删除节点时清理历史缓存并先关闭共享；仅 Waiting 自动重试 |
+| 7 | 逐点入口与重启保护（`0f09a74`） | 接入点详情里的「局域网分享…」；`TestLoadRelayKnownProtectsAcrossRestart` |
+| 8 | Windows 防火墙入口（`fd8d3a7`） | 面板上的「允许局域网连接」：journal → 创建 → 读回 → 关闭共享时清理 |
+| 9 | 复审修复 1（`636a59d`） | **撤销取消未完成的拨号**（410 share_closed）；去掉伪装登记的死代码；心跳前等待再关更新流；Starting 与尝试在同一锁内 |
+| 10 | 复审修复 2（`b5234f9`） | relay 卡片显示 `host:port`、协议分组「局域网中继」；详情面板提供显式「开启系统代理」并解释不可用原因 |
+| 11 | 复审修复 3（`6ceb569`） | `/v1/dns-query` 改为文档规定的裸 `application/dns-message` + 头部代次；分享源不再充当开放解析器（只解析本接入点声明的名字） |
+| 12 | 复审修复 4（`87b185d`） | 拒绝带请求体的 CONNECT；历史不可信时把节点移出自动登录集合（手动登录仍可修复） |
+| 13 | 复审修复 5（`03fe029`） | 终态分享错误不再被 `AutoReconnect` 无限重试；重连延迟可注入以便测试 |
 
 ### 16.2 已自动化验证的行为
 

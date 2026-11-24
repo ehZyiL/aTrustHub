@@ -27,8 +27,10 @@ func DefaultBackupRootDir() string {
 		appData = os.TempDir()
 	}
 	target := filepath.Join(appData, "connect-hub", "cleanup", "backups")
-	legacy := filepath.Join(appData, "ConnectHub", "cleanup", "backups")
-	migrateLegacyBackups(legacy, target)
+	for _, legacyName := range []string{"ConnectHub", "Connect Hub"} {
+		legacy := filepath.Join(appData, legacyName, "cleanup", "backups")
+		migrateLegacyBackups(legacy, target)
+	}
 	return target
 }
 

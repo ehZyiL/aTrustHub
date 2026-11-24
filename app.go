@@ -483,20 +483,27 @@ func resolveDataDir() (string, error) {
 		return "", err
 	}
 	targetDir := filepath.Join(base, "connect-hub")
-	legacyNames := []string{"EasyConnectHub", "EasyConnect Hub", "Connect Hub"}
+	legacyNames := []string{"Connect Hub", "EasyConnect Hub", "EasyConnectHub"}
 
 	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
-		// 自动检查并迁移所有可能存在的历史旧目录（带空格或老名字）
-		for _, oldName := range legacyNames {
+		// 自动检查并迁移最近的历史旧目录（按版本新旧倒序排列）
+		for i, oldName := range legacyNames {
 			oldDir := filepath.Join(base, oldName)
 			if fi, err := os.Stat(oldDir); err == nil && fi.IsDir() {
 				if renameErr := os.Rename(oldDir, targetDir); renameErr == nil {
+					// 成功重命名最新旧目录后，继续对其余更早的旧目录执行递归合并并清理
+					for _, restOldName := range legacyNames[i+1:] {
+						restOldDir := filepath.Join(base, restOldName)
+						if rfi, err := os.Stat(restOldDir); err == nil && rfi.IsDir() {
+							migrateAndCleanLegacyDir(restOldDir, targetDir)
+						}
+					}
 					break
 				}
 			}
 		}
 	} else {
-		// 若 targetDir 已存在，但系统中遗留了旧目录（如 Connect Hub），将其内部遗留文件（如 window-state.json）迁移合入并清理旧空目录
+		// 若 targetDir 已存在，但系统中遗留了旧目录（如 Connect Hub），将其内部遗留文件递归迁移合入并清理旧空目录
 		for _, oldName := range legacyNames {
 			oldDir := filepath.Join(base, oldName)
 			if fi, err := os.Stat(oldDir); err == nil && fi.IsDir() {
@@ -512,12 +519,16 @@ func migrateAndCleanLegacyDir(srcDir, dstDir string) {
 	if err != nil {
 		return
 	}
+	_ = os.MkdirAll(dstDir, 0o700)
 	for _, entry := range entries {
 		srcFile := filepath.Join(srcDir, entry.Name())
 		dstFile := filepath.Join(dstDir, entry.Name())
 		if _, err := os.Stat(dstFile); os.IsNotExist(err) {
 			_ = os.Rename(srcFile, dstFile)
-		} else if !entry.IsDir() {
+		} else if entry.IsDir() {
+			// 若目标已存在同名子目录，递归合入内部文件并清理空子目录
+			migrateAndCleanLegacyDir(srcFile, dstFile)
+		} else {
 			_ = os.Remove(srcFile)
 		}
 	}

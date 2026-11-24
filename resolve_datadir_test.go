@@ -95,13 +95,26 @@ func TestMigrateAndCleanLegacyDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 测试子目录递归合入
+	srcSub := filepath.Join(src, "sub_dir")
+	if err := os.MkdirAll(srcSub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	subFile := filepath.Join(srcSub, "sub.log")
+	if err := os.WriteFile(subFile, []byte("sub log"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	migrateAndCleanLegacyDir(src, dst)
 
 	// 目标目录应收到文件
 	if _, err := os.Stat(filepath.Join(dst, "window-state.json")); err != nil {
 		t.Fatalf("expected window-state.json in dst: %v", err)
 	}
-	// 旧目录应已被删除
+	if _, err := os.Stat(filepath.Join(dst, "sub_dir", "sub.log")); err != nil {
+		t.Fatalf("expected sub_dir/sub.log in dst: %v", err)
+	}
+	// 旧目录及旧子目录应已被完全删除
 	if _, err := os.Stat(src); !os.IsNotExist(err) {
 		t.Fatalf("expected src directory to be removed, but it still exists")
 	}

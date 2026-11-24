@@ -4,6 +4,7 @@ package model
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -125,7 +126,26 @@ func (m AuthMode) Valid() bool {
 const (
 	ProtocolATrust      = "atrust"
 	ProtocolEasyConnect = "easyconnect"
+	// ProtocolLANRelay is a node imported from a colleague's share code. It has
+	// no VPN login of its own: the credential in the secret store is the LAN
+	// share token, and the tunnel runs through the sharing host.
+	ProtocolLANRelay = "lan_relay"
 )
+
+// RelayPointOptions is the LAN-share identity a relay node was imported from.
+// It is metadata only: the token stays in the secret store and the rules come
+// from the sharing host after authentication.
+type RelayPointOptions struct {
+	Version           int    `json:"version"`
+	ShareID           string `json:"shareId"`
+	CertificateSHA256 string `json:"certificateSHA256"`
+	// HistoryInitialized records that a first verified snapshot was persisted
+	// for this node. The cache itself is never an authorization source.
+	HistoryInitialized bool `json:"historyInitialized,omitempty"`
+}
+
+// IsRelay reports whether the point is a LAN-share node.
+func (p *AccessPoint) IsRelay() bool { return p.Protocol == ProtocolLANRelay }
 
 type AccessPoint struct {
 	Protocol        string   `json:"protocol,omitempty"`
@@ -168,6 +188,85 @@ type AccessPoint struct {
 	// because their addresses clash with the local network or with another
 	// access point.
 	DisabledApps []string `json:"disabledApps,omitempty"`
+	// Relay is set on ProtocolLANRelay points only. It names the share the node
+	// was imported from, so the same sharing host can be recognised again.
+	Relay *RelayPointOptions `json:"relay,omitempty"`
+}
+
+// LANShareSettings is A's persisted 局域网分享 intent and bound address. Only
+// Enabled is a user intent; Running is runtime state and never stored. The
+// absence of the whole object means "never enabled", so a first install and an
+// upgraded configuration both start switched off.
+type LANShareSettings struct {
+	Enabled bool `json:"enabled"`
+	// PointID is the single access point shared by this host. Nothing else is
+	// scoped: the whole point is shared.
+	PointID string `json:"pointId,omitempty"`
+	// InterfaceName is a hint only; every start re-reads the interface and
+	// refuses to bind an address it cannot currently prove is up.
+	InterfaceName string `json:"interfaceName,omitempty"`
+	PreferredIPv4 string `json:"preferredIPv4,omitempty"`
+	// Port is the requested port; 0 means the kernel picks one on first enable.
+	Port int `json:"port,omitempty"`
+	// BoundPort is the port that actually bound, reused verbatim on restore so
+	// a printed share code keeps working.
+	BoundPort int `json:"boundPort,omitempty"`
+	// ShareID and CertificateSHA256 identify the persisted sharing identity.
+	ShareID           string `json:"shareId,omitempty"`
+	CertificateSHA256 string `json:"certificateSHA256,omitempty"`
+}
+
+// ShareIDBytes is the size of a share identity, Base64URL-encoded without
+// padding into 22 characters.
+const ShareIDBytes = 16
+
+// ShareTokenBytes is the size of the share and client-session tokens.
+const ShareTokenBytes = 32
+
+// ValidShareID reports whether s is a well-formed v1 share identity.
+func ValidShareID(s string) bool {
+	b, err := base64.RawURLEncoding.DecodeString(s)
+	return err == nil && len(b) == ShareIDBytes
+}
+
+// ValidShareToken reports whether s is a well-formed v1 bearer token.
+func ValidShareToken(s string) bool {
+	b, err := base64.RawURLEncoding.DecodeString(s)
+	return err == nil && len(b) == ShareTokenBytes
+}
+
+// SHA256Hex is the canonical 64-character lowercase form of a certificate
+// fingerprint.
+func SHA256Hex(sum []byte) string { return hex.EncodeToString(sum) }
+
+// NewShareID returns a new random share identity. Randomness failure is fatal
+// for the caller: a share must never fall back to a clock-derived secret.
+func NewShareID() (string, error) {
+	b := make([]byte, ShareIDBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// NewShareToken returns a new random share or client-session token.
+func NewShareToken() (string, error) {
+	b := make([]byte, ShareTokenBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// RFC1918 reports whether ip is a private-use IPv4 unicast address. The LAN
+// share listener is limited to these; loopback, unspecified, multicast and
+// public addresses are rejected.
+func RFC1918(ip net.IP) bool {
+	v4 := ip.To4()
+	if v4 == nil {
+		return false
+	}
+	return v4[0] == 10 || (v4[0] == 172 && v4[1]&0xf0 == 16) || (v4[0] == 192 && v4[1] == 168)
 }
 
 // defaultMonitorInterval is how often the session is probed when unset.
@@ -283,6 +382,12 @@ type Settings struct {
 	AutoLoginOptIn bool `json:"autoLoginOptIn"`
 	// AutoCheckUpdate 开启后启动时及每天自动检查一次更新，并在状态栏提示新版本。
 	AutoCheckUpdate bool `json:"autoCheckUpdate"`
+	// LANShare is A's 局域网分享 enable intent. Its zero value is "off", which is
+	// what a first install and an upgraded configuration get.
+	LANShare LANShareSettings `json:"lanShare,omitempty"`
+	// RelayClipboardDetection watches the clipboard for share codes. It is off
+	// by default and reads nothing until the user turns it on.
+	RelayClipboardDetection bool `json:"relayClipboardDetection,omitempty"`
 }
 
 // Secret store choices.
@@ -426,7 +531,8 @@ func (s *Settings) Normalize() {
 	// 回到默认值，因为 omitempty 的 bool 分不出“没选”和“选了 false”。真实用户
 	// 不受影响：应用自己写出的配置总带着其它字段，不会命中这个早退分支。
 	if s.ListenHost == "" && s.AggregatePort == 0 && s.Routing == "" &&
-		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && len(s.DNSBindings) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 && s.CaptureMode == "" && !s.SimpleMode && !s.AutoRestoreAppCapture && !s.AutoCheckUpdate {
+		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && len(s.DNSBindings) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 && s.CaptureMode == "" && !s.SimpleMode && !s.AutoRestoreAppCapture && !s.AutoCheckUpdate &&
+		!s.RelayClipboardDetection && s.LANShare == (LANShareSettings{}) {
 		*s = DefaultSettings()
 		return
 	}
@@ -472,6 +578,26 @@ func (s *Settings) Normalize() {
 	default:
 		s.CaptureMode = d.CaptureMode
 	}
+	s.LANShare.Normalize()
+}
+
+// Normalize cleans the share intent. It never turns a share on: the only path
+// that sets Enabled is the user pressing 开启共享.
+func (s *LANShareSettings) Normalize() {
+	s.PointID = strings.TrimSpace(s.PointID)
+	s.InterfaceName = strings.TrimSpace(s.InterfaceName)
+	s.PreferredIPv4 = strings.TrimSpace(strings.Trim(s.PreferredIPv4, "[]"))
+	s.ShareID = strings.TrimSpace(s.ShareID)
+	s.CertificateSHA256 = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s.CertificateSHA256), ":", ""))
+	if s.Port < 0 || s.Port > 65535 {
+		s.Port = 0
+	}
+	if s.BoundPort < 1 || s.BoundPort > 65535 {
+		s.BoundPort = 0
+	}
+	if s.PreferredIPv4 != "" && !RFC1918(net.ParseIP(s.PreferredIPv4)) {
+		s.PreferredIPv4 = ""
+	}
 }
 
 // Normalize cleans one access point.
@@ -488,18 +614,37 @@ func (p *AccessPoint) Normalize() {
 
 	p.Server = CleanServer(p.Server)
 	p.Username = strings.TrimSpace(p.Username)
-	if p.AuthMode == "" || !AuthMode(p.AuthMode).Valid() {
-		// Empty has always meant "账号密码"; keep that reading now that
-		// "自动识别" is gone from the editor.
-		p.AuthMode = string(AuthModePassword)
+	if p.IsRelay() {
+		// A relay node has no VPN login: no auth mode, no Radius domain, no
+		// per-point SOCKS port. Emptying the login fields keeps the editor and
+		// the generic validation paths from inventing a username.
+		p.Username, p.LoginDomain, p.RemoteDNS = "", "", ""
+		p.AuthMode = ""
+		p.SocksPort = 0
+		p.CertificateSHA256 = ""
+		p.InternalDomains = nil
+		p.Monitor = nil
+		p.MonitorInterval = 0
+		if p.Relay != nil {
+			p.Relay.ShareID = strings.TrimSpace(p.Relay.ShareID)
+			p.Relay.CertificateSHA256 = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(p.Relay.CertificateSHA256), ":", ""))
+			if p.Relay.Version == 0 {
+				p.Relay.Version = 1
+			}
+		}
+	} else {
+		if p.AuthMode == "" || !AuthMode(p.AuthMode).Valid() {
+			// Empty has always meant "账号密码"; keep that reading now that
+			// "自动识别" is gone from the editor.
+			p.AuthMode = string(AuthModePassword)
+		}
+		if p.LoginDomain == "" && p.Protocol != ProtocolEasyConnect {
+			// ZJU-Connect's aTrust default; servers list it as an auth
+			// domain and the login fails without one.
+			p.LoginDomain = "Radius"
+		}
 	}
-	p.LoginDomain = strings.TrimSpace(p.LoginDomain)
-	if p.LoginDomain == "" && p.Protocol != ProtocolEasyConnect {
-		// ZJU-Connect's aTrust default; servers list it as an auth
-		// domain and the login fails without one.
-		p.LoginDomain = "Radius"
-	}
-	if p.Port == 0 {
+	if p.Port == 0 && !p.IsRelay() {
 		p.Port = 443
 	}
 	if p.Name == "" {
@@ -679,6 +824,23 @@ func (s *Settings) Validate() error {
 	if s.HealthIntervalSec < 0 {
 		return errors.New("健康检查间隔不能为负")
 	}
+	if s.LANShare.Enabled {
+		// Enabled without a usable identity is not a validation error: it is
+		// the Blocked state the controller reports, because the user may have
+		// deleted the point or the secret store may be locked. Only malformed
+		// values are rejected here.
+		if s.LANShare.ShareID != "" && !ValidShareID(s.LANShare.ShareID) {
+			return errors.New("分享 ID 格式无效")
+		}
+		if s.LANShare.CertificateSHA256 != "" {
+			if b, err := hex.DecodeString(s.LANShare.CertificateSHA256); err != nil || len(b) != 32 || len(s.LANShare.CertificateSHA256) != 64 {
+				return errors.New("分享证书指纹必须是 64 位十六进制")
+			}
+		}
+		if s.LANShare.PreferredIPv4 != "" && !RFC1918(net.ParseIP(s.LANShare.PreferredIPv4)) {
+			return errors.New("分享监听地址必须是局域网（RFC1918）地址")
+		}
+	}
 	return nil
 }
 
@@ -694,8 +856,14 @@ func (s Settings) Clone() Settings {
 
 // Validate checks one access point.
 func (p *AccessPoint) Validate() error {
-	if p.Protocol != "" && p.Protocol != ProtocolATrust && p.Protocol != ProtocolEasyConnect {
+	if p.Protocol != "" && p.Protocol != ProtocolATrust && p.Protocol != ProtocolEasyConnect && p.Protocol != ProtocolLANRelay {
 		return errors.New("不支持的 VPN 协议")
+	}
+	if p.Protocol != ProtocolLANRelay && p.Relay != nil {
+		return errors.New("只有局域网中继接入点才能带分享信息")
+	}
+	if p.IsRelay() {
+		return p.validateRelay()
 	}
 	if p.Protocol == ProtocolEasyConnect && p.AuthMode != string(AuthModePassword) {
 		return errors.New("EasyConnect 目前支持账号密码及后续验证码")
@@ -743,6 +911,34 @@ func (p *AccessPoint) Validate() error {
 	}
 	if !p.InPool && p.SocksPort == 0 {
 		return errors.New("至少勾选统一入口，或填一个独立 SOCKS5 端口")
+	}
+	return nil
+}
+
+// validateRelay checks a LAN-share node. It never asks for a VPN login: the
+// only credential is the share token, which lives in the secret store.
+func (p *AccessPoint) validateRelay() error {
+	ip := net.ParseIP(p.Server)
+	if ip == nil || ip.To4() == nil {
+		return errors.New("分享主机必须是 IPv4 地址")
+	}
+	if !RFC1918(ip) {
+		return errors.New("分享主机必须是局域网（RFC1918）地址")
+	}
+	if p.Port < 1 || p.Port > 65535 {
+		return errors.New("分享端口必须在 1–65535 之间")
+	}
+	if p.Relay == nil {
+		return errors.New("缺少分享身份信息，请重新导入分享口令")
+	}
+	if p.Relay.Version != 1 {
+		return errors.New("分享协议版本不受支持")
+	}
+	if !ValidShareID(p.Relay.ShareID) {
+		return errors.New("分享 ID 格式无效")
+	}
+	if b, err := hex.DecodeString(p.Relay.CertificateSHA256); err != nil || len(b) != 32 || len(p.Relay.CertificateSHA256) != 64 {
+		return errors.New("分享证书指纹必须是 64 位十六进制")
 	}
 	return nil
 }
@@ -828,7 +1024,9 @@ func (c *Config) Add(p AccessPoint) *AccessPoint {
 	if p.ID == "" {
 		p.ID = NewID()
 	}
-	if p.SocksPort == 0 {
+	// A relay node has no VPN tunnel of its own, so it gets no per-point
+	// SOCKS5 listener; its traffic arrives through the local aggregate entry.
+	if p.SocksPort == 0 && !p.IsRelay() {
 		p.SocksPort = c.NextSocksPort()
 	}
 	c.Points = append(c.Points, p)

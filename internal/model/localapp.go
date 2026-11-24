@@ -148,6 +148,10 @@ func (c Config) Clone() Config {
 			v := *c.Points[i].Monitor
 			out.Points[i].Monitor = &v
 		}
+		if c.Points[i].Relay != nil {
+			relay := *c.Points[i].Relay
+			out.Points[i].Relay = &relay
+		}
 	}
 	out.LocalApps = append([]LocalApp(nil), c.LocalApps...)
 	for i := range out.LocalApps {

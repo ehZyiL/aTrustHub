@@ -563,6 +563,14 @@ func TestLoadRelayKnownProtectsAcrossRestart(t *testing.T) {
 	if !after.mgr.RelayHistoryUnverified() {
 		t.Fatal("a missing cache after initialisation did not enable the gate")
 	}
+	// The node is also held out of the automatic login set, while a manual login
+	// stays available as the repair path.
+	if !after.mgr.RelayAutoConnectBlocked(point.ID) {
+		t.Fatal("the unverifiable node was left in the auto-connect set")
+	}
+	if n := after.mgr.ConnectAll(true); n != 0 {
+		t.Fatalf("the unverifiable node auto-connected (n=%d)", n)
+	}
 }
 
 // TestLANSharePanelAtMinimumWindow keeps the panel usable at the app's minimum

@@ -429,6 +429,12 @@ func (s *Server) handleSessionCurrent(w http.ResponseWriter, r *http.Request) {
 // ---- CONNECT -------------------------------------------------------------
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
+	// A CONNECT carries no body: bytes after the request line would otherwise be
+	// indistinguishable from tunnel data and be forwarded to the upstream.
+	if r.ContentLength > 0 || len(r.TransferEncoding) > 0 || r.Header.Get("Content-Length") != "" {
+		writeError(w, NewError(CodeInvalidRequest, "CONNECT 不能带请求体"))
+		return
+	}
 	if !s.protoOK(w, r) {
 		return
 	}

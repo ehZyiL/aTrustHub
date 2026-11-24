@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -582,5 +583,52 @@ func TestDNSRequestBinding(t *testing.T) {
 	// The share token is not accepted on this endpoint either.
 	if _, err := client.ExchangeDNS(ctx, fx.code.Token, state.Epoch, state.Revision, []byte("q")); err == nil {
 		t.Fatal("share token authenticated a client endpoint")
+	}
+}
+
+// TestConnectRefusesRequestBody: a CONNECT with a body would smuggle bytes into
+// the tunnel, so it is refused before any upstream dial.
+func TestConnectRefusesRequestBody(t *testing.T) {
+	fx := startShareFixture(t, "share-token-123456")
+	client := fx.client(t)
+	ctx := context.Background()
+	state, token, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Build a CONNECT by hand with a body; the reference client never sends one.
+	conn, err := client.dial(ctx, "tcp", fx.code.Address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	tlsConn := tls.Client(conn, client.tlsConfig.Clone())
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	raw := "CONNECT 10.1.2.3:443 HTTP/1.1\r\n" +
+		"Host: 10.1.2.3:443\r\n" +
+		"Hub-Protocol: 1\r\n" +
+		"Hub-Share-ID: " + fx.code.ShareID + "\r\n" +
+		"Authorization: Bearer " + token + "\r\n" +
+		"Hub-Share-Epoch: " + itoa(int(state.Epoch)) + "\r\n" +
+		"Hub-Resource-Revision: " + state.Revision + "\r\n" +
+		"Content-Length: 5\r\n\r\nhello"
+	if _, err := tlsConn.Write([]byte(raw)); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufioReader(tlsConn), &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("CONNECT with a body was accepted")
+	}
+	select {
+	case <-time.After(50 * time.Millisecond):
+	}
+	if got := fx.source.dialed(); len(got) != 0 {
+		t.Fatalf("a rejected CONNECT reached the source: %v", got)
 	}
 }

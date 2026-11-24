@@ -344,6 +344,30 @@ func (m *Manager) SeedRelayKnown(pointID string, resources *workeripc.ResourceSn
 	ep.knownResources = rememberResources(ep.knownResources, resources)
 }
 
+// BlockRelayAutoConnect keeps one relay node out of the automatic login set
+// without touching the user's stored AutoConnect preference. A manual login is
+// still allowed, which is how the node gets repaired.
+func (m *Manager) BlockRelayAutoConnect(pointID string, blocked bool) {
+	m.mu.Lock()
+	if m.autoConnectBlocked == nil {
+		m.autoConnectBlocked = map[string]bool{}
+	}
+	if blocked {
+		m.autoConnectBlocked[pointID] = true
+	} else {
+		delete(m.autoConnectBlocked, pointID)
+	}
+	m.mu.Unlock()
+}
+
+// RelayAutoConnectBlocked reports whether a node is held out of the automatic
+// login set.
+func (m *Manager) RelayAutoConnectBlocked(pointID string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.autoConnectBlocked[pointID]
+}
+
 // SetRelayHistoryUnverified turns the "unknown targets must not go direct"
 // gate on. It is a local routing constraint from local state; a LAN request
 // field can never set it.

@@ -227,6 +227,10 @@ type Manager struct {
 	// while a relay node's attribution could not be loaded. Another gateway's
 	// verified resources keep working; only unknown targets are refused.
 	relayHistoryUnverified bool
+	// autoConnectBlocked keeps a relay node whose attribution could not be
+	// verified out of the automatic login set. A manual login still works, so
+	// the user can repair the node without losing control of it.
+	autoConnectBlocked map[string]bool
 }
 
 type endpoint struct {
@@ -1012,6 +1016,9 @@ func (m *Manager) ConnectAll(autoOnly bool) int {
 			continue
 		}
 		if autoOnly && !ep.cfg.AutoConnect {
+			continue
+		}
+		if autoOnly && m.autoConnectBlocked[id] {
 			continue
 		}
 		ids = append(ids, id)

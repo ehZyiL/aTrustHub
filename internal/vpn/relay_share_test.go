@@ -431,3 +431,31 @@ func TestRelayShareSourceDNSIsScoped(t *testing.T) {
 		t.Fatalf("invalid DNS queries reached the session: %d → %d", before, sess.queries)
 	}
 }
+
+// TestBlockedRelayNodeSkipsAutoConnect: an unverifiable history must keep the node
+// out of the automatic login set while a manual login stays possible.
+func TestBlockedRelayNodeSkipsAutoConnect(t *testing.T) {
+	point := model.AccessPoint{
+		ID: "r1", Name: "同事分享", Protocol: model.ProtocolLANRelay,
+		Server: "192.168.1.50", Port: 23456, InPool: true, AutoConnect: true,
+		Relay: &model.RelayPointOptions{Version: 1, ShareID: base64Raw16(), CertificateSHA256: strings.Repeat("ab", 32)},
+	}
+	m := newTestManager(t, func(context.Context, model.AccessPoint, Credentials) (Session, error) {
+		return newFakeSession("r1"), nil
+	}, testConfig(point))
+	m.BlockRelayAutoConnect("r1", true)
+	if n := m.ConnectAll(true); n != 0 {
+		t.Fatalf("a blocked relay node auto-connected (n=%d)", n)
+	}
+	if online, _, _ := m.Counts(); online != 0 {
+		t.Fatal("a blocked relay node came online")
+	}
+	// A manual login is the repair path and must work.
+	m.Connect("r1")
+	waitFor(t, "manual relay login", func() bool { online, _, _ := m.Counts(); return online == 1 })
+	// Unblocking restores the remembered preference.
+	m.BlockRelayAutoConnect("r1", false)
+	if m.RelayAutoConnectBlocked("r1") {
+		t.Fatal("unblock did not take effect")
+	}
+}

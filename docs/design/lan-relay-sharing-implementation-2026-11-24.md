@@ -532,7 +532,7 @@ go test -race ./internal/relay ./internal/vpn ./internal/store
 - **应用接管排除**：`TestRelayPointIsExcludedFromAppCapture` 与 `resourceCaptureConfigs` 的显式跳过。
 - **UI 文案与流程**：`TestLANShareWording`、`TestOpeningSharePanelDoesNotListen`、`TestRelayImportPreviewIsLocalAndAddsDisabledAutoconnect`、`TestRelayImportRejectsDuplicates`、`TestRelayImportRollsBackOnSaveFailure`、`TestRelayImportRejectsBrokenCodes`、`TestRelayNodeNeverOpensVPNEditor`、`TestDeletingRelayNodeDropsCache`。
 - **恢复策略边界**：`TestBlockedNeedsExplicitRetry` 证明 Blocked 不会被 2 秒巡检偷偷拉起，只能由「重试恢复」推进；`TestRestoreBindConflictIsBlocked` 证明端口冲突在恢复路径是 Blocked 而不是静默换端口。
-- **B 端重启保护**：`TestLoadRelayKnownProtectsAcrossRestart` 在同一个数据目录上重开 store/manager，证明缓存会把托管目标判为「不可直连」，而缓存缺失（标记仍在）会把门控打开。
+- **B 端重启保护**：`TestLoadRelayKnownProtectsAcrossRestart` 在同一个数据目录上重开 store/manager，证明缓存会把托管目标判为「不可直连」，而缓存缺失（标记仍在）会把门控打开，并把该节点移出自动登录集合（手动登录仍是修复路径）；`TestBlockedRelayNodeSkipsAutoConnect` 证明被暂停的节点不会随启动自动连接、但可手动登录。
 - **真实 Store 适配器**：`TestLANShareSurvivesRestartThroughRealStore` 用 `store.RelayShareStore` + 真实监听完成 开启 → 关闭应用 → 重开 → 恢复同一身份/地址/端口 → 客户端可建立隧道 → 关闭共享 → 重启保持关闭；`TestLANShareRestoreWaitsWithoutVPNThroughRealStore` 覆盖同一适配器下的 Waiting → 就绪恢复。`TestRelayShareSettingsDoNotLeakSecretsIntoConfig` 证明口令不写进 config.json。
 - **DNS 不是开放解析器**：`TestRelayShareSourceDNSIsScoped` 证明只解析该接入点声明的域名/静态记录，公网名字被 `dns_unauthorized` 拒绝且**没有到达 VPN 会话**；传输区、多问题、非查询报文在进入会话前就被拒绝。服务端的 `TestDNSRequestBinding` 证明 `/v1/dns-query` 用裸 `application/dns-message` 请求体、epoch/revision 走协议头，过期代次/版本被拒，且分享 token 不能用于该客户端端点。
 - **诊断**：正确 pin 全链路通过；错误 pin 停在身份阶段；端口拒绝不被写成防火墙结论；越权目标给出确定结论。
@@ -592,4 +592,6 @@ go test -race ./internal/vpn -run 'Relay|Headless|Seed'  通过
 ### 16.6 与文档的已知偏差（有意、且更保守）
 
 - **首次开启时 VPN 未连接**：实现选择「保存启用意图 → Waiting」，而不是文档 §5.1 的「首次开启失败 → Off」。理由是产品要求「重启时所选 VPN 未连接显示等待」；如果在首次开启时反而判为失败，用户会看到两套语义。硬失败（无局域网地址、端口占用、无法保存身份/配置）仍然回滚为 Off。
+- **未认证连接的限额**：§13 建议「未认证连接总上限 32」。实现没有单独统计未认证连接，而是把**所有**并发接受连接限制在 `MaxUnauthenticated + MaxBusinessConnsTotal`（288）、并用 5 秒握手超时与失败认证令牌桶（每 IP 10/分钟、全局 60/分钟）限制洪水。文档里的 32 是待实测的建议值，本次没有按它验证。
+- **未认证连接**：见上（总数限流而非单独 32 个未认证槽位）。
 - **`10.9.9.9` 这类「分享完全不知道」的目标**：B 端按普通公网直连（符合「普通公网走自身网络」）；「A 不转发未知目标」由 A 的严格出口保证，二者并不矛盾。属于分享范围但未授权的端口会被拒绝而不是直连。

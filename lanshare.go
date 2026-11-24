@@ -825,16 +825,18 @@ func (a *app) loadRelayKnown() {
 		switch {
 		case err != nil:
 			unverified = true
+			a.mgr.BlockRelayAutoConnect(p.ID, true)
 			if a.bus != nil {
-				a.bus.Add("app", fmt.Sprintf("配置：局域网分享「%s」的历史归属无法读取：%v", p.Name, err))
+				a.bus.Add("app", fmt.Sprintf("配置：局域网分享「%s」的历史归属无法读取，已暂停自动连接（可手动登录修复）：%v", p.Name, err))
 			}
 		case known == nil:
 			if initialized {
 				// A node that had a cache and lost it cannot prove which
 				// targets are managed.
 				unverified = true
+				a.mgr.BlockRelayAutoConnect(p.ID, true)
 				if a.bus != nil {
-					a.bus.Add("app", fmt.Sprintf("配置：局域网分享「%s」的历史归属缺失，已暂缓未知目标直连", p.Name))
+					a.bus.Add("app", fmt.Sprintf("配置：局域网分享「%s」的历史归属缺失，已暂停自动连接并暂缓未知目标直连", p.Name))
 				}
 			}
 		default:

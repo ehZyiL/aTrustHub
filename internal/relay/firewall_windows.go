@@ -208,50 +208,106 @@ func selfIdentity() (ProcessIdentity, error) {
 	return ProcessIdentity{PID: pid, Created: uint64(creation.HighDateTime)<<32 | uint64(creation.LowDateTime)}, nil
 }
 
-// parentProcessIdentity returns this process's parent, which for an elevated
-// helper is the desktop that launched it.
-func parentProcessIdentity() (ProcessIdentity, bool) {
-	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+// VerifyLaunchCaller checks that the process which asked for this privileged
+// operation is this installation's desktop program.
+//
+// It deliberately does not require a parent/child relationship: when a process is
+// created through UAC, Windows creates it from the AppInfo service, so the parent
+// of an elevated helper is not the desktop. Requiring that would make the whole
+// feature fail on real machines. What is checked instead is that the claimed
+// identity still names a live process whose image is the connect-hub executable
+// installed next to this helper — the only program that would legitimately ask.
+func VerifyLaunchCaller(expected ProcessIdentity) error {
+	if expected.PID == 0 || expected.Created == 0 {
+		return errors.New("缺少调用方进程身份")
+	}
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, expected.PID)
 	if err != nil {
-		return ProcessIdentity{}, false
+		return errors.New("调用方进程已不存在")
 	}
-	defer windows.CloseHandle(snap)
-	self := uint32(os.Getpid())
-	var entry windows.ProcessEntry32
-	entry.Size = uint32(unsafe.Sizeof(entry))
-	for err = windows.Process32First(snap, &entry); err == nil; err = windows.Process32Next(snap, &entry) {
-		if entry.ProcessID != self {
-			continue
-		}
-		parent := entry.ParentProcessID
-		if parent == 0 {
-			return ProcessIdentity{}, false
-		}
-		handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, parent)
-		if err != nil {
-			return ProcessIdentity{}, false
-		}
-		defer windows.CloseHandle(handle)
-		var creation, exit, kernel, user windows.Filetime
-		if err := windows.GetProcessTimes(handle, &creation, &exit, &kernel, &user); err != nil {
-			return ProcessIdentity{}, false
-		}
-		return ProcessIdentity{PID: parent, Created: uint64(creation.HighDateTime)<<32 | uint64(creation.LowDateTime)}, true
+	defer windows.CloseHandle(handle)
+	var creation, exit, kernel, user windows.Filetime
+	if err := windows.GetProcessTimes(handle, &creation, &exit, &kernel, &user); err != nil {
+		return errors.New("无法读取调用方进程信息")
 	}
-	return ProcessIdentity{}, false
-}
-
-// VerifyLaunchParent makes the helper usable only by the desktop that launched
-// it, so it cannot be turned into a general "create a firewall rule" tool.
-func VerifyLaunchParent(expected ProcessIdentity) error {
-	actual, ok := parentProcessIdentity()
-	if !ok {
-		return errors.New("无法确认调用方进程身份")
-	}
-	if actual != expected {
+	created := uint64(creation.HighDateTime)<<32 | uint64(creation.LowDateTime)
+	if created != expected.Created {
+		// The pid was reused by another process.
 		return errors.New("调用方进程身份不符，拒绝执行")
 	}
+	image, err := processImagePath(handle)
+	if err != nil {
+		return errors.New("无法确认调用方程序路径")
+	}
+	if desktop := desktopProgramPath(); desktop != "" {
+		if !sameProgram(image, desktop) {
+			return errors.New("调用方不是本程序的桌面进程，拒绝执行")
+		}
+		return nil
+	}
+	// The packaged layout was not recognised (a development build, for example).
+	// Require at least the same installation directory instead of refusing
+	// everything.
+	if !sameInstallTree(image) {
+		return errors.New("调用方不在本程序的安装目录内，拒绝执行")
+	}
 	return nil
+}
+
+// sameInstallTree reports whether image lives next to this helper or one level up
+// (core/connect-hub-capture.exe → ../connect-hub.exe).
+func sameInstallTree(image string) bool {
+	self, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	base := filepath.Dir(self)
+	imageDir := filepath.Dir(filepath.Clean(image))
+	return strings.EqualFold(imageDir, filepath.Clean(base)) ||
+		strings.EqualFold(imageDir, filepath.Dir(filepath.Clean(base)))
+}
+
+// processImagePath returns the executable path of a process handle.
+func processImagePath(handle windows.Handle) (string, error) {
+	buf := make([]uint16, windows.MAX_PATH)
+	size := uint32(len(buf))
+	if err := windows.QueryFullProcessImageName(handle, 0, &buf[0], &size); err != nil {
+		return "", err
+	}
+	return windows.UTF16ToString(buf[:size]), nil
+}
+
+// desktopProgramPath is the connect-hub executable that ships next to the helper
+// (core/connect-hub-capture.exe → ../connect-hub.exe).
+func desktopProgramPath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	base := filepath.Dir(exe)
+	for _, candidate := range []string{
+		filepath.Join(base, "..", "connect-hub.exe"),
+		filepath.Join(base, "connect-hub.exe"),
+	} {
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			return candidate
+		}
+	}
+	return ""
+}
+
+// sameProgram compares two paths the way Windows does: case-insensitive, and
+// tolerant of 8.3 short names or a trailing separator.
+func sameProgram(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	ca, errA := filepath.Abs(a)
+	cb, errB := filepath.Abs(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return strings.EqualFold(filepath.Clean(ca), filepath.Clean(cb))
 }
 
 // ProcessIdentity is the pid + creation time pair that ties a launched helper to

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -55,11 +57,26 @@ func (a *app) awaitFirewall(t *testing.T) {
 	}
 }
 
+// testProgramPath is the path of the running test binary, which is what
+// os.Executable() reports during a test — the same source the panel uses.
+func testProgramPath(t *testing.T) string {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return exe
+}
+
 func firewallAppRule() relay.FirewallRule {
+	exe, err := os.Executable()
+	if err != nil {
+		exe = filepath.Join(string(filepath.Separator), "opt", "connect-hub")
+	}
 	return relay.FirewallRule{
 		ID:          relay.NewFirewallRuleID(23456, time.Unix(0, 1700000000000000000)),
 		Name:        "Connect Hub 局域网分享",
-		ProgramPath: filepath.Join(string(filepath.Separator), "opt", "connect-hub"),
+		ProgramPath: exe,
 		Port:        23456,
 		Profile:     "private",
 		RemoteIP:    "192.168.31.0/24",
@@ -222,10 +239,7 @@ func TestFirewallRefusesToGuessTheSubnet(t *testing.T) {
 func TestDesiredRulesMatchTheRunningShareExactly(t *testing.T) {
 	a := testApp(t)
 	installFirewall(t, a, &appFirewall{})
-	exe, err := filepath.Abs(filepath.Join("build", "connect-hub"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	exe := testProgramPath(t)
 	base := relay.FirewallRule{ID: relay.FirewallRulePrefix + "1", ProgramPath: exe, Port: 23456, Profile: "private", RemoteIP: "192.168.31.0/24"}
 	other := base
 	other.ID = relay.FirewallRulePrefix + "2"
@@ -381,5 +395,68 @@ func TestFirewallSchedulerConverges(t *testing.T) {
 	}
 	if journal.Find(rule.ID) != nil {
 		t.Fatal("the final cleanup request was dropped")
+	}
+}
+
+// Review: a share that comes back after a restart starts in Starting/Waiting when
+// its VPN is not connected yet. Deleting the previously approved rule there made
+// the user approve a new elevation prompt on every restart; the record must instead
+// be verified and reused.
+func TestRestoredWaitingShareReusesItsFirewallRule(t *testing.T) {
+	a := testApp(t)
+	fake := &appFirewall{}
+	installFirewall(t, a, fake)
+	rule := firewallAppRule()
+	rule.RemoteIP = "192.168.31.0/24"
+	fake.handler = func(op relay.FirewallOperation) (relay.FirewallResult, error) {
+		switch op.Op {
+		case relay.FirewallOpQuery:
+			return relay.FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: relay.FirewallPresent, State: matchingAppState(rule)}, nil
+		case relay.FirewallOpDelete:
+			return relay.FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: relay.FirewallRemoved}, nil
+		}
+		return relay.FirewallResult{Outcome: relay.FirewallPresent}, nil
+	}
+	journal, err := relay.LoadFirewallJournal(a.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Put(a.dir, relay.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relay.FirewallEntryConfirmed}); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []relay.State{relay.StateWaiting, relay.StateStarting} {
+		a.doReconcileLanShareFirewall(relay.View{State: state, Port: rule.Port, Address: "192.168.31.61"})
+		journal, err = relay.LoadFirewallJournal(a.dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if journal.Find(rule.ID) == nil {
+			t.Fatalf("%s 状态下把已授权的放行规则删掉了", state)
+		}
+	}
+	// A blocked or stopped share has nothing to serve, so the rule goes.
+	for _, state := range []relay.State{relay.StateBlocked, relay.StateOff} {
+		journal, _ := relay.LoadFirewallJournal(a.dir)
+		_ = journal.Put(a.dir, relay.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relay.FirewallEntryConfirmed})
+		a.doReconcileLanShareFirewall(relay.View{State: state, Port: rule.Port, Address: "192.168.31.61"})
+		journal, _ = relay.LoadFirewallJournal(a.dir)
+		if journal.Find(rule.ID) != nil {
+			t.Fatalf("%s 状态下留下了不再需要的放行规则", state)
+		}
+	}
+}
+
+// matchingAppState is what the system reports for a rule this app created.
+func matchingAppState(rule relay.FirewallRule) relay.FirewallRuleState {
+	return relay.FirewallRuleState{
+		Name:          rule.ID,
+		Direction:     "Inbound",
+		Action:        "Allow",
+		Enabled:       true,
+		Profile:       "Private",
+		Program:       rule.ProgramPath,
+		Protocol:      "TCP",
+		LocalPort:     strconv.Itoa(rule.Port),
+		RemoteAddress: rule.RemoteIP,
 	}
 }

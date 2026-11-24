@@ -801,3 +801,32 @@ go test ./...                      # 17 包全绿
 go test -race ./...                # 17 包全绿，0 DATA RACE
 GOOS=linux/windows/darwin go build ./...；go vet ./...（含 windows）
 ```
+
+## 21. 第四轮复审（自查）4 项问题
+
+本轮按 Standards / Spec 两轴复查 `feat/lan-relay-sharing` 全部提交，聚焦前三轮改动最密的区域
+（防火墙提权链、恢复流程、B 端资源代次）。3 项为真实缺陷（各有可复现测试），1 项为设计确认。
+
+| 编号 | 轴 | 问题 | 证据 | 修复 |
+| --- | --- | --- | --- | --- |
+| Q1 [P1] | Standards | 提权助手用「父进程 == 桌面」判断调用方。经 UAC 提升的进程由 AppInfo 服务创建，父进程不是桌面，**真机上功能会整体不可用** | 静态推理 + 与仓库既有做法对照（`internal/wincapture` 用命名管道校验**对端**身份，从不依赖父子关系） | 改为校验「声称的进程仍存活、创建时间一致、镜像路径是本程序的 `connect-hub.exe`（同级或 `core/..`），识别不到包装布局时退化为同一安装目录」 |
+| Q2 [P2] | Spec | 重启后分享处于 Starting/Waiting（VPN 未连）时，对账把上一轮**已授权**的规则删掉；VPN 连上后必须重新授权一次，违反「核对后复用」 | `TestReviewRestoredWaitingShareKeepsItsFirewallRule`（旧行为：规则被删） | `desiredFirewallRules` 在 Starting/Waiting 时用**持久化的端口/地址**匹配记录，先 `Recover` 核对再保留；只有 Blocked/Off/Error 才清理 |
+| Q3 [P2] | Spec | A 发布新资源后，B 的下一次业务请求仍带旧代次 → 服务端 `stale_resources`，客户端只等 5s 心跳才刷新，用户看到一次失败 | `TestRelaySessionRetriesOnceAfterAResourceChange`（旧行为：报「资源代次已变化」） | `relaySession.DialVPN` / `ExchangeDNS` 遇 `stale_resources` 时**刷新一次并重试**，刷新用互斥量合并，避免并发请求各刷一次 |
+| Q4 [nit] | Standards | 每次对账对 journal 每个条目跑一次 PowerShell（`Recover`），状态频繁变化时会放大子进程开销 | 代码核对 | 暂不修改：状态变化频率低、条目数=分享数；记录在案 |
+
+### 21.1 Q1 的影响与仍未验证部分
+
+Q1 是「静态推理」而非实机结论：如果 Windows 确实把提权进程的父进程记录为 AppInfo/consent，
+旧实现会让每次 `apply/delete` 都被助手拒绝；现在不依赖父子关系，改为校验调用方镜像路径，
+两种行为下都能工作。**仍需 Windows 实机确认**：UAC 接受/取消、`QueryFullProcessImageName`
+在受保护进程上的返回值、以及同目录/`core` 布局下的路径比较。
+
+### 21.2 验收
+
+```text
+go test ./...                                   # 17 包全绿
+go test -race ./...                             # 17 包全绿，0 DATA RACE
+GOOS=linux/windows/darwin go build ./...；GOOS=windows go vet ./...
+go test ./ -run 'TestRestoredWaitingShareReusesItsFirewallRule'
+go test ./internal/vpn -run 'TestRelaySessionRetriesOnceAfterAResourceChange'
+```

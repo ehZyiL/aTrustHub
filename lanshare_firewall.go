@@ -188,7 +188,9 @@ func (a *app) doReconcileLanShareFirewall(view relay.View) {
 	ctx, cancel := context.WithTimeout(context.Background(), relay.FirewallOpBudget)
 	defer cancel()
 	var errs []error
-	if view.State == relay.StateRunning && len(desired) > 0 {
+	if len(desired) > 0 {
+		// Verify before reusing: a rule removed outside the app must be forgotten
+		// instead of being reported as in place.
 		if _, verifyErrs := rules.Recover(ctx, desired); len(verifyErrs) > 0 {
 			errs = append(errs, verifyErrs...)
 		}
@@ -228,11 +230,31 @@ func (a *app) setFirewallError(msg string) {
 	})
 }
 
-// desiredFirewallRules returns the recorded rules that still describe the running
-// share exactly. A rule whose port, subnet or program no longer matches is not
-// desired: the authorization it carried does not cover the new shape.
+// desiredFirewallRules returns the recorded rules that still describe this share
+// exactly. A rule whose port, subnet or program no longer matches is not desired:
+// the authorization it carried does not cover the new shape.
+//
+// A share that is starting or waiting for its VPN keeps its rule: it is on its way
+// back to serving the same instance, and deleting the rule would make the user
+// approve a new elevation prompt on every restart.
 func (a *app) desiredFirewallRules(view relay.View) ([]relay.FirewallRule, error) {
-	if view.State != relay.StateRunning || view.Port == 0 {
+	port, address := view.Port, view.Address
+	switch view.State {
+	case relay.StateRunning:
+	case relay.StateStarting, relay.StateWaiting:
+		if a.lanShare != nil {
+			settings := a.lanShare.Settings()
+			if port == 0 {
+				port = settings.Port
+			}
+			if address == "" {
+				address = settings.PreferredIPv4
+			}
+		}
+	default:
+		return nil, nil
+	}
+	if port == 0 {
 		return nil, nil
 	}
 	journal, err := relay.LoadFirewallJournal(a.dir)
@@ -240,11 +262,11 @@ func (a *app) desiredFirewallRules(view relay.View) ([]relay.FirewallRule, error
 		return nil, err
 	}
 	exe, exeErr := os.Executable()
-	subnet, subnetErr := relay.SubnetOfAddress(view.Address)
+	subnet, subnetErr := relay.SubnetOfAddress(address)
 	var desired []relay.FirewallRule
 	for _, entry := range journal.Entries {
 		rule := entry.Rule
-		if rule.Port != view.Port {
+		if rule.Port != port {
 			continue
 		}
 		if exeErr == nil && rule.ProgramPath != exe {

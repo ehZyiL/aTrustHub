@@ -40,7 +40,7 @@ func main() {
 			*parent == 0 || *created == 0 || uint64(*parent) > 0xffffffff {
 			os.Exit(2)
 		}
-		if err := relay.VerifyLaunchParent(relay.ProcessIdentity{PID: uint32(*parent), Created: *created}); err != nil {
+		if err := relay.VerifyLaunchCaller(relay.ProcessIdentity{PID: uint32(*parent), Created: *created}); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

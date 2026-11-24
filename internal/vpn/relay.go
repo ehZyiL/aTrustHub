@@ -192,6 +192,9 @@ type relaySession struct {
 	closed atomic.Bool
 	failed atomic.Bool
 
+	// refreshMu serialises generation refreshes triggered by stale requests and
+	// the heartbeat.
+	refreshMu   sync.Mutex
 	seq         atomic.Uint64
 	updates     chan SessionUpdate
 	updatesOnce sync.Once
@@ -225,10 +228,46 @@ func (s *relaySession) DialVPN(ctx context.Context, network, addr string) (net.C
 	}
 	epoch, revision := s.currentVersions()
 	conn, err := s.client.Dial(ctx, s.token, epoch, revision, addr)
+	if err != nil && staleShare(err) {
+		// The share published a new generation since the last heartbeat. The
+		// business request is still valid, so refresh once and retry instead of
+		// failing a user action that a 5s heartbeat would have fixed anyway.
+		if refreshErr := s.refreshAfterStale(ctx); refreshErr == nil {
+			epoch, revision = s.currentVersions()
+			conn, err = s.client.Dial(ctx, s.token, epoch, revision, addr)
+		}
+	}
 	if err != nil {
 		return nil, friendlyRelayError(err)
 	}
 	return conn, nil
+}
+
+// staleShare reports whether the share refused a request only because the client
+// still used the previous resource generation.
+func staleShare(err error) bool {
+	var re *relay.Error
+	return errors.As(err, &re) && re.Code == relay.CodeStaleResources
+}
+
+// refreshAfterStale pulls the current generation once. The mutex keeps a burst of
+// concurrent business requests from each refreshing and publishing separately.
+func (s *relaySession) refreshAfterStale(ctx context.Context) error {
+	if s.closed.Load() {
+		return net.ErrClosed
+	}
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	if s.closed.Load() {
+		return net.ErrClosed
+	}
+	cctx, cancel := context.WithTimeout(ctx, relay.ControlTimeout)
+	defer cancel()
+	status, err := s.client.Status(cctx, s.token)
+	if err != nil {
+		return err
+	}
+	return s.refresh(status)
 }
 
 // Dial exists only because Session requires it; it is not a fallback path.
@@ -239,7 +278,14 @@ func (s *relaySession) Dial(ctx context.Context, network, addr string) (net.Conn
 // ExchangeDNS asks the sharing host to resolve inside its VPN.
 func (s *relaySession) ExchangeDNS(ctx context.Context, packet []byte) ([]byte, error) {
 	epoch, revision := s.currentVersions()
-	return s.client.ExchangeDNS(ctx, s.token, epoch, revision, packet)
+	answer, err := s.client.ExchangeDNS(ctx, s.token, epoch, revision, packet)
+	if err != nil && staleShare(err) {
+		if refreshErr := s.refreshAfterStale(ctx); refreshErr == nil {
+			epoch, revision = s.currentVersions()
+			answer, err = s.client.ExchangeDNS(ctx, s.token, epoch, revision, packet)
+		}
+	}
+	return answer, err
 }
 
 func (s *relaySession) currentVersions() (uint64, string) {

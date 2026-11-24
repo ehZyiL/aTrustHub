@@ -25,6 +25,7 @@ import (
 	"github.com/ehzyil/connect-hub/internal/dnsmapping"
 	"github.com/ehzyil/connect-hub/internal/model"
 	"github.com/ehzyil/connect-hub/internal/proxy"
+	"github.com/ehzyil/connect-hub/internal/relay"
 	"github.com/ehzyil/connect-hub/internal/routing"
 	"github.com/ehzyil/connect-hub/internal/splitdns"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
@@ -218,10 +219,16 @@ type Manager struct {
 
 	started bool
 	closed  bool
+
+	// shareSubs tracks live LAN-share sources per point, so resource changes,
+	// disconnects and removals can end them promptly.
+	shareSubs map[string][]*RelayShareSource
 }
 
 type endpoint struct {
 	cfg model.AccessPoint
+	// mgr is the owning manager, used to publish LAN-share change edges.
+	mgr *Manager
 
 	state  State
 	errMsg string
@@ -275,6 +282,13 @@ type endpoint struct {
 	aliveRetryAt time.Time
 	// retryStep counts login retries after the session was taken over.
 	retryStep int
+	// shareEpoch is the LAN share's content generation: it advances on every
+	// published resource change and every source regeneration, and never
+	// repeats within one application run.
+	shareEpoch uint64
+	// shareRevision is the SHA-256 of the effective TCP-published content of
+	// this epoch. It is not resourceVersion, which identifies the mapping pool.
+	shareRevision string
 }
 
 // NewManager returns a manager that uses connector to log in and creds to
@@ -340,7 +354,7 @@ func (m *Manager) Apply(cfg model.Config) {
 		seen[p.ID] = true
 		ep := m.points[p.ID]
 		if ep == nil {
-			ep = &endpoint{cfg: p}
+			ep = &endpoint{cfg: p, mgr: m}
 			m.points[p.ID] = ep
 			m.order = append(m.order, p.ID)
 			continue
@@ -403,6 +417,21 @@ func (m *Manager) Apply(cfg model.Config) {
 func (ep *endpoint) publishResourcesLocked() {
 	ep.info.Resources = filterDisabledAppsSnapshot(ep.rawResources, ep.cfg.DisabledApps)
 	ep.resourceVersion = resourceVersion(ep.rawResources)
+	ep.shareEpoch++
+	ep.shareRevision = shareRevisionOf(ep.info.Resources, shareCapabilities(ep.sess))
+	if ep.mgr != nil {
+		ep.mgr.notifyShareResourcesLocked(ep.cfg.ID)
+	}
+}
+
+// shareCapabilities is what the bound session can actually enforce. v1 always
+// declares strict TCP; internal DNS only when the session implements it.
+func shareCapabilities(sess Session) relay.Capabilities {
+	caps := relay.Capabilities{StrictTCP: true}
+	if _, ok := sess.(DNSExchanger); ok {
+		caps.InternalDNS = true
+	}
+	return caps
 }
 
 // sameStrings reports whether two string lists hold the same values in order.
@@ -435,6 +464,9 @@ func (m *Manager) stopEndpointLocked(id string, closes *[]closeLater) {
 	if ep == nil {
 		return
 	}
+	// A LAN share never crosses a session generation.
+	ep.shareEpoch++
+	m.closeShareSourcesLocked(id)
 	m.mappings.Retire(fmt.Sprintf("%p/%d", ep, ep.gen))
 	ep.gen++
 	if ep.info.Resources != nil {
@@ -468,6 +500,9 @@ func (m *Manager) Close() {
 	}
 	m.closed = true
 	m.started = false
+	for id := range m.points {
+		m.closeShareSourcesLocked(id)
+	}
 	m.mu.Unlock()
 
 	close(m.healthStop)
@@ -740,6 +775,8 @@ func (m *Manager) watch(id string, gen int, sess Session) {
 	p := cur.proxy
 	cur.proxy = nil
 	cur.sess = nil
+	cur.shareEpoch++
+	m.closeShareSourcesLocked(id)
 	m.mappings.Retire(fmt.Sprintf("%p/%d", cur, cur.gen))
 	cur.gen++
 	if cur.info.Resources != nil {

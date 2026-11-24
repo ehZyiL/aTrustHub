@@ -1,0 +1,327 @@
+package vpn
+
+import (
+	"context"
+	"errors"
+	"net"
+	"sync"
+	"sync/atomic"
+
+	"github.com/ehzyil/connect-hub/internal/relay"
+	"github.com/ehzyil/connect-hub/internal/routing"
+)
+
+// ErrRelaySourceUnavailable says the access point cannot be shared right now:
+// offline, no strict capability, owned by the old global TUN, or relay-typed.
+var ErrRelaySourceUnavailable = errors.New("所选接入点当前不能用于局域网分享")
+
+// RelayShareSource is the strict sharing boundary. Everything a LAN request can
+// reach goes through it, so a sharing host can never turn into a public relay.
+type RelayShareSource struct {
+	m       *Manager
+	pointID string
+	ep      *endpoint
+	gen     int
+	sess    Session
+
+	changes chan struct{}
+	done    chan struct{}
+	once    sync.Once
+	closed  atomic.Bool
+}
+
+var _ relay.Source = (*RelayShareSource)(nil)
+
+// AcquireRelayShareSource pins the current endpoint identity and returns the
+// strict source for it. It refuses a point that cannot prove strict dialing:
+// a bare Session is not enough, a process session must also have negotiated a
+// VPN address and prepare capability.
+func (m *Manager) AcquireRelayShareSource(pointID string) (*RelayShareSource, error) {
+	if pointID == "" {
+		return nil, ErrRelaySourceUnavailable
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.acquireRelayShareSourceLocked(pointID)
+}
+
+func (m *Manager) acquireRelayShareSourceLocked(pointID string) (*RelayShareSource, error) {
+	ep := m.points[pointID]
+	if ep == nil {
+		return nil, ErrRelaySourceUnavailable
+	}
+	if m.closed || ep.state != StateOnline || ep.sess == nil {
+		return nil, ErrRelaySourceUnavailable
+	}
+	// A relay node may never share itself: that would relay into a loop.
+	if ep.cfg.Protocol == "lan_relay" {
+		return nil, errors.New("不能分享局域网中继接入点")
+	}
+	// The old global TUN owns this tunnel; its routing is not this Manager's.
+	if ep.tunServed {
+		return nil, errors.New("接入点已移交给系统 TUN，暂不能同时分享")
+	}
+	if !strictCapable(ep.sess) {
+		return nil, errors.New("接入点缺少严格 VPN 拨号能力，请更新配套核心")
+	}
+	src := &RelayShareSource{
+		m:       m,
+		pointID: pointID,
+		ep:      ep,
+		gen:     ep.gen,
+		sess:    ep.sess,
+		changes: make(chan struct{}, 1),
+		done:    make(chan struct{}),
+	}
+	if m.shareSubs == nil {
+		m.shareSubs = map[string][]*RelayShareSource{}
+	}
+	m.shareSubs[pointID] = append(m.shareSubs[pointID], src)
+	return src, nil
+}
+
+// strictCapable mirrors the aggregate's strict test: either the session really
+// implements StrictSession, or it is a process session that has negotiated a
+// private VPN address and prepare capability.
+func strictCapable(sess Session) bool {
+	if sess == nil {
+		return false
+	}
+	if _, ok := sess.(StrictSession); ok {
+		if s, isProcess := sess.(*processSession); isProcess {
+			f := s.flows.Load()
+			return f != nil && f.vpnAddress != "" && f.prepare
+		}
+		return true
+	}
+	if s, ok := sess.(*processSession); ok {
+		f := s.flows.Load()
+		return f != nil && f.vpnAddress != "" && f.prepare
+	}
+	return false
+}
+
+// Snapshot publishes the effective TCP rules of the whole access point: the
+// session's raw snapshot after the user's 停用应用 switches, narrowed to TCP.
+func (s *RelayShareSource) Snapshot(ctx context.Context) (relay.SourceSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return relay.SourceSnapshot{}, err
+	}
+	m := s.m
+	m.mu.RLock()
+	ep := s.currentLocked()
+	if ep == nil {
+		m.mu.RUnlock()
+		return relay.SourceSnapshot{}, net.ErrClosed
+	}
+	local := ep.info.Resources
+	epoch := ep.shareEpoch
+	revision := ep.shareRevision
+	caps := shareCapabilities(ep.sess)
+	m.mu.RUnlock()
+
+	if local == nil {
+		return relay.SourceSnapshot{}, relay.NewError(relay.CodeVPNUnavailable, "接入点没有可发布的资源")
+	}
+	published := relayResources(local).PublishTCP()
+	if revision == "" {
+		revision = published.Revision(caps)
+	}
+	snap := relay.SourceSnapshot{Epoch: epoch, Revision: revision, Resources: published, Capabilities: caps}
+	if err := snap.Validate(); err != nil {
+		return relay.SourceSnapshot{}, err
+	}
+	return snap, nil
+}
+
+// currentLocked returns the endpoint while it still matches the pinned identity.
+func (s *RelayShareSource) currentLocked() *endpoint {
+	if s.closed.Load() || s.m.closed {
+		return nil
+	}
+	ep := s.m.points[s.pointID]
+	if ep != s.ep || ep.gen != s.gen || ep.sess != s.sess || ep.state != StateOnline || ep.tunServed {
+		return nil
+	}
+	return ep
+}
+
+// DialVPN is the only way a LAN target reaches the VPN. It requires the exact
+// revision the client authenticated against, a strict VPN decision for this
+// bound point and revisits that decision after the dial, so a revocation racing
+// with a successful connect still closes the connection.
+func (s *RelayShareSource) DialVPN(ctx context.Context, revision, target string) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m := s.m
+	m.mu.RLock()
+	ep := s.currentLocked()
+	if ep == nil {
+		m.mu.RUnlock()
+		return nil, relay.NewError(relay.CodeVPNUnavailable, "分享接入点已断开")
+	}
+	currentRevision := ep.shareRevision
+	m.mu.RUnlock()
+	if revision != "" && currentRevision != "" && revision != currentRevision {
+		return nil, relay.NewError(relay.CodeStaleResources, "资源版本已变化，请刷新后重试")
+	}
+
+	// Decision is made against the current snapshot with a trusted binding:
+	// any direct policy, unknown target or foreign owner is a refusal.
+	request := routing.Request{
+		Network:   "tcp",
+		Address:   target,
+		GatewayID: s.pointID,
+		Entry:     "局域网分享",
+	}
+	decision := m.PreviewRoute(request)
+	switch decision.Action {
+	case "vpn":
+		// Continue below.
+	case "direct":
+		// A local direct policy must never become a public exit for a LAN
+		// share; it only means this target is refused.
+		return nil, relay.NewError(relay.CodeResourceDenied, "分享不提供直连出口")
+	default:
+		reason := decision.Reason
+		if reason == "" {
+			reason = "目标不在分享范围内"
+		}
+		return nil, relay.NewError(relay.CodeResourceDenied, "%s", reason)
+	}
+	bound := false
+	for _, candidate := range decision.Candidates {
+		if candidate.ID != s.pointID {
+			return nil, relay.NewError(relay.CodeResourceDenied, "目标归属其他接入点，分享不转发")
+		}
+		if candidate.Generation != s.gen {
+			return nil, relay.NewError(relay.CodeStaleResources, "接入点会话已更换，请刷新后重试")
+		}
+		bound = true
+	}
+	if !bound {
+		return nil, relay.NewError(relay.CodeResourceDenied, "分享接入点未授权该目标")
+	}
+
+	dialCtx, cancel := context.WithTimeout(ctx, relay.DialTimeout)
+	conn, err := safeStrictDial(dialCtx, s.sess, "tcp", decision.Target)
+	if err == nil {
+		err = dialCtx.Err()
+	}
+	cancel()
+	if err != nil {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, relay.NewError(relay.CodeDialTimeout, "分享主机连接目标超时")
+		}
+		return nil, relay.NewError(relay.CodeTargetUnreachable, "分享主机无法连接目标：%v", err)
+	}
+	// Re-check after the dial: revocation or a source change must not let a
+	// just-established connection slip through.
+	m.mu.RLock()
+	stillCurrent := s.currentLocked() != nil
+	current := m.points[s.pointID]
+	stillSameRevision := revision == "" || current == nil || current.shareRevision == revision
+	m.mu.RUnlock()
+	if !stillCurrent || !stillSameRevision {
+		_ = conn.Close()
+		return nil, relay.NewError(relay.CodeShareClosed, "分享已撤销")
+	}
+	return conn, nil
+}
+
+// ExchangeDNS resolves inside the bound session for the exact revision. A late
+// answer after a source change is discarded instead of being served.
+func (s *RelayShareSource) ExchangeDNS(ctx context.Context, revision string, query []byte) ([]byte, error) {
+	exchanger, ok := s.sess.(DNSExchanger)
+	if !ok {
+		return nil, relay.NewError(relay.CodeProtocolUnsupported, "分享接入点不支持内网 DNS 查询")
+	}
+	if len(query) == 0 || len(query) > relay.MaxDNSBody {
+		return nil, relay.NewError(relay.CodeInvalidRequest, "DNS 查询大小无效")
+	}
+	m := s.m
+	m.mu.RLock()
+	ep := s.currentLocked()
+	if ep == nil {
+		m.mu.RUnlock()
+		return nil, relay.NewError(relay.CodeVPNUnavailable, "分享接入点已断开")
+	}
+	currentRevision := ep.shareRevision
+	m.mu.RUnlock()
+	if revision != "" && currentRevision != "" && revision != currentRevision {
+		return nil, relay.NewError(relay.CodeStaleResources, "资源版本已变化，请刷新后重试")
+	}
+	answer, err := exchanger.ExchangeDNS(ctx, query)
+	if err != nil {
+		return nil, relay.NewError(relay.CodeTargetUnreachable, "内网 DNS 查询失败：%v", err)
+	}
+	m.mu.RLock()
+	stillCurrent := s.currentLocked() != nil
+	m.mu.RUnlock()
+	if !stillCurrent {
+		return nil, relay.NewError(relay.CodeShareClosed, "分享已撤销")
+	}
+	return answer, nil
+}
+
+// Changes coalesces resource/content changes.
+func (s *RelayShareSource) Changes() <-chan struct{} { return s.changes }
+
+// Done closes when the pinned session is gone.
+func (s *RelayShareSource) Done() <-chan struct{} { return s.done }
+
+// Close releases the adapter only; the VPN keeps running.
+func (s *RelayShareSource) Close() error {
+	s.detach()
+	s.signalChange()
+	return nil
+}
+
+func (s *RelayShareSource) detach() {
+	s.once.Do(func() {
+		s.closed.Store(true)
+		close(s.done)
+	})
+}
+
+// signalChange coalesces one pending edge.
+func (s *RelayShareSource) signalChange() {
+	select {
+	case s.changes <- struct{}{}:
+	default:
+	}
+}
+
+// ---- Manager hooks -------------------------------------------------------
+
+// notifyShareResourcesLocked tells live sources that the published scope
+// changed. Callers hold m.mu.
+func (m *Manager) notifyShareResourcesLocked(pointID string) {
+	for _, src := range m.shareSubs[pointID] {
+		src.signalChange()
+	}
+}
+
+// closeShareSourcesLocked ends every source of a point and forgets it. Callers
+// hold m.mu. The next enable/restore acquires a fresh generation.
+func (m *Manager) closeShareSourcesLocked(pointID string) {
+	for _, src := range m.shareSubs[pointID] {
+		src.detach()
+		src.signalChange()
+	}
+	delete(m.shareSubs, pointID)
+}
+
+// ShareSourceRevision reports the current published revision, for diagnostics.
+func (m *Manager) ShareSourceRevision(pointID string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if ep := m.points[pointID]; ep != nil {
+		return ep.shareRevision
+	}
+	return ""
+}

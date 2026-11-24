@@ -659,7 +659,7 @@ go test -race ./internal/vpn -run 'Relay|Headless|Seed'  通过
 ### 17.4 本次执行的验收命令与结果
 
 ```text
-go test ./...                                   # 18 个包全绿
+go test ./...                                   # 17 个包全绿（根包 + 16 个 internal 包）
 go test -race ./internal/relay ./internal/store ./internal/vpn   # 全绿
 go test -race . -run 'Relay|LANShare|Config|Firewall'            # 全绿
 go build ./...；GOOS=windows go build ./...；GOOS=darwin go build ./...

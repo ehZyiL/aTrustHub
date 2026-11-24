@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -285,14 +286,94 @@ func applySystemProxy(hostPort string, on bool) error {
 		return fmt.Errorf("%v：%s", err, strings.TrimSpace(string(out)))
 	}
 
-	if !on {
-		// 还原成功后清除内存与磁盘持久化记录
-		originalBypassDomains = make(map[string][]string)
-		clearBypassSnapshot()
+	if on {
+		// 开启代理成功后启动守护看门狗，监听父进程异常退出
+		startProxyWatchdog()
+		return nil
 	}
+
+	// 还原成功后清除内存与磁盘持久化记录
+	originalBypassDomains = make(map[string][]string)
+	clearBypassSnapshot()
 	return nil
 }
 
 // applySystemProxyFn is the seam tests use: unit tests must never touch the
 // real system settings (that would hang on a password prompt in CI).
 var applySystemProxyFn = applySystemProxy
+
+var proxyWatchdogOnce sync.Once
+
+func startProxyWatchdog() {
+	proxyWatchdogOnce.Do(func() {
+		dir := systemProxyJournalDir
+		if dir == "" {
+			if cfgDir, err := os.UserConfigDir(); err == nil && cfgDir != "" {
+				dir = filepath.Join(cfgDir, "connect-hub")
+			}
+		}
+		if dir == "" {
+			dir = os.TempDir()
+		}
+		exe, err := os.Executable()
+		if err != nil {
+			return
+		}
+		cmd := exec.Command(exe, proxyWatchdogFlag, strconv.Itoa(os.Getpid()), dir)
+		if err := cmd.Start(); err != nil {
+			return
+		}
+		go func() { _ = cmd.Wait() }()
+	})
+}
+
+// recoverSystemProxy 在启动时重试还原之前崩溃残留的系统代理设置。
+func (a *app) recoverSystemProxy() error {
+	dir := a.dir
+	if dir == "" {
+		return nil
+	}
+	restoreSystemProxyAfterDeath(dir)
+	return nil
+}
+
+// restoreSystemProxyAfterDeath 在父进程消亡后（由看门狗调用）或启动恢复时调用。
+// 若快照文件已被正常清理，则直接退出；若快照残留，则关闭各网卡代理并恢复原始绕过列表。
+func restoreSystemProxyAfterDeath(dir string) {
+	journalFile := filepath.Join(dir, macosBypassJournalFilename)
+	data, err := os.ReadFile(journalFile)
+	if err != nil {
+		// 快照文件不存在，说明正常退出流程已成功完成恢复
+		return
+	}
+
+	var snapshot map[string][]string
+	_ = json.Unmarshal(data, &snapshot)
+
+	services, err := networkServices()
+	if err != nil || len(services) == 0 {
+		_ = os.Remove(journalFile)
+		return
+	}
+
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n")
+	for _, svc := range services {
+		fmt.Fprintf(&b, "networksetup -setsocksfirewallproxystate '%s' off\n", svc)
+		fmt.Fprintf(&b, "networksetup -setwebproxystate '%s' off\n", svc)
+		fmt.Fprintf(&b, "networksetup -setsecurewebproxystate '%s' off\n", svc)
+		if orig, ok := snapshot[svc]; ok {
+			b.WriteString(formatBypassCmd(svc, orig))
+		}
+	}
+
+	// 优先尝试直接以当前权限关闭
+	cmd := exec.Command("/bin/sh", "-c", b.String())
+	if err := cmd.Run(); err != nil {
+		// 需提权时通过 osascript 弹窗执行
+		script := fmt.Sprintf(`do shell script "%s" with administrator privileges`, strings.ReplaceAll(b.String(), `"`, `\"`))
+		_ = exec.Command("osascript", "-e", script).Run()
+	}
+
+	_ = os.Remove(journalFile)
+}

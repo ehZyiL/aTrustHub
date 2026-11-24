@@ -18,6 +18,11 @@ func TestVersionGreater(t *testing.T) {
 		{"0.25", "0.24.9", true},
 		{"0.10.0", "0.9.0", true},
 		{"v0.11.0", "0.10.9", true},
+		{"0.1.0", "0.1.0-dev-multigateway-tun.11", true},
+		{"0.1.0-dev-multigateway-tun.11", "0.1.0", false},
+		{"0.1.1", "0.1.0-dev-multigateway-tun.11", true},
+		{"0.1.0-dev.12", "0.1.0-dev.11", true},
+		{"0.1.0-dev.11", "0.1.0-dev.11", false},
 	}
 	for _, c := range cases {
 		if got := versionGreater(c.newest, c.current); got != c.want {

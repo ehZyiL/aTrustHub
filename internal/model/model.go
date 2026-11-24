@@ -281,6 +281,8 @@ type Settings struct {
 	// AutoLoginOptIn records that the user has been offered the auto-login
 	// default. Access points do not log in at startup unless they ask for it.
 	AutoLoginOptIn bool `json:"autoLoginOptIn"`
+	// AutoCheckUpdate 开启后启动时及每天自动检查一次更新，并在状态栏提示新版本。
+	AutoCheckUpdate bool `json:"autoCheckUpdate"`
 }
 
 // Secret store choices.
@@ -326,6 +328,7 @@ func DefaultSettings() Settings {
 		SecretStore:       SecretStoreKeychain,
 		CaptureMode:       CaptureModeSystem,
 		SimpleMode:        true,
+		AutoCheckUpdate:   true,
 	}
 }
 
@@ -423,7 +426,7 @@ func (s *Settings) Normalize() {
 	// 回到默认值，因为 omitempty 的 bool 分不出“没选”和“选了 false”。真实用户
 	// 不受影响：应用自己写出的配置总带着其它字段，不会命中这个早退分支。
 	if s.ListenHost == "" && s.AggregatePort == 0 && s.Routing == "" &&
-		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && len(s.DNSBindings) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 && s.CaptureMode == "" && !s.SimpleMode && !s.AutoRestoreAppCapture {
+		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && len(s.DNSBindings) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 && s.CaptureMode == "" && !s.SimpleMode && !s.AutoRestoreAppCapture && !s.AutoCheckUpdate {
 		*s = DefaultSettings()
 		return
 	}

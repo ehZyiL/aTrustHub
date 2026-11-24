@@ -2208,9 +2208,22 @@ func (a *app) logsSection(c *ui.Context) {
 // aboutSection 是「关于」：版本、更新、项目主页、数据目录与退出。
 func (a *app) aboutSection(c *ui.Context) {
 	t := c.Theme()
+	d := &a.settings
 	settingsGroup(c, "版本与链接", func() {
 		ui.Text(c, appName+" "+appBuild).FontSize(13).TextColor(t.TextMuted).Wrap()
+		ui.Column(c).Gap(4).Children(func() {
+			if ui.Checkbox(c, &d.autoCheckUpdate, "自动检查更新（启动时及之后每天检查一次，发现新版本时在状态栏提示）").Changed() {
+				a.applySettingsIfChanged()
+			}
+		})
 		ui.Row(c).Gap(8).Wrap().Children(func() {
+			checkLabel := "检查更新"
+			if a.updateChecking.Load() {
+				checkLabel = "正在检查…"
+			}
+			if ui.Button(c, checkLabel).FontSize(12).Clicked() {
+				go a.checkForUpdate(true)
+			}
 			if ui.Button(c, "项目主页").FontSize(12).Clicked() {
 				a.openProject()
 			}
@@ -2832,6 +2845,7 @@ func (a *app) openSettings() {
 		routing:               s.Routing.Label(),
 		aggregate:             s.AggregateEnabled,
 		autoReconnect:         s.AutoReconnect,
+		autoCheckUpdate:       s.AutoCheckUpdate,
 		secretStore:           secretStoreLabel(s.SecretStore),
 		hideDock:              s.HideDock,
 		simpleMode:            s.SimpleMode,
@@ -2892,6 +2906,7 @@ func (a *app) saveSettings() {
 		cfg.Settings.Routing = routingFromLabel(d.routing)
 		cfg.Settings.AggregateEnabled = d.aggregate
 		cfg.Settings.AutoReconnect = d.autoReconnect
+		cfg.Settings.AutoCheckUpdate = d.autoCheckUpdate
 		cfg.Settings.HideDock = d.hideDock
 		cfg.Settings.Appearance = appearanceFromLabel(d.appearance)
 		cfg.Settings.Theme = d.theme
@@ -2935,6 +2950,7 @@ func (a *app) settingsDirty() bool {
 		routingFromLabel(d.routing) != s.Routing ||
 		d.aggregate != s.AggregateEnabled ||
 		d.autoReconnect != s.AutoReconnect ||
+		d.autoCheckUpdate != s.AutoCheckUpdate ||
 		d.hideDock != s.HideDock ||
 		secretStoreFromLabel(d.secretStore) != s.SecretStore
 }

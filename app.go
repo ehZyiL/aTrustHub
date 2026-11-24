@@ -31,14 +31,14 @@ import (
 )
 
 // version is the app's version.
-const version = "0.1.0"
+const version = "0.2.0"
 
 const appName = "Connect Hub"
 
 // app is everything the window shows and the manager that does the work.
 // appBuild is shown in the footer and the startup log so an old running
 // instance is easy to tell apart from a freshly built one.
-const appBuild = "0.1.0-dev-multigateway-tun.11"
+const appBuild = "0.2.0"
 
 //go:embed resources/icon.png
 var embeddedAppIcon []byte
@@ -80,8 +80,9 @@ type app struct {
 	// (qr field removed: WeCom QR login uses a WebView popup now.)
 	// ghReachable records whether github.com answered the update check; the
 	// footer icon sends the browser to a mirror when it did not.
-	ghReachable   bool
-	updateRetried atomic.Bool
+	ghReachable    bool
+	updateRetried  atomic.Bool
+	updateChecking atomic.Bool
 	// sysProxyOn is whether the app turned the system proxy on. Read by the state
 	// ticker and written by the UI thread, so it is atomic.
 	sysProxyOn atomic.Bool
@@ -300,8 +301,9 @@ type settingsDraft struct {
 	hideDock bool
 	// simpleMode 是简单模式开关的绑定值。它只是界面绑定：真正的持久化与
 	// 概念收敛在 setSimpleMode 里，所以它不参与 settingsDirty。
-	simpleMode bool
-	err        string
+	simpleMode      bool
+	autoCheckUpdate bool
+	err             string
 }
 
 func main() {
@@ -584,6 +586,7 @@ func (a *app) start() {
 	// 状态机独立于重绘：每秒推进一次 TUN / 代理保活与流量计时，
 	// 窗口藏在托盘时也照跑，只是不画。
 	go a.startStateTicker()
+	a.startUpdateScheduler()
 
 	// A slow tick makes TUN follow the online set even when no log line or
 	// click happens to trigger a repaint.

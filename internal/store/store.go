@@ -103,6 +103,9 @@ func loadConfig(path string) (model.Config, []string, error) {
 				if _, ok := settings["aggregateEnabled"]; !ok {
 					cfg.Settings.AggregateEnabled = true
 				}
+				if _, ok := settings["simpleMode"]; !ok {
+					cfg.Settings.SimpleMode = false
+				}
 			}
 		}
 	}

@@ -13,7 +13,7 @@ import (
 )
 
 // projectRepo is the GitHub repository this build comes from.
-const projectRepo = "weigram/aTrustHub"
+const projectRepo = "ehZyiL/aTrustHub"
 
 // projectURL is the repository home page, opened by the footer icon.
 const projectURL = "https://github.com/" + projectRepo
@@ -51,14 +51,57 @@ func releaseSources() []string {
 	}
 }
 
-// checkForUpdate asks GitHub for the newest release once per start. It runs in
-// the background: a blocked mirror must never delay or freeze the window.
-func (a *app) checkForUpdate() {
-	// No release feed is configured for this fork.
-	if version == "0.1.0" {
+// startUpdateScheduler runs the background update checker.
+// It checks once shortly after launch, and then every 24 hours, if AutoCheckUpdate is enabled.
+func (a *app) startUpdateScheduler() {
+	go func() {
+		// 启动后延迟 10 秒，等待网络初始化与系统 DNS 就绪
+		select {
+		case <-a.tickersStop:
+			return
+		case <-time.After(10 * time.Second):
+		}
+
+		if a.configForBackground().Settings.AutoCheckUpdate {
+			a.checkForUpdate(false)
+		}
+
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-a.tickersStop:
+				return
+			case <-ticker.C:
+				if a.configForBackground().Settings.AutoCheckUpdate {
+					a.checkForUpdate(false)
+				}
+			}
+		}
+	}()
+}
+
+// checkForUpdate asks GitHub for the newest release.
+// When manual is true, it notifies the user via toast even if no update is found or on error.
+// When manual is false, it runs silently in the background and only alerts if an update is found.
+func (a *app) checkForUpdate(manual bool) {
+	if !a.updateChecking.CompareAndSwap(false, true) {
+		if manual && a.win != nil {
+			a.win.Update(func() {
+				a.toast = "正在检查更新，请稍候…"
+			})
+		}
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer a.updateChecking.Store(false)
+
+	if manual && a.win != nil {
+		a.win.Update(func() {
+			a.toast = "正在检查更新…"
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -82,26 +125,38 @@ func (a *app) checkForUpdate() {
 		a.markGitHubReach(direct)
 		if !versionGreater(info.Version, appBuild) {
 			a.noteUpdate("已是最新版本 " + appBuild + "（来源 " + info.Source + "）")
+			if manual && a.win != nil {
+				a.win.Update(func() {
+					a.toast = "当前已是最新版本 " + appBuild
+				})
+			}
 			return
 		}
-		a.win.Update(func() {
-			a.update = info
-			a.toast = fmt.Sprintf("发现新版本 v%s，点右下角 GitHub 图标下载", info.Version)
-		})
+		if a.win != nil {
+			a.win.Update(func() {
+				a.update = info
+				a.toast = fmt.Sprintf("发现新版本 v%s，点关于页按钮下载", info.Version)
+			})
+		}
 		a.noteUpdate(fmt.Sprintf("发现新版本 v%s（当前 v%s，来源 %s）", info.Version, appBuild, info.Source))
 		return
 	}
-	if noHost == len(failures) {
-		a.noteUpdate("检查更新失败：这台机器暂时解析不了域名（刚启动时常见），90 秒后重试")
-	} else {
-		a.noteUpdate("检查更新失败：" + strings.Join(failures, " ｜ "))
+	errMsg := "检查更新失败：" + strings.Join(failures, " ｜ ")
+	if noHost == len(failures) && len(failures) > 0 {
+		errMsg = "检查更新失败：网络暂时无法解析域名，请稍后重试"
+	}
+	a.noteUpdate(errMsg)
+	if manual && a.win != nil {
+		a.win.Update(func() {
+			a.toast = errMsg
+		})
 	}
 	// 启动时我们刚把系统 DNS 还回去，第一次查询常常还没通。别就此放弃，
 	// 一分钟后再试一次——总失败时也说明不了 GitHub 不可达，图标仍按直连。
-	if a.updateRetried.CompareAndSwap(false, true) {
+	if !manual && a.updateRetried.CompareAndSwap(false, true) {
 		time.AfterFunc(90*time.Second, func() {
 			a.noteUpdate("重试检查更新")
-			a.checkForUpdate()
+			a.checkForUpdate(false)
 		})
 	}
 }
@@ -206,17 +261,42 @@ func parseManifest(raw, url string) (*updateInfo, error) {
 	}, nil
 }
 
-// versionGreater reports whether a is a newer release than b. Missing parts
-// count as zero, so "0.25" beats "0.24.9".
+// versionGreater reports whether a is a newer release than b.
+// It complies with semantic versioning:
+// 1. Strips leading "v" if present.
+// 2. Compares major.minor.patch numeric parts. Missing parts count as 0.
+// 3. If numeric parts are equal, a release without prerelease suffix is strictly
+//    newer than one with a prerelease suffix (e.g. "0.1.0" > "0.1.0-dev.11").
+// 4. If both have prerelease suffixes, compare them.
 func versionGreater(a, b string) bool {
-	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
+	va, preA := splitPrerelease(strings.TrimPrefix(strings.TrimSpace(a), "v"))
+	vb, preB := splitPrerelease(strings.TrimPrefix(strings.TrimSpace(b), "v"))
+	pa, pb := strings.Split(va, "."), strings.Split(vb, ".")
 	for i := 0; i < len(pa) || i < len(pb); i++ {
 		x, y := num(part(pa, i)), num(part(pb, i))
 		if x != y {
 			return x > y
 		}
 	}
+	// Numeric parts are identical.
+	// Standard SemVer: 1.0.0 is greater than 1.0.0-alpha / 1.0.0-dev
+	if preA == "" && preB != "" {
+		return true
+	}
+	if preA != "" && preB == "" {
+		return false
+	}
+	if preA != "" && preB != "" {
+		return preA > preB
+	}
 	return false
+}
+
+func splitPrerelease(v string) (main, pre string) {
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		return v[:i], v[i+1:]
+	}
+	return v, ""
 }
 
 func part(s []string, i int) string {

@@ -145,6 +145,9 @@ func (a *app) resumeLANShare() {
 	if err := a.lanShare.Restore(context.Background()); err != nil {
 		a.tunLogf("局域网分享恢复：%v", err)
 	}
+	// Verify any rule left from the previous run before this run relies on it:
+	// an unverified rule is either reused (same share, same scope) or removed.
+	a.syncLanShareFirewall()
 }
 
 // shutdownLANShare stops serving but keeps the enable intent, so the next start
@@ -156,6 +159,10 @@ func (a *app) shutdownLANShare() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = a.lanShare.Shutdown(ctx)
+	// The listener is closed, so the rule no longer serves anything. A failure
+	// keeps the journal entry for the next start; it must not block quitting.
+	a.cancelPendingFirewallOps()
+	a.reconcileLanShareFirewall(a.lanShare.View())
 }
 
 // lanShareEnabled reports whether the share intent is on.
@@ -720,8 +727,10 @@ func (a *app) disableLANShare() {
 		notice := ""
 		if err == nil {
 			notice = "共享已关闭，下次启动不再恢复。"
-			// The rule only exists for the share port; it goes with the share.
-			a.cleanupLanShareFirewall(0)
+			// The rule only exists for the share port; it goes with the share. A
+			// creation still waiting on the elevation prompt is revoked too.
+			a.cancelPendingFirewallOps()
+			a.syncLanShareFirewall()
 		}
 		a.postLANShareResult(lanShareResult{action: "disable", err: err, notice: notice})
 	}()

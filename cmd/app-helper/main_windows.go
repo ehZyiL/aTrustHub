@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ehzyil/connect-hub/internal/relay"
 	"github.com/ehzyil/connect-hub/internal/wincapture"
 	"golang.org/x/sys/windows"
 )
@@ -14,6 +15,8 @@ func main() {
 	pipe := flag.String("pipe", "", "desktop pipe session")
 	watchdog := flag.String("watchdog", "", "network recovery session")
 	protocolVersion := flag.Bool("protocol-version", false, "print the capture helper protocol version")
+	firewallOp := flag.String("firewall-op", "", "one-shot firewall operation file")
+	firewallResult := flag.String("firewall-result", "", "where to write the firewall result")
 	parent := flag.Uint("parent", 0, "expected parent process ID")
 	created := flag.Uint64("created", 0, "expected parent creation time")
 	flag.Parse()
@@ -22,10 +25,29 @@ func main() {
 		os.Exit(2)
 	}
 	if *protocolVersion {
-		if flag.NArg() != 0 || *pipe != "" || *watchdog != "" || *parent != 0 || *created != 0 {
+		if flag.NArg() != 0 || *pipe != "" || *watchdog != "" || *parent != 0 || *created != 0 ||
+			*firewallOp != "" || *firewallResult != "" {
 			os.Exit(2)
 		}
 		fmt.Println(wincapture.ProtocolVersion)
+		return
+	}
+	// The firewall mode is a one-shot privileged operation: it verifies that the
+	// process that launched it is the desktop, then performs exactly one create,
+	// query or delete for this app's own rule name.
+	if *firewallOp != "" || *firewallResult != "" {
+		if *firewallOp == "" || *firewallResult == "" || *pipe != "" || *watchdog != "" ||
+			*parent == 0 || *created == 0 || uint64(*parent) > 0xffffffff {
+			os.Exit(2)
+		}
+		if err := relay.VerifyLaunchParent(relay.ProcessIdentity{PID: uint32(*parent), Created: *created}); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := relay.FirewallHelperMain(*firewallOp, *firewallResult); err != nil {
+			fmt.Fprintln(os.Stderr, "firewall helper stopped")
+			os.Exit(1)
+		}
 		return
 	}
 	if flag.NArg() != 0 || (*pipe == "") == (*watchdog == "") || uint64(*parent) > 0xffffffff {

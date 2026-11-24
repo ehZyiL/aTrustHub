@@ -3,6 +3,7 @@
 package relay
 
 import (
+	"context"
 	"errors"
 	"runtime"
 )
@@ -34,12 +35,14 @@ func FirewallInfo() FirewallGuidance {
 	}
 }
 
-// ApplyFirewallRule is unavailable outside Windows in this version.
-func ApplyFirewallRule(rule FirewallRule) error {
-	return errors.New("当前平台不支持自动创建防火墙规则，请按提示手动放行")
-}
+// UnsupportedFirewall registers no rule on this platform.
+type UnsupportedFirewall struct{}
 
-// RemoveFirewallRule is unavailable outside Windows in this version.
-func RemoveFirewallRule(id string) error {
-	return errors.New("当前平台没有本程序创建的防火墙规则")
+// NewElevatedFirewall returns an executor that explains the platform instead of
+// pretending to have changed anything.
+func NewElevatedFirewall() FirewallExecutor { return UnsupportedFirewall{} }
+
+// Run refuses every operation.
+func (UnsupportedFirewall) Run(context.Context, FirewallOperation) (FirewallResult, error) {
+	return FirewallResult{Outcome: FirewallFailed, Detail: ErrFirewallUnsupported.Error()}, errors.New("当前平台不支持自动创建防火墙规则，请按提示手动放行")
 }

@@ -61,6 +61,9 @@ func (a *app) view(c *ui.Context) {
 	a.syncLogViewActive()
 	// 后台只写 Store；配置的发布点只有这里，主线程读写 a.cfg。
 	a.applyPendingConfigReload()
+	// The firewall rule follows the share's running state; this only acts when
+	// that state changed and never prompts for elevation.
+	a.syncLanShareFirewallIfNeeded()
 	// 原型是暗色启动台，但颜色模式由设置里的偏好决定：
 	// 跟随系统时听系统的，浅色 / 深色则把外观固定下来。
 	c.SetTheme(a.appearanceTheme(c.Theme().Dark))
@@ -3028,6 +3031,9 @@ func (a *app) removePoint(id string) {
 	// A relay node also leaves an attribution cache behind. Removing it is part
 	// of deleting the node; the deleted point cannot protect anything.
 	_ = a.store.DeleteRelayKnown(id)
+	// Its firewall rule (if the user approved one) belongs to the deleted share.
+	a.cancelPendingFirewallOps()
+	a.syncLanShareFirewall()
 	if a.revealPointID == id {
 		a.revealPointID = ""
 	}

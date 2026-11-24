@@ -61,6 +61,11 @@ type app struct {
 	firewallBusy   bool
 	firewallNotice string
 	firewallErr    string
+	// fwOnce/fwRules own every firewall rule this app creates; fwSeen remembers
+	// the share state whose rules were already reconciled.
+	fwOnce  sync.Once
+	fwRules *relay.Rules
+	fwSeen  fwSeenState
 	// cfg is what the UI thread reads and writes. Background loops must use
 	// configForBackground: a whole-struct reassignment while another goroutine
 	// reads a field is a data race, and Settings/Points/LocalApps are big enough

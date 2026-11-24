@@ -100,28 +100,25 @@ func TestFirewallJournalRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("missing journal should not fail: %v", err)
 	}
-	if len(journal.Rules) != 0 {
+	if len(journal.Entries) != 0 || journal.Pending() {
 		t.Fatal("fresh journal has rules")
 	}
-	rule := FirewallRule{ID: "ConnectHub-LANShare-1-1", ProgramPath: "/x", Port: 1000, Profile: "private", RemoteIP: "192.168.1.0/24"}
-	if err := journal.Add(dir, rule); err != nil {
+	rule := FirewallRule{ID: "ConnectHub-LANShare-1-1", ProgramPath: "/x/connect-hub", Port: 1000, Profile: "private", RemoteIP: "192.168.1.0/24"}
+	if err := journal.Put(dir, FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: FirewallEntryPending}); err != nil {
 		t.Fatal(err)
 	}
 	reloaded, err := LoadFirewallJournal(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reloaded.Rules) != 1 || !reloaded.Pending {
+	if len(reloaded.Entries) != 1 || !reloaded.Pending() {
 		t.Fatalf("journal not written before creation: %+v", reloaded)
-	}
-	if err := reloaded.Confirm(dir); err != nil {
-		t.Fatal(err)
 	}
 	if err := reloaded.Remove(dir, rule.ID); err != nil {
 		t.Fatal(err)
 	}
 	final, _ := LoadFirewallJournal(dir)
-	if len(final.Rules) != 0 {
+	if len(final.Entries) != 0 {
 		t.Fatalf("rule not removed from the journal: %+v", final)
 	}
 }

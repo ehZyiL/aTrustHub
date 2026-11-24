@@ -200,8 +200,12 @@ type browsedLink struct {
 type browseSession struct {
 	links []browsedLink
 	opts  BrowseOptions
-	logf  func(string, ...any)
-	now   func() time.Time
+	// queried remembers which instances already got the extra SRV/TXT query, so
+	// a repeated (or forged) PTR cannot make this host send a query per packet.
+	queriedMu sync.Mutex
+	queried   map[string]bool
+	logf      func(string, ...any)
+	now       func() time.Time
 
 	closeOnce sync.Once
 	done      chan struct{}
@@ -241,6 +245,7 @@ func (b *mdnsBackend) Browse(ctx context.Context, opts BrowseOptions) (Session, 
 	s := &browseSession{
 		links: links, opts: opts, logf: opts.Logf, now: b.now,
 		done: make(chan struct{}), refresh: make(chan struct{}, 1),
+		queried: make(map[string]bool),
 	}
 	s.wg.Add(1)
 	go s.queryLoop()
@@ -328,9 +333,10 @@ func (s *browseSession) readLoop(l browsedLink) {
 		}
 		records := parseRecords(&msg, l.ifi.Name)
 		for _, rec := range records {
-			// Ask for the records a bare PTR may not carry. This is one extra
-			// query per new instance, not a scan.
-			if rec.Kind == KindPTR && !rec.Gone() {
+			// Ask for the records a bare PTR may not carry. One extra query per
+			// instance per session: repeats are remembered so a forged flood
+			// cannot turn every packet into a packet we send.
+			if rec.Kind == KindPTR && !rec.Gone() && s.markQueried(rec.Instance) {
 				if b, err := instanceQuery(rec.Instance).Pack(); err == nil {
 					_ = l.link.Send(b)
 				}
@@ -340,6 +346,23 @@ func (s *browseSession) readLoop(l browsedLink) {
 			s.opts.OnRecords(records)
 		}
 	}
+}
+
+// markQueried records an instance and reports whether it was new. The map is
+// bounded: once it is full, no further instances are queried, which keeps the
+// memory and the outbound traffic under a hostile flood bounded too.
+func (s *browseSession) markQueried(instance string) bool {
+	key := strings.ToLower(instance)
+	s.queriedMu.Lock()
+	defer s.queriedMu.Unlock()
+	if s.queried[key] {
+		return false
+	}
+	if len(s.queried) >= MaxCandidates*2 {
+		return false
+	}
+	s.queried[key] = true
+	return true
 }
 
 func (s *browseSession) Close() error {

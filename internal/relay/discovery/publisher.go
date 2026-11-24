@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -326,6 +327,25 @@ func (p *Publisher) loop() {
 				Generation: ann.Generation,
 			})
 			p.logf("局域网发现：发布失败：%v", res.err)
+			continue
+		}
+		if res.reg == nil {
+			// A backend that reports success without a handle would look
+			// published while nothing is announced.
+			res.err = errors.New("发现后端未返回注册句柄")
+			failures++
+			wait := p.retry[len(p.retry)-1]
+			if failures <= len(p.retry) {
+				wait = p.retry[failures-1]
+			}
+			stopTimer()
+			retryTimer = time.NewTimer(wait)
+			p.mu.Lock()
+			p.retryPending = true
+			p.retrySeq = seq
+			p.mu.Unlock()
+			p.setStatus(Status{State: StatusFailed, Message: res.err.Error(),
+				RetryAt: p.now().Add(wait), Generation: ann.Generation})
 			continue
 		}
 		failures = 0

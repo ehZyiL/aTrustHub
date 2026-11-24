@@ -213,3 +213,13 @@ env GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./...
 | R1-4 [P3] | 规格 | 保存失败后「重试保存」把公开名称写空 | `TestAcceptanceRetryKeepsThePublicName` | 重试时带当前名称 |
 | R1-5 [P3] | 规格 | 空列表在首轮立刻显示「暂未发现分享」，与「5 秒内不判定没有分享」冲突 | `TestAcceptanceFirstSecondsReadAsSearching` | 增加时间窗（默认 5 秒）内的「正在查找局域网分享…」；协调器 2 秒兜底帧保证状态按时切换 |
 | R1-6 [nit] | 标准 | `lanDiscoveryUI.pinned/pinnedKey/loadedOnce` 为死字段；`browseInterfaces` 有恒真条件 | 代码核对 | 删除 |
+
+### 11.2 第二轮（并发与安全）
+
+| 编号 | 轴 | 问题 | 证据 | 修复 |
+| --- | --- | --- | --- | --- |
+| R2-1 [P1] | 标准 | `shutdownLANDiscovery` 二次调用会 `close` 已关闭的 channel 直接 panic；退出后再次打开页面还会重启浏览（套接字已无人回收） | `TestAcceptanceShutdownIsIdempotent` | `stopOnce` + `shutDown` 标记；退出后忽略开启 |
+| R2-2 [P2] | 安全 | 浏览器对**每个**收到的 PTR 都补发一次 SRV/TXT 查询，伪造洪泛可以做到「收一包、发一包」 | `TestRepeatedPTRIsQueriedOnce`（去掉守卫时发出 51 个报文） | 每会话按实例去重，上限 256 |
+| R2-3 [P2] | 标准 | 过期 ticker 是独立 goroutine，`Close` 之后仍可能推送一次快照到 UI | `TestBrowserDoesNotEmitAfterClose`（去掉守卫时仍推送 1 次） | `publish` 检查关闭状态；顺带删除未等待的 `tickerDone` |
+| R2-4 [P3] | 标准 | 后端返回 `(nil, nil)` 时被当成发布成功，面板显示「正在发布」但什么都没注册 | `TestPublisherRejectsANilRegistration` | 视为失败并进入退避 |
+| R2-5 [P2] | 规格 | 列表不过滤本机自己的实例（§9.1.5） | `TestAcceptanceOwnShareIsFilteredByAddress` | 仅当 sid 相同**且**地址是本机网卡地址时过滤；同 sid 的远端仍显示 |

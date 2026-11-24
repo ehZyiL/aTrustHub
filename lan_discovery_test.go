@@ -631,3 +631,49 @@ func TestAcceptanceRetryKeepsThePublicName(t *testing.T) {
 		t.Fatalf("落盘的名称不对：%q", got)
 	}
 }
+
+// Review: shutting discovery down twice must not panic, and a late page-open
+// must not start browsing again after the sockets are gone.
+func TestAcceptanceShutdownIsIdempotent(t *testing.T) {
+	a, _, _ := discoveryApp(t)
+	a.openRelayImport()
+	a.shutdownLANDiscovery()
+	a.shutdownLANDiscovery()
+	a.lanDisc.ui.open = false
+	a.openLANDiscovery()
+	if a.lanDisc.ui.open {
+		t.Fatal("退出后仍能开始浏览")
+	}
+}
+
+// Spec §9.1.5: this machine's own share must not appear in its own list, but a
+// colleague who reports the same share ID from another address must.
+func TestAcceptanceOwnShareIsFilteredByAddress(t *testing.T) {
+	a, backend, iface := discoveryApp(t)
+	enableShare(t, a, iface, true, "本机共享")
+	own := a.lanShare.Settings()
+	a.openRelayImport()
+
+	mk := func(addr string) []discovery.Record {
+		return []discovery.Record{
+			{Kind: discovery.KindPTR, Instance: discovery.InstanceName(own.ShareID), TTL: 4500, Interface: "en0"},
+			{Kind: discovery.KindSRV, Instance: discovery.InstanceName(own.ShareID),
+				Host: discovery.HostLabel(own.ShareID), Port: 23456, TTL: 120, Interface: "en0"},
+			{Kind: discovery.KindTXT, Instance: discovery.InstanceName(own.ShareID),
+				TXT: []string{"dv=1", "pv=1", "sid=" + own.ShareID, "name=同名"}, TTL: 4500, Interface: "en0"},
+			{Kind: discovery.KindA, Host: discovery.HostLabel(own.ShareID), IPv4: addr, TTL: 120, Interface: "en0"},
+		}
+	}
+	// Same share ID on a local address: our own instance, hidden.
+	backend.feed(mk(iface.IPv4))
+	a.drainLANDiscovery()
+	if got := len(a.lanDisc.ui.cands); got != 0 {
+		t.Fatalf("本机自己的分享没有被过滤：%d", got)
+	}
+	// Same share ID from a remote address: a real colleague, shown.
+	backend.feed(mk("192.168.31.240"))
+	a.drainLANDiscovery()
+	if got := len(a.lanDisc.ui.cands); got != 1 {
+		t.Fatalf("远端同名分享被误过滤：%d", got)
+	}
+}

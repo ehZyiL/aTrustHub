@@ -40,7 +40,6 @@ type Browser struct {
 	closed  bool
 
 	stopTicker chan struct{}
-	tickerDone chan struct{}
 }
 
 // NewBrowser creates a browser. Nothing is browsed until Start is called.
@@ -216,16 +215,13 @@ func (b *Browser) apply(gen uint64, records []Record) {
 // candidate.
 func (b *Browser) startTicker() {
 	stop := make(chan struct{})
-	done := make(chan struct{})
 	b.mu.Lock()
 	if b.stopTicker != nil {
 		close(b.stopTicker)
 	}
 	b.stopTicker = stop
-	b.tickerDone = done
 	b.mu.Unlock()
 	go func() {
-		defer close(done)
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
 		for {
@@ -246,7 +242,11 @@ func (b *Browser) publish() {
 		return
 	}
 	b.mu.Lock()
-	gen := b.gen
+	gen, closed := b.gen, b.closed
 	b.mu.Unlock()
+	if closed {
+		// Nothing may reach the UI after the page closed.
+		return
+	}
 	b.emit(Snapshot{Generation: gen, Candidates: b.cache.snapshot()})
 }

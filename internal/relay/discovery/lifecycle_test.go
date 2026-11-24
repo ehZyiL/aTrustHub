@@ -773,3 +773,145 @@ func TestBrowserReopensAfterClose(t *testing.T) {
 	defer reg.Close()
 	waitFor(t, "candidate after reopen", func() bool { return len(b.Snapshot().Candidates) == 1 })
 }
+
+// Review: every received PTR triggered an extra SRV/TXT query, so a forged
+// flood made this host send one packet per packet received. Each instance is
+// queried once per session.
+func TestRepeatedPTRIsQueriedOnce(t *testing.T) {
+	hub := newHub()
+	var mu sync.Mutex
+	var browserLink *hubLink
+	backend := &recordBackend{hub: hub, onOpen: func(l *hubLink) {
+		mu.Lock()
+		browserLink = l
+		mu.Unlock()
+	}}
+	b := NewBrowser(BrowserOptions{Backend: backend, Emit: func(Snapshot) {}})
+	defer b.Close()
+	if err := b.Start([]Interface{testInterface("en0")}); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	l := browserLink
+	mu.Unlock()
+	if l == nil {
+		t.Fatal("没有建立浏览链路")
+	}
+	// A peer on the same in-memory link sends the same PTR response repeatedly,
+	// which is exactly what a forged flood looks like on the wire.
+	peer, err := hub.open(testInterface("en0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	ann := testAnnouncement(1, "共享")
+	packed, err := announcementMessage(ann, false).Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := l.sentCount()
+	for i := 0; i < 50; i++ {
+		if err := peer.Send(packed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && l.sentCount()-before < 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := l.sentCount() - before; got > 3 {
+		t.Fatalf("重复 PTR 触发了 %d 个报文", got)
+	}
+}
+
+// recordBackend hands the test the link it opens.
+type recordBackend struct {
+	hub    *hub
+	onOpen func(*hubLink)
+	mu     sync.Mutex
+	recs   func([]Record)
+}
+
+func (b *recordBackend) Advertise(ctx context.Context, a Announcement) (Registration, error) {
+	base := &mdnsBackend{open: b.hub.open, logf: func(string, ...any) {}, now: time.Now}
+	return base.Advertise(ctx, a)
+}
+
+func (b *recordBackend) Browse(ctx context.Context, opts BrowseOptions) (Session, error) {
+	b.mu.Lock()
+	b.recs = opts.OnRecords
+	b.mu.Unlock()
+	base := &mdnsBackend{open: func(ifi Interface) (link, error) {
+		l, err := b.hub.open(ifi)
+		if err == nil && b.onOpen != nil {
+			b.onOpen(l.(*hubLink))
+		}
+		return l, err
+	}, logf: func(string, ...any) {}, now: time.Now}
+	return base.Browse(ctx, opts)
+}
+
+func (b *recordBackend) feed(records []Record) {
+	b.mu.Lock()
+	fn := b.recs
+	b.mu.Unlock()
+	if fn != nil {
+		fn(records)
+	}
+}
+
+// Review: the expiry ticker could push one more snapshot after Close (it runs
+// its own goroutine), so the closed browser must refuse to publish.
+func TestBrowserDoesNotEmitAfterClose(t *testing.T) {
+	hub := newHub()
+	backend := newHubBackend(hub)
+	var mu sync.Mutex
+	emits := 0
+	b := NewBrowser(BrowserOptions{Backend: backend, Emit: func(Snapshot) {
+		mu.Lock()
+		emits++
+		mu.Unlock()
+	}})
+	if err := b.Start([]Interface{testInterface("en0")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	before := emits
+	mu.Unlock()
+	// The ticker and any late callback both end here.
+	b.publish()
+	b.apply(1, recordsFor(testAnnouncement(1, "共享"), "en0"))
+	time.Sleep(20 * time.Millisecond)
+	mu.Lock()
+	after := emits
+	mu.Unlock()
+	if after != before {
+		t.Fatalf("关闭后仍推送了 %d 次快照", after-before)
+	}
+}
+
+// A backend that returns no registration must not look published.
+type nilRegBackend struct{}
+
+func (nilRegBackend) Advertise(context.Context, Announcement) (Registration, error) {
+	return nil, nil
+}
+func (nilRegBackend) Browse(context.Context, BrowseOptions) (Session, error) {
+	return nopSession{}, nil
+}
+
+func TestPublisherRejectsANilRegistration(t *testing.T) {
+	pub := NewPublisher(PublisherOptions{
+		Backend: nilRegBackend{},
+		Retry:   []time.Duration{time.Hour},
+	})
+	defer pub.Close(context.Background())
+	pub.Set(testAnnouncement(1, "共享"))
+	waitFor(t, "failed", func() bool { return pub.Status().State == StatusFailed })
+	if !strings.Contains(pub.Status().Message, "注册句柄") {
+		t.Fatalf("状态信息不明确：%q", pub.Status().Message)
+	}
+}

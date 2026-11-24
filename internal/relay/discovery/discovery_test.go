@@ -44,9 +44,13 @@ type hubLink struct {
 
 	mu       sync.Mutex
 	deadline time.Time
+	sent     int
 }
 
 func (l *hubLink) Send(b []byte) error {
+	l.mu.Lock()
+	l.sent++
+	l.mu.Unlock()
 	select {
 	case <-l.closed:
 		return errors.New("closed")
@@ -92,6 +96,12 @@ func (l *hubLink) Receive(b []byte) (int, error) {
 	case <-timer:
 		return 0, errTimeout
 	}
+}
+
+func (l *hubLink) sentCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.sent
 }
 
 func (l *hubLink) SetReadDeadline(t time.Time) error {

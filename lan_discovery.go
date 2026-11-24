@@ -27,9 +27,10 @@ type lanDiscovery struct {
 	pub     *discovery.Publisher
 	browser *discovery.Browser
 
-	kick chan struct{}
-	stop chan struct{}
-	wg   sync.WaitGroup
+	kick     chan struct{}
+	stop     chan struct{}
+	stopOnce sync.Once
+	wg       sync.WaitGroup
 
 	// suppressed stops announcements for this run without touching the
 	// preference. It is used when the user turns discovery off and the saved
@@ -37,6 +38,7 @@ type lanDiscovery struct {
 	// up later.
 	mu         sync.Mutex
 	suppressed bool
+	shutDown   bool
 	pending    *discovery.Snapshot
 	lastErr    string
 
@@ -139,7 +141,12 @@ func (a *app) shutdownLANDiscovery() {
 	if d == nil {
 		return
 	}
-	close(d.stop)
+	d.stopOnce.Do(func() {
+		d.mu.Lock()
+		d.shutDown = true
+		d.mu.Unlock()
+		close(d.stop)
+	})
 	d.wg.Wait()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	_ = d.pub.Close(ctx)
@@ -304,7 +311,7 @@ func (a *app) browseInterfaces(choice string) []discovery.Interface {
 // openLANDiscovery is called by the UI when the discovery tab becomes visible.
 func (a *app) openLANDiscovery() {
 	d := a.lanDisc
-	if d == nil {
+	if d == nil || a.lanDiscoveryShutDown() {
 		return
 	}
 	d.ui.open = true
@@ -326,7 +333,7 @@ func (a *app) closeLANDiscovery() {
 
 func (a *app) startLANDiscoveryBrowsing() {
 	d := a.lanDisc
-	if d == nil {
+	if d == nil || a.lanDiscoveryShutDown() {
 		return
 	}
 	ifaces := a.browseInterfaces(d.ui.ifaceName)
@@ -384,7 +391,7 @@ func (a *app) drainLANDiscovery() {
 	if snap != nil && (d.ui.snap.Generation == 0 || snap.Generation >= d.ui.snap.Generation) {
 		// A snapshot from an older generation must not overwrite a newer list.
 		d.ui.snap = *snap
-		d.ui.cands = snap.Candidates
+		d.ui.cands = a.withoutOwnShare(snap.Candidates)
 	}
 	// The "still looking" flag is time-based, so it is recomputed on every frame
 	// instead of only when a snapshot arrives.
@@ -661,4 +668,42 @@ func (a *app) discoveryNamePlaceholder() string {
 		return "例如：会议室共享"
 	}
 	return model.DefaultDiscoveryName(shareID)
+}
+
+// lanDiscoveryShutDown reports whether the app has already stopped discovery.
+// After that point a late page-open must not start browsing again: the sockets
+// are gone and nothing would ever close them.
+func (a *app) lanDiscoveryShutDown() bool {
+	d := a.lanDisc
+	if d == nil {
+		return true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.shutDown
+}
+
+// withoutOwnShare drops this machine's own announcement from the list. The test
+// is address-based on purpose: a bare share ID is self-reported, so filtering on
+// the ID alone would hide a real colleague who copied an identity.
+func (a *app) withoutOwnShare(cands []discovery.Candidate) []discovery.Candidate {
+	if a.lanShare == nil {
+		return cands
+	}
+	own := a.lanShare.Settings()
+	if !own.Enabled || own.ShareID == "" {
+		return cands
+	}
+	local := make(map[string]bool)
+	for _, cand := range (lanAddresses{}).LANCandidates() {
+		local[cand.IPv4] = true
+	}
+	out := make([]discovery.Candidate, 0, len(cands))
+	for _, cand := range cands {
+		if cand.ShareID == own.ShareID && local[cand.Address] {
+			continue
+		}
+		out = append(out, cand)
+	}
+	return out
 }

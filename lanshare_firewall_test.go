@@ -46,6 +46,19 @@ func installFirewall(t *testing.T, a *app, exec relay.FirewallExecutor) *relay.R
 	return rules
 }
 
+// awaitFirewall waits for the scheduled reconciliation to finish. The UI thread
+// never blocks on it; tests do, so their assertions see the result.
+func (a *app) awaitFirewall(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for a.fwRunning.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("firewall reconciliation did not finish")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 func firewallAppRule() relay.FirewallRule {
 	return relay.FirewallRule{
 		ID:          relay.NewFirewallRuleID(23456, time.Unix(0, 1700000000000000000)),
@@ -75,7 +88,7 @@ func TestDisableRemovesRecordedFirewallRules(t *testing.T) {
 
 	// The share is not running (a fresh test app never listens), which is exactly
 	// the state after 关闭共享.
-	a.syncLanShareFirewall()
+	a.doReconcileLanShareFirewall(a.lanShareViewState())
 
 	var deleted bool
 	for _, op := range fake.calls() {
@@ -108,7 +121,7 @@ func TestFirewallCleanupFailureKeepsTheRecord(t *testing.T) {
 	if err := journal.Put(a.dir, relay.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relay.FirewallEntryConfirmed}); err != nil {
 		t.Fatal(err)
 	}
-	a.syncLanShareFirewall()
+	a.doReconcileLanShareFirewall(a.lanShareViewState())
 	if a.firewallErr == "" {
 		t.Fatal("a failed cleanup was not reported")
 	}
@@ -152,6 +165,7 @@ func TestQuitKeepsTheShareIntentButCleansRules(t *testing.T) {
 	}
 
 	a.shutdownLANShare()
+	a.awaitFirewall(t)
 
 	if !a.cfg.Settings.LANShare.Enabled {
 		// The enable intent is persisted by the controller, not by the shutdown.
@@ -186,6 +200,7 @@ func TestDeletedRelayNodeRemovesItsRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.removePoint("node-1")
+	a.awaitFirewall(t)
 	journal, _ = relay.LoadFirewallJournal(a.dir)
 	if journal.Find(rule.ID) != nil {
 		t.Fatal("the rule of a removed node survived")

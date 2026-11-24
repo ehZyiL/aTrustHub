@@ -75,16 +75,39 @@ func (a *app) lanShareViewState() relay.View {
 	return a.lanShare.View()
 }
 
-// reconcileLanShareFirewall keeps exactly the rules a running share justifies.
-// On a running share the recorded rules are verified first (so a rule that was
-// removed outside the app is forgotten instead of being reported as in place);
-// every other recorded rule is deleted, because the share it belonged to is no
-// longer running in that shape.
+// reconcileLanShareFirewall schedules the reconciliation off the UI thread.
+//
+// Cleanup can need elevation (deleting a rule is a privileged operation), so it
+// must never run inside a render pass or a click handler. Only one reconciliation
+// runs at a time; a request arriving while one is running is folded into the next
+// pass instead of queueing up.
 func (a *app) reconcileLanShareFirewall(view relay.View) {
+	if !a.fwRunning.CompareAndSwap(false, true) {
+		a.fwAgain.Store(true)
+		return
+	}
+	go func() {
+		for {
+			a.doReconcileLanShareFirewall(view)
+			if !a.fwAgain.Swap(false) {
+				break
+			}
+			view = a.lanShareViewState()
+		}
+		a.fwRunning.Store(false)
+	}()
+}
+
+// doReconcileLanShareFirewall is the synchronous core: it keeps exactly the rules
+// a running share justifies. On a running share the recorded rules are verified
+// first (so a rule removed outside the app is forgotten instead of being reported
+// as in place); every other recorded rule is deleted, because the share it
+// belonged to is no longer running in that shape.
+func (a *app) doReconcileLanShareFirewall(view relay.View) {
 	rules := a.firewallRules()
 	desired, err := a.desiredFirewallRules(view)
 	if err != nil {
-		a.firewallErr = err.Error()
+		a.setFirewallError(err.Error())
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), relay.FirewallOpBudget)
 	defer cancel()
@@ -100,11 +123,33 @@ func (a *app) reconcileLanShareFirewall(view relay.View) {
 	if len(errs) > 0 {
 		// A failed cleanup stays in the journal and is retried on the next start;
 		// the share itself must not be blocked by it.
-		a.firewallErr = "防火墙规则待清理：" + errs[0].Error()
+		a.setFirewallError("防火墙规则待清理：" + errs[0].Error())
 		if a.bus != nil {
 			a.bus.Add("app", "局域网分享：防火墙规则待清理："+errs[0].Error())
 		}
 	}
+}
+
+// firewallPost runs fn on the UI thread. Before the first window exists there is
+// no UI thread to defer to, so the work runs inline; once the window has been
+// destroyed the journal is the record and UI fields are left alone.
+func (a *app) firewallPost(fn func()) {
+	if a.win == nil {
+		fn()
+		return
+	}
+	if a.win.IsDestroyed() {
+		return
+	}
+	a.win.Update(fn)
+}
+
+// setFirewallError records a failure that must be visible in the panel.
+func (a *app) setFirewallError(msg string) {
+	a.firewallPost(func() {
+		a.firewallErr = msg
+		a.invalidate()
+	})
 }
 
 // desiredFirewallRules returns the recorded rules that still describe the running
@@ -236,7 +281,7 @@ func (a *app) allowLanShareFirewall(view relay.View) {
 		if applyErr == nil && result.Outcome == relay.FirewallFailed {
 			applyErr = errors.New(result.Detail)
 		}
-		a.win.Update(func() {
+		a.firewallPost(func() {
 			a.firewallBusy = false
 			switch {
 			case result.Outcome == relay.FirewallCreated:
@@ -273,7 +318,7 @@ func (a *app) removeLanShareFirewall() {
 		ctx, cancel := context.WithTimeout(context.Background(), relay.FirewallOpBudget)
 		defer cancel()
 		_, errs := a.firewallRules().Reconcile(ctx, nil)
-		a.win.Update(func() {
+		a.firewallPost(func() {
 			a.firewallBusy = false
 			if len(errs) > 0 {
 				a.firewallErr = "部分规则未能移除：" + errs[0].Error()

@@ -61,9 +61,9 @@ trap 'rm -rf -- "$bundle"; rm -f -- "$icon_syso"' EXIT
 env "$go_tool" run ./cmd/appicon -icon resources/icon.png -arch "$target_arch" -out "$icon_syso"
 env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags='-H=windowsgui -s -w' -o "$bundle/connect-hub.exe" .
 rm -f -- "$icon_syso"
-# 残留清理器（控制台子系统），放在包根目录，方便用户独立双击运行或由 GUI 提权调用
-env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags='-s -w' -o "$bundle/connect-hub-cleanup.exe" ./cmd/app-cleanup
-cleanup_protocol=$("$bundle/connect-hub-cleanup.exe" --protocol-version)
+# 残留清理器（控制台子系统），放进 core/，由 GUI 提权调用或供命令行进阶使用
+env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags='-s -w' -o "$bundle/core/connect-hub-cleanup.exe" ./cmd/app-cleanup
+cleanup_protocol=$("$bundle/core/connect-hub-cleanup.exe" --protocol-version)
 if [[ "$cleanup_protocol" != 2 ]]; then
   printf 'Windows cleanup helper protocol mismatch: expected 2, got %s\n' "$cleanup_protocol" >&2
   exit 1
@@ -114,9 +114,9 @@ Source commit: $repo_commit$repo_dirty
 Worker source commit: $worker_commit
 App build: ${app_build:-unknown}
 Scope: IPv4 TCP and DNS. System IPv4 UDP for eligible L3 sessions is experimental; IPv6 is unsupported.
-Layout: connect-hub.exe at the bundle root; connect-hub-worker.exe and
-connect-hub-capture.exe under core/. Launch only connect-hub.exe;
-the two programs in core/ are internal and start on demand.
+Layout: connect-hub.exe at the bundle root; connect-hub-worker.exe,
+connect-hub-capture.exe and connect-hub-cleanup.exe under core/. Launch only connect-hub.exe;
+the programs in core/ are internal and start on demand.
 GUI, worker and helper are a matched build from this bundle; do not mix files from other bundles.
 EOF
 if [[ "$bundle_profile" == test ]]; then

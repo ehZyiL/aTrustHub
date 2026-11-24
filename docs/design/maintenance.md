@@ -41,19 +41,19 @@ GUI 全程普通用户权限（见 [architecture.md](architecture.md) §1），�
 | 塞进 `connect-hub-capture.exe` | 那是网络助手协议 v7 的载体，加命令会破坏协议契约与打包校验（`package-windows.sh` 有协议号断言） |
 | GUI 进程内 `runas` 提权自身 | 破坏"GUI 永不提权"的架构约束，且提权后无法回到普通权限 |
 
-采用 **`connect-hub-cleanup.exe`**：console 子系统，一次性任务，独立的参数契约与报告文件。
+采用 **`core/connect-hub-cleanup.exe`**：console 子系统，放于 `core/` 目录，一次性任务，独立的参数契约与报告文件。
 
 ```
 普通权限                                   管理员权限
 ──────────────────────────────────────────────────────────────
 connect-hub.exe（GUI）
-  ├─ scan  : newCmd(exe, --scan --json ...)  → 不提权，同步拿退出码（快速只读探测）
-  ├─ apply : ShellExecuteEx("runas", exe, --apply <plan.json> --report <path> ...)
+  ├─ scan  : newCmd(core/exe, --scan --json ...)  → 不提权，同步拿退出码（快速只读探测）
+  ├─ apply : ShellExecuteEx("runas", core/exe, --apply <plan.json> --report <path> ...)
   │                                           → 拿 hProcess，捕获退出码
   │                                           → 提权进程内部执行前自动复核特权残留
   │                                           → 先执行全量快照备份（manifest + 文件/注册表）
   │                                           → 逐条清理并写 report.jsonl，GUI 轮询进度
-  └─ restore: ShellExecuteEx("runas", exe, --restore <manifest.json> --report <path> ...)
+  └─ restore: ShellExecuteEx("runas", core/exe, --restore <manifest.json> --report <path> ...)
                                               → 一键回滚还原
 ```
 

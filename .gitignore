@@ -15,6 +15,7 @@ appicon_windows_*.syso
 resources/*/zju-connect-multitun
 resources/*/zju-connect-multitun.exe
 
-# 根目录本地临时构建产物
+# 本地临时构建产物
 connect-hub.exe
 connect-hub-cleanup.exe
+core/connect-hub-cleanup.exe

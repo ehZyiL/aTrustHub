@@ -53,14 +53,23 @@ func (a *app) findCleanupExe() string {
 	exe, err := os.Executable()
 	if err == nil {
 		dir := filepath.Dir(exe)
-		candidate := filepath.Join(dir, "connect-hub-cleanup.exe")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+		for _, candidate := range []string{
+			filepath.Join(dir, "core", "connect-hub-cleanup.exe"),
+			filepath.Join(dir, "connect-hub-cleanup.exe"),
+		} {
+			if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+				return candidate
+			}
 		}
 	}
-	if _, err := os.Stat("connect-hub-cleanup.exe"); err == nil {
-		abs, _ := filepath.Abs("connect-hub-cleanup.exe")
-		return abs
+	for _, candidate := range []string{
+		filepath.Join("core", "connect-hub-cleanup.exe"),
+		"connect-hub-cleanup.exe",
+	} {
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			abs, _ := filepath.Abs(candidate)
+			return abs
+		}
 	}
 	return ""
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -591,5 +592,65 @@ func TestLANSharePanelAtMinimumWindow(t *testing.T) {
 	tt2 := ui.NewTester(a.view, 720, 520)
 	if texts := strings.Join(tt2.Texts(), "|"); !strings.Contains(texts, "添加并连接") {
 		t.Errorf("import panel at 720x520 lacks its action; texts = %s", texts)
+	}
+}
+
+// TestRelayPointOffersExplicitSystemProxy: connecting a share must not touch the
+// system proxy, but the node panel offers the explicit step and explains why it
+// may be unavailable on this platform.
+func TestRelayPointOffersExplicitSystemProxy(t *testing.T) {
+	a := testApp(t)
+	withLANShare(t, a)
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Add(model.AccessPoint{
+			Name: "同事分享", Protocol: model.ProtocolLANRelay, Server: "192.168.1.50",
+			Port: 23456, InPool: true,
+			Relay: &model.RelayPointOptions{
+				Version: 1, ShareID: base64.RawURLEncoding.EncodeToString([]byte("aaaaaaaaaaaaaaaa")),
+				CertificateSHA256: strings.Repeat("ab", 32),
+			},
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.setConfig(a.store.Config())
+	a.mgr.Apply(a.cfg)
+	point := a.cfg.Points[0]
+	if err := a.store.SetPassword(point.ID, "share-token-for-test"); err != nil {
+		t.Fatal(err)
+	}
+	a.mgr.Connect(point.ID)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if v, ok := a.mgr.View(point.ID); ok && v.State == vpn.StateOnline {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	a.openRelayPoint(point.ID)
+	texts := strings.Join(ui.NewTester(a.view, 1120, 800).Texts(), "|")
+	if supportsSystemProxy() {
+		if !strings.Contains(texts, "开启系统代理") && !strings.Contains(texts, "系统代理已开启") {
+			t.Fatalf("panel lacks the explicit system proxy step; texts = %s", texts)
+		}
+	} else if !strings.Contains(texts, "系统代理当前不可开启") {
+		t.Fatalf("panel does not explain the missing platform support; texts = %s", texts)
+	}
+	if a.sysProxyOn.Load() {
+		t.Fatal("opening the panel changed the system proxy")
+	}
+}
+
+// TestRelayProtocolLabel keeps a relay node out of the aTrust group in the list.
+func TestRelayProtocolLabel(t *testing.T) {
+	if got := protocolLabel(model.ProtocolLANRelay); got != "局域网中继" {
+		t.Fatalf("protocolLabel(lan_relay) = %q", got)
+	}
+	if got := protocolLabel(model.ProtocolATrust); got != "aTrust" {
+		t.Fatalf("protocolLabel(atrust) = %q", got)
+	}
+	if got := protocolLabel(model.ProtocolEasyConnect); got != "EasyConnect" {
+		t.Fatalf("protocolLabel(easyconnect) = %q", got)
 	}
 }

@@ -527,6 +527,8 @@ go test -race ./internal/relay ./internal/vpn ./internal/store
 - **持久化失败回滚**：`TestEnableRollsBackWhenSecretsCannotBeStored`（身份/口令写不进凭据库 → 不监听、不落 Enabled、不留半份秘密、重试可用）、`TestRetryPersistDisableCompletesTheClose`（禁用保存失败后「重试保存关闭状态」成功才删除恢复身份，重启保持关闭）。
 - **配置层不丢意图**：`TestNormalizeKeepsAnExplicitShareIntent` 证明只写了 `lanShare` 的 Settings 不会被零值早退分支重置成默认值。
 - **最小窗口**：`TestLANSharePanelAtMinimumWindow` 在 720×520 下仍渲染开启按钮与导入动作。
+- **B 端系统代理是独立显式动作**：`TestRelayPointOffersExplicitSystemProxy` 证明打开中继详情不会改变系统代理，面板只在在线时给出显式入口（不支持平台给出原因）。
+- **展示不误导**：relay 节点的地址显示为 `host:port`（不是 `https://`），协议分组显示「局域网中继」而不是 aTrust（`TestRelayProtocolLabel`）。
 - **应用接管排除**：`TestRelayPointIsExcludedFromAppCapture` 与 `resourceCaptureConfigs` 的显式跳过。
 - **UI 文案与流程**：`TestLANShareWording`、`TestOpeningSharePanelDoesNotListen`、`TestRelayImportPreviewIsLocalAndAddsDisabledAutoconnect`、`TestRelayImportRejectsDuplicates`、`TestRelayImportRollsBackOnSaveFailure`、`TestRelayImportRejectsBrokenCodes`、`TestRelayNodeNeverOpensVPNEditor`、`TestDeletingRelayNodeDropsCache`。
 - **恢复策略边界**：`TestBlockedNeedsExplicitRetry` 证明 Blocked 不会被 2 秒巡检偷偷拉起，只能由「重试恢复」推进；`TestRestoreBindConflictIsBlocked` 证明端口冲突在恢复路径是 Blocked 而不是静默换端口。
@@ -580,7 +582,7 @@ go test -race ./internal/vpn -run 'Relay|Headless|Seed'  通过
 
 1. **实机矩阵**：先做 Linux↔Linux 与 Linux↔Windows 的最小链接（一条浏览器 + 一条 curl），再补 macOS。
 2. **Windows 防火墙实机**：验证提权、读回、拒绝授权、崩溃后 journal 清理；未验证前 UI 不应把它写成「已放行」。
-3. **macOS 系统代理恢复**：本功能不依赖它，但 relay 卡片上的「开启系统代理」按钮沿用的是既有实现，其恢复能力仍受既有缺口限制。
+3. **macOS 系统代理恢复**：中继节点详情里的「开启系统代理」调用既有 `applyCaptureMode`，其恢复能力仍受既有缺口限制（本次没有改 `systemproxy_*`）。
 4. **剪贴板识别**：确定读取时机（启动/聚焦）、长度上限与去重，再接 UI。
 5. **二维码渲染**：与复制共用同一载荷后再加。
 6. **更换口令**：需要明确「撤销 + 重建身份 + 重新分发」的交互与失败回滚。

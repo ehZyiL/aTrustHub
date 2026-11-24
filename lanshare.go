@@ -1067,6 +1067,20 @@ func (a *app) relayPointView(c *ui.Context) {
 					if view.Error != "" {
 						ui.Text(c, view.Error).FontSize(12).TextColor(t.Danger).Wrap()
 					}
+					// System proxy is a separate, explicit step: connecting a
+					// share never changes it on its own.
+					if view.State == vpn.StateOnline {
+						if reason := a.captureBlocker(captureSystem); reason != "" {
+							ui.Text(c, "系统代理当前不可开启："+reason).FontSize(11).TextColor(t.TextMuted).Wrap()
+						} else if a.captureMode() == captureSystem {
+							ui.Text(c, "系统代理已开启：支持系统代理的应用会走本机入口，再按资源归属分流。").
+								FontSize(11).TextColor(t.TextMuted).Wrap()
+						} else if ui.PrimaryButton(c, "开启系统代理").FontSize(11).Clicked() {
+							d.open = false
+							a.applyCaptureMode(captureSystem)
+							a.invalidate()
+						}
+					}
 				})
 			})
 			dialogFooter(c, func() {

@@ -1520,6 +1520,11 @@ func stateColor(t *ui.Theme, state vpn.State) ui.Color {
 }
 
 func addrOf(v vpn.View) string {
+	// A LAN relay node is reached as host:port over the share protocol, not as
+	// an https:// gateway address; showing the latter would be wrong.
+	if v.Protocol == model.ProtocolLANRelay {
+		return net.JoinHostPort(v.Server, strconv.Itoa(v.Port))
+	}
 	return model.FormatAccessAddress(v.Server, v.Port)
 }
 
@@ -3120,8 +3125,13 @@ func logoutClearsBrowser(mode model.AuthMode) bool {
 }
 
 func protocolLabel(value string) string {
-	if value == model.ProtocolEasyConnect {
+	switch value {
+	case model.ProtocolEasyConnect:
 		return "EasyConnect"
+	case model.ProtocolLANRelay:
+		// A relay node is not an aTrust gateway; labelling it as one would put
+		// it in the wrong group and misstate where traffic goes.
+		return "局域网中继"
 	}
 	return "aTrust"
 }

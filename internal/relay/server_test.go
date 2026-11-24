@@ -477,3 +477,72 @@ func TestSessionCreationBodyBound(t *testing.T) {
 		t.Fatal("oversized session body accepted")
 	}
 }
+
+// blockingSource parks inside DialVPN until its context ends, which is what a
+// revocation racing with a pending dial looks like.
+type blockingSource struct {
+	*fakeSource
+	started chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingSource) DialVPN(ctx context.Context, revision, target string) (net.Conn, error) {
+	b.once.Do(func() { close(b.started) })
+	<-ctx.Done()
+	return nil, NewError(CodeVPNUnavailable, "分享已撤销，拨号被取消")
+}
+
+// TestRevocationCancelsPendingDial proves a share stop also aborts a dial that
+// has not completed yet, instead of letting a late success become a tunnel.
+func TestRevocationCancelsPendingDial(t *testing.T) {
+	identity, err := GenerateIdentity("127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := newFakeSource(testSnapshot())
+	source := &blockingSource{fakeSource: base, started: make(chan struct{})}
+	shareID, _ := randomShareID()
+	server, err := StartServer(ServerOptions{
+		Identity: identity, Source: source, Token: "share-token-123456",
+		ShareID: shareID, ServerInstanceID: "instance", Port: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close(context.Background()) })
+	code := ShareCode{Version: 1, Host: "127.0.0.1", Port: server.Port(),
+		ShareID: shareID, Token: "share-token-123456", Fingerprint: identity.Fingerprint}
+	client, err := NewClient(ClientOptions{Code: code})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	ctx := context.Background()
+	state, token, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dialErr := make(chan error, 1)
+	go func() {
+		conn, err := client.Dial(ctx, token, state.Epoch, state.Revision, "10.1.2.3:443")
+		if conn != nil {
+			_ = conn.Close()
+		}
+		dialErr <- err
+	}()
+	select {
+	case <-source.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pending dial never started")
+	}
+	server.RevokeAll()
+	select {
+	case err := <-dialErr:
+		if err == nil {
+			t.Fatal("a pending dial succeeded after revocation")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("revocation did not cancel the pending dial")
+	}
+}

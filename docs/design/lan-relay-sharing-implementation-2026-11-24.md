@@ -523,6 +523,10 @@ go test -race ./internal/relay ./internal/vpn ./internal/store
 - **口令严格性**：`sharecode_test.go` 覆盖填充、非规范 Base64、重复/未知键、尾随 JSON、类型错误、端口溢出、非 RFC1918、控制字符、超长输入、fuzz 不 panic。
 - **TLS**：正确 pin 通过；错误 pin、过期/未生效、用途错误、地址不符、缺失对端证书全部拒绝；`TestWrongPinNeverSeesTheToken` 证明指纹不匹配时对端根本没收到请求。
 - **租约与限额**：`TestClientLeaseExpiry`、`TestConcurrentConnectLimitIsBounded`、`TestSessionCreationBodyBound`。
+- **撤销的拨号竞态**：`TestRevocationCancelsPendingDial` 证明关闭共享会中止**尚未完成**的拨号（服务端 lifecycle context），而不是等它成功后变成隧道。
+- **持久化失败回滚**：`TestEnableRollsBackWhenSecretsCannotBeStored`（身份/口令写不进凭据库 → 不监听、不落 Enabled、不留半份秘密、重试可用）、`TestRetryPersistDisableCompletesTheClose`（禁用保存失败后「重试保存关闭状态」成功才删除恢复身份，重启保持关闭）。
+- **配置层不丢意图**：`TestNormalizeKeepsAnExplicitShareIntent` 证明只写了 `lanShare` 的 Settings 不会被零值早退分支重置成默认值。
+- **最小窗口**：`TestLANSharePanelAtMinimumWindow` 在 720×520 下仍渲染开启按钮与导入动作。
 - **应用接管排除**：`TestRelayPointIsExcludedFromAppCapture` 与 `resourceCaptureConfigs` 的显式跳过。
 - **UI 文案与流程**：`TestLANShareWording`、`TestOpeningSharePanelDoesNotListen`、`TestRelayImportPreviewIsLocalAndAddsDisabledAutoconnect`、`TestRelayImportRejectsDuplicates`、`TestRelayImportRollsBackOnSaveFailure`、`TestRelayImportRejectsBrokenCodes`、`TestRelayNodeNeverOpensVPNEditor`、`TestDeletingRelayNodeDropsCache`。
 - **恢复策略边界**：`TestBlockedNeedsExplicitRetry` 证明 Blocked 不会被 2 秒巡检偷偷拉起，只能由「重试恢复」推进；`TestRestoreBindConflictIsBlocked` 证明端口冲突在恢复路径是 Blocked 而不是静默换端口。
@@ -555,6 +559,7 @@ go test -race ./internal/vpn -run 'Relay|Headless|Seed'  通过
 - **DNS**：内网 DNS 只做「转发到绑定会话」的实现与单测；没有接管 B 的全局 DNS，也不解决应用提前解析/DoH。
 - **二维码**：口令文本是唯一载荷；面板未内嵌二维码渲染（复制口令已可用），因此「显示二维码」不在已实现范围内。
 - **客户端逐人踢出、更换口令按钮**：「更换口令并断开现有连接」按钮目前是禁用的占位（禁用是为了不提供未验证的入口），首版关闭再开启即可换身份。
+- **「取消首次开启」没有独立按钮**：`Enable` 是同步完成（生成身份 → 绑定 → 落盘）后才返回，面板在 busy 期间禁用开启按钮；`Controller.CancelEnable` 仍是可用 API，但正常交互里没有可取消的长时间窗口。
 - **首次隐藏到托盘的提示**（文档 §6.5 的「已移至托盘，局域网分享仍开启」）未实现；托盘里的「局域网分享…」入口与主界面状态条可用。
 - **剪贴板自动识别**：`RelayClipboardDetection` 字段与默认关闭语义已落在模型与 `Settings.Normalize` 中；读剪贴板的回调没有接线（默认关闭，未开启时不读取，因此没有「未选择却读取」的风险），提示 UI 也未实现。
 - **A 侧资源变化的保守策略**：资源变化会提升代次并关闭该分享的全部业务连接（首版如此），没有做「只断受影响连接」的优化。

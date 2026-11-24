@@ -619,3 +619,83 @@ func TestBlockedNeedsExplicitRetry(t *testing.T) {
 	_ = nets
 	_ = p
 }
+
+// TestEnableRollsBackWhenSecretsCannotBeStored: a share whose identity or token
+// cannot be persisted must not start listening, must not keep the intent and must
+// not leave partial secrets behind.
+func TestEnableRollsBackWhenSecretsCannotBeStored(t *testing.T) {
+	echo, closeEcho := echoServer(t)
+	defer closeEcho()
+	p := newFakePersistence()
+	p.failSet = true
+	sink := newFakeSink("p1")
+	sink.echo = echo
+	c := newTestController(t, p, sink, loopbackNets())
+	err := c.Enable(context.Background(), EnableOptions{PointID: "p1"})
+	if err == nil {
+		t.Fatal("Enable must fail when the identity cannot be stored")
+	}
+	view := c.View()
+	if view.State != StateOff || view.Enabled {
+		t.Fatalf("failed enable left a state behind: %+v", view)
+	}
+	if _, err := c.ShareCode(); err == nil {
+		t.Fatal("a failed enable exposed a share code")
+	}
+	if p.ShareSettings().Enabled {
+		t.Fatal("a failed enable persisted Enabled=true")
+	}
+	// Nothing may be bound: a second Enable with a working store must be able to
+	// use the same port without a conflict.
+	p.failSet = false
+	if err := c.Enable(context.Background(), EnableOptions{PointID: "p1"}); err != nil {
+		t.Fatalf("retry after a failed enable: %v", err)
+	}
+	if c.View().State != StateRunning {
+		t.Fatalf("retry did not start: %+v", c.View())
+	}
+}
+
+// TestRetryPersistDisableCompletesTheClose: when the disabled state could not be
+// written, the UI's retry must persist it and only then drop the recovery
+// identity, so the next start stays off.
+func TestRetryPersistDisableCompletesTheClose(t *testing.T) {
+	p, sink, nets, c, _ := setupShare(t)
+	ctx := context.Background()
+	if err := c.Enable(ctx, EnableOptions{PointID: "p1"}); err != nil {
+		t.Fatal(err)
+	}
+	p.failSave = true
+	if err := c.Disable(ctx); err == nil {
+		t.Fatal("a failed disable must be reported")
+	}
+	if c.View().FailureCode != "persist" {
+		t.Fatalf("failure code = %q", c.View().FailureCode)
+	}
+	// The secrets must survive the failed save: the next start may still have to
+	// resume, so they cannot be dropped yet.
+	if p.secretCount() == 0 {
+		t.Fatal("secrets were dropped before the disabled state was durable")
+	}
+	p.failSave = false
+	if err := c.RetryPersistDisable(); err != nil {
+		t.Fatalf("RetryPersistDisable: %v", err)
+	}
+	if p.ShareSettings().Enabled {
+		t.Fatal("retry did not persist Enabled=false")
+	}
+	if p.secretCount() != 0 {
+		t.Fatalf("retry left %d secrets", p.secretCount())
+	}
+	if c.View().FailureCode != "" {
+		t.Fatalf("failure not cleared: %q", c.View().Failure)
+	}
+	c2 := newTestController(t, p, sink, nets)
+	if err := c2.Restore(ctx); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if view := c2.View(); view.State != StateOff || view.Enabled {
+		t.Fatalf("a completed close restored itself: %+v", view)
+	}
+}

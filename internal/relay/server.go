@@ -460,12 +460,18 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.conns.release(entry)
-	entry.attach(clientConn(w, r))
 
+	// The dial is bound to the share's lifecycle, not to this request: a
+	// revocation must abort a dial that has not completed yet, otherwise a late
+	// success would become a tunnel after 关闭共享.
 	ctx, cancel := context.WithTimeout(s.root, DialTimeout+TLSHandshakeTimeout)
 	upstream, err := s.source.DialVPN(ctx, snap.Revision, target)
 	cancel()
 	if err != nil {
+		if errors.Is(err, context.Canceled) || s.isStopped() {
+			writeError(w, NewError(CodeShareClosed, "分享已关闭"))
+			return
+		}
 		writeError(w, err)
 		return
 	}
@@ -621,11 +627,13 @@ func (s *Server) isStopped() bool {
 // ActiveClients is the number of live client leases, not TCP connections.
 func (s *Server) ActiveClients() int { return s.clients.count(time.Now()) }
 
-// RevokeAll drops every client session and every accepted connection without
-// touching the listener; Close does both.
+// RevokeAll drops every client session and every accepted connection, and cancels
+// anything still in flight (pending dials and DNS queries) by ending the share's
+// lifecycle context. The listener is closed by Close.
 func (s *Server) RevokeAll() {
 	s.clients.removeAll()
 	s.conns.stopAll()
+	s.cancel()
 }
 
 // Close stops serving, revokes every credential it issued and closes all accepted
@@ -697,15 +705,6 @@ func clientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
-}
-
-// clientConn exposes the underlying connection of a request so a pending dial can
-// be cancelled by a revocation.
-func clientConn(w http.ResponseWriter, r *http.Request) net.Conn {
-	if c, ok := w.(interface{ Conn() net.Conn }); ok {
-		return c.Conn()
-	}
-	return nil
 }
 
 // limitedListener bounds concurrently accepted connections. It caps handshake

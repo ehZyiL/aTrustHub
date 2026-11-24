@@ -340,10 +340,9 @@ func (a *app) openLANShareFor(pointID string) {
 	d := &a.lanShareUI
 	if pointID != "" {
 		d.pointID = pointID
-		if p := a.cfg.Find(pointID); p != nil {
-			d.interfaceName = ""
-			_ = p
-		}
+		// The panel re-reads the usable addresses for this run; a stale
+		// interface choice from another network is not reused silently.
+		d.interfaceName, d.ipv4 = "", ""
 	}
 	a.invalidate()
 }
@@ -442,6 +441,11 @@ func (a *app) lanShareView(c *ui.Context) {
 				}
 				if ui.Button(c, "重试恢复").FontSize(11).Disabled(d.busy).Clicked() {
 					a.retryLANShare()
+				}
+				if view.FailureCode == "persist" && !view.Enabled {
+					if ui.Button(c, "重试保存关闭状态").FontSize(11).Disabled(d.busy).Clicked() {
+						a.retryPersistLANShareDisable()
+					}
 				}
 				if d.confirmClose {
 					if ui.PrimaryButton(c, "确认关闭共享").FontSize(11).Background(t.Danger).
@@ -734,6 +738,26 @@ func (a *app) retryLANShare() {
 	go func() {
 		err := a.lanShare.Retry(context.Background())
 		a.postLANShareResult(lanShareResult{action: "retry", err: err})
+	}()
+	a.invalidate()
+}
+
+// retryPersistLANShareDisable re-attempts saving Enabled=false after a failed
+// disable, and only then removes the recovery identity.
+func (a *app) retryPersistLANShareDisable() {
+	d := &a.lanShareUI
+	if a.lanShare == nil {
+		return
+	}
+	d.busy, d.busyAction = true, "retry-persist"
+	d.err, d.notice = "", ""
+	go func() {
+		err := a.lanShare.RetryPersistDisable()
+		notice := ""
+		if err == nil {
+			notice = "关闭状态已保存，下次启动不会恢复。"
+		}
+		a.postLANShareResult(lanShareResult{action: "retry-persist", err: err, notice: notice})
 	}()
 	a.invalidate()
 }

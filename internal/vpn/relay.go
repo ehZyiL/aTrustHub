@@ -160,8 +160,9 @@ type relaySession struct {
 	once   sync.Once
 	closed atomic.Bool
 
-	seq     atomic.Uint64
-	updates chan SessionUpdate
+	seq         atomic.Uint64
+	updates     chan SessionUpdate
+	updatesOnce sync.Once
 }
 
 var (
@@ -237,8 +238,10 @@ func (s *relaySession) Close() error {
 	_ = s.client.Revoke(ctx, s.token)
 	cancel()
 	s.client.Close()
-	close(s.updates)
+	// Stop the heartbeat before closing the update stream: a send racing with
+	// close() would panic. Closing after the wait means there is no sender left.
 	s.wg.Wait()
+	s.closeUpdates()
 	s.finish(nil)
 	return nil
 }
@@ -386,6 +389,11 @@ func (s *relaySession) fail(err error) {
 	}
 	s.cancel()
 	s.client.Close()
+}
+
+// closeUpdates closes the update stream exactly once, whoever gets there first.
+func (s *relaySession) closeUpdates() {
+	s.updatesOnce.Do(func() { close(s.updates) })
 }
 
 // RelayReconnectable reports whether err allows the Manager's bounded reconnect

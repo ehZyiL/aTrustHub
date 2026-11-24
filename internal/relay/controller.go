@@ -521,11 +521,10 @@ func (c *Controller) reconcileTick() {
 		c.mu.Unlock()
 		return
 	}
+	// The transition stays atomic with the attempt: an outside observer never
+	// sees Starting for an attempt that is not actually being made.
 	c.opID++
 	c.state = StateStarting
-	c.mu.Unlock()
-
-	c.mu.Lock()
 	err := c.reconcileLocked(context.Background(), false)
 	c.mu.Unlock()
 	if err != nil {

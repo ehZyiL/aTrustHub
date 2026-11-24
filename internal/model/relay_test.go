@@ -120,6 +120,24 @@ func TestRelayLANShareDefaultsOff(t *testing.T) {
 	}
 }
 
+// TestNormalizeKeepsAnExplicitShareIntent guards the zero-value shortcut: a
+// Settings whose only field is the share intent must not be replaced wholesale by
+// defaults, which would silently switch an enabled share off.
+func TestNormalizeKeepsAnExplicitShareIntent(t *testing.T) {
+	var s Settings
+	s.LANShare = LANShareSettings{
+		Enabled: true, PointID: "a1", PreferredIPv4: "192.168.1.50",
+		BoundPort: 23456, ShareID: relayShareID(), CertificateSHA256: strings.Repeat("ab", 32),
+	}
+	s.Normalize()
+	if !s.LANShare.Enabled || s.LANShare.BoundPort != 23456 || s.LANShare.ShareID == "" {
+		t.Fatalf("an explicit share intent was normalised away: %+v", s.LANShare)
+	}
+	if s.ListenHost == "" {
+		t.Fatal("normalising a share-only settings left the other defaults empty")
+	}
+}
+
 func TestRelayCloneDeepCopiesMetadata(t *testing.T) {
 	cfg := Config{Points: []AccessPoint{relayPoint()}}
 	clone := cfg.Clone()

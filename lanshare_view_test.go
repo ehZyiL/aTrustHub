@@ -563,3 +563,33 @@ func TestLoadRelayKnownProtectsAcrossRestart(t *testing.T) {
 		t.Fatal("a missing cache after initialisation did not enable the gate")
 	}
 }
+
+// TestLANSharePanelAtMinimumWindow keeps the panel usable at the app's minimum
+// window size: the actions must still be rendered, not clipped out of the tree.
+func TestLANSharePanelAtMinimumWindow(t *testing.T) {
+	a := testApp(t)
+	withLANShare(t, a)
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Add(model.AccessPoint{Name: "公司 VPN", Protocol: model.ProtocolATrust, Server: "vpn.example.com", Port: 443, Username: "u", InPool: true})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.setConfig(a.store.Config())
+	a.mgr.Apply(a.cfg)
+	a.openLANShare()
+	tt := ui.NewTester(a.view, 720, 520)
+	texts := strings.Join(tt.Texts(), "|")
+	for _, want := range []string{"局域网分享", "共享接入点", "开启共享"} {
+		if !strings.Contains(texts, want) {
+			t.Errorf("panel at 720x520 lacks %q; texts = %s", want, texts)
+		}
+	}
+	// The import panel must also fit.
+	a.lanShareUI.open = false
+	a.openRelayImport()
+	tt2 := ui.NewTester(a.view, 720, 520)
+	if texts := strings.Join(tt2.Texts(), "|"); !strings.Contains(texts, "添加并连接") {
+		t.Errorf("import panel at 720x520 lacks its action; texts = %s", texts)
+	}
+}

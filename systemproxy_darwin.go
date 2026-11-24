@@ -367,12 +367,24 @@ func restoreSystemProxyAfterDeath(dir string) {
 		}
 	}
 
-	// 优先尝试直接以当前权限关闭
-	cmd := exec.Command("/bin/sh", "-c", b.String())
-	if err := cmd.Run(); err != nil {
-		// 需提权时通过 osascript 弹窗执行
-		script := fmt.Sprintf(`do shell script "%s" with administrator privileges`, strings.ReplaceAll(b.String(), `"`, `\"`))
-		_ = exec.Command("osascript", "-e", script).Run()
+	// 写入临时脚本，避免多行命令直接传入 osascript 时因换行符引发 AppleScript 语法解析错误
+	tmp, err := os.CreateTemp("", "atrust-proxy-restore-*.sh")
+	if err == nil {
+		path := tmp.Name()
+		defer os.Remove(path)
+		_, _ = tmp.WriteString(b.String())
+		_ = tmp.Close()
+		_ = os.Chmod(path, 0o700)
+
+		// 优先尝试直接以当前权限运行
+		if err := exec.Command("/bin/sh", path).Run(); err != nil {
+			// 需提权时通过 osascript 弹窗执行该临时脚本
+			script := fmt.Sprintf(`do shell script "/bin/sh %s" with administrator privileges`, path)
+			_ = exec.Command("osascript", "-e", script).Run()
+		}
+	} else {
+		// 临时文件创建失败时的兜底
+		_ = exec.Command("/bin/sh", "-c", b.String()).Run()
 	}
 
 	_ = os.Remove(journalFile)

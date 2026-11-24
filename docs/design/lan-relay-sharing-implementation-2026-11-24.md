@@ -549,7 +549,7 @@ go test -race ./internal/vpn -run 'Relay|Headless|Seed'  通过
 
 - **没有任何跨机实机验收**：Windows↔Windows、Windows↔macOS、Linux↔Windows/macOS 的实际发行包互联未执行；交叉编译不等于运行验证。
 - **§13 的全部数值都是首版默认值**：TLS 5 秒、控制 3 秒、拨号 5 秒、心跳 5 秒 / 租约 15 秒、客户端 10、连接 256/64、认证限速、证书 365 天，均为待实测校准的初值，没有做过性能或规模验收。
-- **防火墙**：只有 Windows 侧写了最小规则工具与恢复 journal，**未在 Windows 实机执行过**；macOS/Linux 仅提供指引。
+- **防火墙**：Windows 侧已接线到「允许局域网连接」按钮（先写恢复 journal、再创建、再读回，失败保留待处理记录），但**未在 Windows 实机执行过**，也未验证提权取消与崩溃清理；macOS/Linux 只显示指引，没有任何自动操作。
 - **系统代理**：本次没有改动 `systemproxy_*` 的平台实现。B 端仍按既有平台能力工作（Windows 写 WinINET、macOS 读写各服务、Linux 不支持），没有新增「一键就绪」承诺。
 - **工具覆盖**：浏览器、Git HTTPS、显式代理 curl、SSH/数据库等具体工具未逐个验证。
 - **DNS**：内网 DNS 只做「转发到绑定会话」的实现与单测；没有接管 B 的全局 DNS，也不解决应用提前解析/DoH。
@@ -558,7 +558,19 @@ go test -race ./internal/vpn -run 'Relay|Headless|Seed'  通过
 - **剪贴板自动识别**：`RelayClipboardDetection` 字段与默认关闭语义已落在模型与 `Settings.Normalize` 中；读剪贴板的回调没有接线（默认关闭，未开启时不读取，因此没有「未选择却读取」的风险），提示 UI 也未实现。
 - **A 侧资源变化的保守策略**：资源变化会提升代次并关闭该分享的全部业务连接（首版如此），没有做「只断受影响连接」的优化。
 
-### 16.4 待处理问题（按优先级）
+### 16.4 Windows 防火墙入口的实现状态
+
+`lanshare_firewall_windows.go` 在分享运行时的面板里提供「允许局域网连接」：
+
+1. 先用 `relay.FirewallJournal.Add` 写恢复记录（`Pending=true`）；
+2. 用 `netsh advfirewall firewall add rule` 创建**一条**规则：本程序绝对路径、当前 TCP 端口、`profile=private`、`remoteip=<所选地址的 /24>`；
+3. 用 `netsh ... show rule` 读回，确认存在后才 `Confirm`；
+4. 失败或用户取消授权：保留 pending 记录并把错误显示在面板上，不声称已放行；
+5. 关闭共享成功后调用 `cleanupLanShareFirewall(0)` 只删除记录里属于本程序的规则。
+
+`GOOS=windows go test -c` 通过只说明它能编译，**不代表已实机验证**。
+
+### 16.5 待处理问题（按优先级）
 
 1. **实机矩阵**：先做 Linux↔Linux 与 Linux↔Windows 的最小链接（一条浏览器 + 一条 curl），再补 macOS。
 2. **Windows 防火墙实机**：验证提权、读回、拒绝授权、崩溃后 journal 清理；未验证前 UI 不应把它写成「已放行」。
@@ -568,7 +580,7 @@ go test -race ./internal/vpn -run 'Relay|Headless|Seed'  通过
 6. **更换口令**：需要明确「撤销 + 重建身份 + 重新分发」的交互与失败回滚。
 7. **规模校准**：5–10 客户端下的 CPU/内存/句柄与长连接表现，反过来校准 §13 的默认值。
 
-### 16.5 与文档的已知偏差（有意、且更保守）
+### 16.6 与文档的已知偏差（有意、且更保守）
 
 - **首次开启时 VPN 未连接**：实现选择「保存启用意图 → Waiting」，而不是文档 §5.1 的「首次开启失败 → Off」。理由是产品要求「重启时所选 VPN 未连接显示等待」；如果在首次开启时反而判为失败，用户会看到两套语义。硬失败（无局域网地址、端口占用、无法保存身份/配置）仍然回滚为 Off。
 - **`10.9.9.9` 这类「分享完全不知道」的目标**：B 端按普通公网直连（符合「普通公网走自身网络」）；「A 不转发未知目标」由 A 的严格出口保证，二者并不矛盾。属于分享范围但未授权的端口会被拒绝而不是直连。

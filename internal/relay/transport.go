@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
-	"errors"
-	"io"
 	"net"
 	"net/http"
 	"time"
@@ -88,12 +86,4 @@ func CloseWrite(conn net.Conn) error {
 		return cw.CloseWrite()
 	}
 	return nil
-}
-
-// ignoreEOF turns a clean EOF into a nil error for relay loops.
-func ignoreEOF(err error) error {
-	if errors.Is(err, io.EOF) {
-		return nil
-	}
-	return err
 }

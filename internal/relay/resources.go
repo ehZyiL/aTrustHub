@@ -4,11 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"net"
 	"net/netip"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -364,32 +361,4 @@ func (s *ResourceSnapshot) Revision(caps Capabilities) string {
 	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
-}
-
-// HostPort formats an authorized target the same way everywhere, so logs and
-// errors line up.
-func HostPort(host string, port int) string { return net.JoinHostPort(host, strconv.Itoa(port)) }
-
-// SortedTargets is a diagnostic helper: it lists the first few rules of a
-// snapshot without exposing anything secret.
-func (s *ResourceSnapshot) SortedTargets(limit int) []string {
-	if s == nil || limit <= 0 {
-		return nil
-	}
-	clone := s.Clone()
-	clone.Normalize()
-	out := make([]string, 0, limit)
-	for _, r := range clone.IPRules {
-		if len(out) >= limit {
-			return out
-		}
-		out = append(out, fmt.Sprintf("%s-%s %d-%d/%s", r.Min, r.Max, r.PortMin, r.PortMax, r.Protocol))
-	}
-	for _, r := range clone.DomainRules {
-		if len(out) >= limit {
-			return out
-		}
-		out = append(out, fmt.Sprintf("%s %d-%d/%s", r.Domain, r.PortMin, r.PortMax, r.Protocol))
-	}
-	return out
 }

@@ -583,6 +583,7 @@ func (a *app) lanShareManageBody(c *ui.Context, d *lanShareDraft, view relay.Vie
 					FontSize(11).TextColor(t.TextMuted).Wrap()
 			}
 		})
+		a.lanShareFirewallView(c, view)
 		ui.Row(c).Gap(8).Children(func() {
 			if ui.Button(c, "连接诊断").Label("分享状态检查").FontSize(11).Clicked() {
 				a.openLANShareDiagnose()
@@ -715,6 +716,8 @@ func (a *app) disableLANShare() {
 		notice := ""
 		if err == nil {
 			notice = "共享已关闭，下次启动不再恢复。"
+			// The rule only exists for the share port; it goes with the share.
+			a.cleanupLanShareFirewall(0)
 		}
 		a.postLANShareResult(lanShareResult{action: "disable", err: err, notice: notice})
 	}()

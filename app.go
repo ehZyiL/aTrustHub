@@ -56,6 +56,11 @@ type app struct {
 	relayImport   relayImportDraft
 	relayDiagnose relayDiagnoseDraft
 	relayPoint    relayPointDraft
+	// firewallBusy / firewallNotice / firewallErr are the Windows firewall action
+	// state; the fields exist on every platform so the panel code is portable.
+	firewallBusy   bool
+	firewallNotice string
+	firewallErr    string
 	// cfg is what the UI thread reads and writes. Background loops must use
 	// configForBackground: a whole-struct reassignment while another goroutine
 	// reads a field is a data race, and Settings/Points/LocalApps are big enough

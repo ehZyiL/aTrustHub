@@ -372,3 +372,35 @@ func TestWireRoundTripsALongChineseName(t *testing.T) {
 		t.Fatalf("名称往返后变了：%q", fields.Name)
 	}
 }
+
+func TestAnnouncementRejectsUnusableValues(t *testing.T) {
+	base := testAnnouncement(1, "共享")
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Announcement)
+	}{
+		{"没有代次", func(a *Announcement) { a.Generation = 0 }},
+		{"坏 sid", func(a *Announcement) { a.ShareID = "short" }},
+		{"没有名称", func(a *Announcement) { a.Name = "" }},
+		{"坏名称", func(a *Announcement) { a.Name = "带\n换行" }},
+		{"端口 0", func(a *Announcement) { a.Port = 0 }},
+		{"端口 5353", func(a *Announcement) { a.Port = 5353 }},
+		{"地址与网卡不一致", func(a *Announcement) { a.Address = "192.168.31.99" }},
+		{"公网网卡地址", func(a *Announcement) {
+			a.Interface.IPv4 = "8.8.8.8"
+			a.Address = "8.8.8.8"
+		}},
+		{"没有网卡名", func(a *Announcement) { a.Interface.Name = "" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ann := base
+			tc.mutate(&ann)
+			if err := ann.Validate(); err == nil {
+				t.Fatal("不可用的公告应当被拒绝")
+			}
+		})
+	}
+	if err := base.Validate(); err != nil {
+		t.Fatalf("合法公告被拒绝：%v", err)
+	}
+}

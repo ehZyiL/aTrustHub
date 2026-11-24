@@ -118,6 +118,11 @@ func (a Announcement) Validate() error {
 	if a.Port < 1 || a.Port > 65535 {
 		return errors.New("分享端口不合法")
 	}
+	if a.Port == 5353 {
+		// 5353 is multicast DNS itself; advertising it as the share port would
+		// point colleagues at the discovery socket.
+		return errors.New("分享端口不能是发现端口")
+	}
 	return nil
 }
 

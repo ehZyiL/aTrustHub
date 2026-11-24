@@ -263,11 +263,11 @@ func parseManifest(raw, url string) (*updateInfo, error) {
 
 // versionGreater reports whether a is a newer release than b.
 // It complies with semantic versioning:
-// 1. Strips leading "v" if present.
-// 2. Compares major.minor.patch numeric parts. Missing parts count as 0.
-// 3. If numeric parts are equal, a release without prerelease suffix is strictly
-//    newer than one with a prerelease suffix (e.g. "0.1.0" > "0.1.0-dev.11").
-// 4. If both have prerelease suffixes, compare them.
+//  1. Strips leading "v" if present.
+//  2. Compares major.minor.patch numeric parts. Missing parts count as 0.
+//  3. If numeric parts are equal, a release without prerelease suffix is strictly
+//     newer than one with a prerelease suffix (e.g. "0.1.0" > "0.1.0-dev.11").
+//  4. If both have prerelease suffixes, compare them.
 func versionGreater(a, b string) bool {
 	va, preA := splitPrerelease(strings.TrimPrefix(strings.TrimSpace(a), "v"))
 	vb, preB := splitPrerelease(strings.TrimPrefix(strings.TrimSpace(b), "v"))

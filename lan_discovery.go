@@ -39,8 +39,11 @@ type lanDiscovery struct {
 	mu         sync.Mutex
 	suppressed bool
 	shutDown   bool
-	pending    *discovery.Snapshot
-	lastErr    string
+	// frameWanted is the background-readable copy of "the open page is still
+	// searching", so the coordinator never touches UI-thread fields.
+	frameWanted bool
+	pending     *discovery.Snapshot
+	lastErr     string
 
 	// ui is UI-thread only.
 	ui lanDiscoveryUI
@@ -330,6 +333,9 @@ func (a *app) closeLANDiscovery() {
 	d.ui.open = false
 	d.ui.searching = false
 	d.ui.cands = nil
+	d.mu.Lock()
+	d.frameWanted = false
+	d.mu.Unlock()
 	_ = d.browser.Close()
 }
 
@@ -346,6 +352,9 @@ func (a *app) startLANDiscoveryBrowsing() {
 	d.ui.snap = discovery.Snapshot{}
 	d.ui.searching = true
 	d.ui.startedAt = time.Now()
+	d.mu.Lock()
+	d.frameWanted = true
+	d.mu.Unlock()
 	if err := d.browser.Start(ifaces); err != nil {
 		d.ui.err = err.Error()
 	}
@@ -402,6 +411,9 @@ func (a *app) drainLANDiscovery() {
 		window = 5 * time.Second
 	}
 	d.ui.searching = len(d.ui.cands) == 0 && time.Since(d.ui.startedAt) < window
+	d.mu.Lock()
+	d.frameWanted = d.ui.searching
+	d.mu.Unlock()
 }
 
 // ---- host panel ----------------------------------------------------------
@@ -749,5 +761,7 @@ func (a *app) lanDiscoveryNeedsFrame() bool {
 	if d == nil {
 		return false
 	}
-	return d.ui.open && d.ui.searching
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.frameWanted
 }

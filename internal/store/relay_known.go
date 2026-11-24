@@ -210,11 +210,18 @@ func (s *Store) ClearRelayKnownIncomplete(pointID string) error {
 	s.relayKnown.Lock()
 	defer s.relayKnown.Unlock()
 	known, err := s.loadRelayKnown(pointID)
-	if err != nil {
-		return err
-	}
-	if known == nil || !known.Incomplete {
-		return nil
+	if err != nil || known == nil {
+		// The user accepts that the lost history is unrecoverable, so the decision
+		// has to persist even when the file is unreadable: it is replaced by an
+		// empty, complete history that later snapshots extend.
+		if !errors.Is(err, ErrRelayKnownCorrupt) && !s.relayHistoryInitialized(pointID) {
+			return err
+		}
+		known = &RelayKnown{
+			Schema:    RelayKnownSchema,
+			PointID:   pointID,
+			Resources: &workeripc.ResourceSnapshot{Tunnel: "ipv4-l3"},
+		}
 	}
 	known.Incomplete = false
 	known.SavedAt = time.Now().Unix()
@@ -222,7 +229,11 @@ func (s *Store) ClearRelayKnownIncomplete(pointID string) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Join(s.dir, "relay-known", safePointFile(pointID)+".json"), append(data, '\n'), 0o600)
+	dir := filepath.Join(s.dir, "relay-known")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return writeFileAtomic(filepath.Join(dir, safePointFile(pointID)+".json"), append(data, '\n'), 0o600)
 }
 
 // checkRelaySource refuses a snapshot that does not belong to the stored node.

@@ -477,3 +477,45 @@ func TestRelayKnownMissingAfterInitialisationIsIncomplete(t *testing.T) {
 		t.Fatal("a lost cache was treated as a first snapshot")
 	}
 }
+
+// The explicit release must also persist when the cache is unreadable, otherwise
+// the user could never get out of the protected state.
+func TestClearRelayKnownIncompleteWorksOnACorruptCache(t *testing.T) {
+	st := relayTestStore(t)
+	point := relayTestPoint()
+	if _, err := st.Update(func(cfg *model.Config) error { cfg.Add(point); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(st.RelayKnownPath(point.ID)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(st.RelayKnownPath(point.ID), []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ClearRelayKnownIncomplete(point.ID); err != nil {
+		t.Fatalf("clearing a corrupt cache failed: %v", err)
+	}
+	known, err := st.LoadRelayKnown(point.ID)
+	if err != nil {
+		t.Fatalf("the released cache is still unreadable: %v", err)
+	}
+	if known == nil || known.Incomplete {
+		t.Fatalf("the release did not persist: %+v", known)
+	}
+	// A later verified snapshot extends the empty history instead of marking it
+	// incomplete again.
+	src := RelaySource{ShareID: point.Relay.ShareID, Fingerprint: point.Relay.CertificateSHA256}
+	write, err := st.SaveRelayKnown(point.ID, src, &workeripc.ResourceSnapshot{
+		Tunnel:  "ipv4-l3",
+		IPRules: []workeripc.IPRule{{Min: "10.5.0.0", Max: "10.5.255.255", PortMin: 443, PortMax: 443, Protocol: "tcp"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if write.Incomplete {
+		t.Fatal("the release was undone by the next snapshot")
+	}
+}

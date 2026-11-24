@@ -699,3 +699,42 @@ connector 终止路径、R2 门控重算与容量、S2 路径与 JSON、S3 生�
   崩溃后 journal 恢复、`--firewall-op` 分支端到端。
 - **跨机**：Linux↔Linux / Linux↔Windows 的最小联调与 macOS。
 - **规模**：5–10 客户端压测与 §13 数值校准。
+
+## 18. 第二轮复审 6 项问题的修复
+
+第二轮审查（基线 `f8dd2f7` 之前的 HEAD）在 §17 的修复之上又发现 6 项问题：
+Standards 4 项（BOM 解析、`fwSeen` 竞态、暂停后的迟到创建、退出未等待清理）与
+Spec 2 项（损坏历史被当前快照"修复"、迟到 DNS 答复与在途拨号未随代次失效）。
+逐项修复如下，每一项都有一个「去掉修复即失败」的回归。
+
+### 18.1 逐项修复
+
+| 编号 | 问题 | 修复 | 回归（去掉修复即失败） |
+| --- | --- | --- | --- |
+| N1 [P1] | 助手用 `Set-Content -Encoding UTF8` 写结果；Windows PowerShell 5.1 会写 BOM，Go 端严格解析 → 规则明明建好却报「结果无法解析」 | 脚本改为 `[System.IO.File]::WriteAllText(..., UTF8Encoding($false))`；解码抽成可移植的 `ParseFirewallScriptAnswer`，容忍 UTF-8 BOM、行尾 CRLF、尾部 NUL，UTF-16 明确报错 | `TestParseFirewallScriptAnswerToleratesBOM`、`TestFirewallScriptWritesBomlessUTF8` |
+| N2 [P1] | `fwSeen` 由关闭共享的后台 goroutine 写、渲染路径读，无同步 | 状态自带互斥量，只暴露「比较并更新」的 `changed(view)`；测试与生产走同一条路径 | `TestFirewallSeenStateIsRaceFree`（`-race` 下 4 条 DATA RACE） |
+| N3 [P2] | 共享暂停（源断开/VPN 离线）时只清理已有规则，仍在等授权弹窗的创建被忽略；用户随后批准 → 规则被写成 confirmed | `Reconcile` 把不再需要的未完成操作标记为取消；`Apply` 见到取消即删除迟到成功；面板在弹窗返回后再次对账 | `TestReconcileCancelsPendingCreationWhenTheShareStops` |
+| N4 [P2] | 退出只派发清理 goroutine 就继续退出，规则可能残留 | `shutdownLANShare` 等待在途清理，上限 `FirewallShutdownBudget`（5s）；超时保留 journal 供下次启动处理，绝不阻塞退出 | `TestQuitWaitsForFirewallCleanup` |
+| N5 [P1] | 缓存损坏后被当前快照覆盖成「完整历史」：手动登录一张已撤权的 A → 空快照解除保护 → 重启后旧目标被判为直连 | `RelayKnown` 增加粘性的 `Incomplete`：损坏或（节点已初始化但）缓存缺失时置位，后续快照不会清除；加载时保持自动连接阻断与全局保护；只有用户在节点面板「解除历史保护…」并经确认（含损坏缓存的持久化）才清除 | `TestRelayKnownCorruptionIsPersistedAsIncomplete`、`TestRelayKnownMissingAfterInitialisationIsIncomplete`、`TestClearRelayKnownIncompleteWorksOnACorruptCache`、`TestCorruptHistoryStaysProtectedAfterARepairSnapshot` |
+| N6 [P2] | DNS 返回只校验会话是否还在，未复核 revision → 撤回域名后旧答复仍被采用；在途拨号也不随代次取消 | DNS 答复交付前复核当前 revision（不一致 → `stale_resources`）；`connEntry` 持有可取消上下文，切代关闭条目时立即中止在途拨号（返回 `stale_resources` 而非等超时） | `TestLateDNSAnswerAfterRevocationIsRefused`、`TestGenerationChangeCancelsAnInFlightDial` |
+
+### 18.2 行为变化与取舍
+
+- **N5 的语义**：`Incomplete` 一旦置位就不会被新快照清除。修复路径只有两条——恢复可信历史，或用户在确认对话框里明确接受「丢失历史里的地址今后不再视为受管目标」。这是审查要求的「持久化历史不完整状态」，代价是损坏后必须由用户做一次显式决定。
+- **N5 的解除**：即使缓存文件已损坏，解除操作也会写出一份「空但完整」的历史，使后续快照从零开始合并，避免「解除了但一重启又回来」。
+- **N6 的取消**：取消信号来自资源代次（`connEntry`），不是新增计时器；因此正常拨号不受影响，只有切代/撤销/关闭才中止。
+- **N4 的上限**：退出等待 5 秒是「尽力而为」，不是保证——UAC 弹窗无人应答时仍会超时，此时面板与下次启动会显示待清理记录。
+
+### 18.3 本次验收命令
+
+```text
+go test ./...                                   # 17 个包全绿
+go test -race ./...                             # 17 个包全绿，0 DATA RACE
+go build ./...；GOOS=windows go build ./...；GOOS=darwin go build ./...
+go vet ./...；GOOS=windows go vet ./...
+gofmt -l .                                      # 干净
+bash scripts/package-linux.sh                   # bundle 产出成功
+```
+
+仍**未**验证：N1 的 Windows 实机（PowerShell 5.1 真实 BOM 行为）、N3/N4 的实机 UAC 交互。
+这两项与 §17.5 列出的实机项目一起，必须在有 Windows 主机的环境里补做。

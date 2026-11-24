@@ -542,6 +542,7 @@ go test -race ./internal/relay ./internal/vpn ./internal/store
 - **UI 文案与流程**：`TestLANShareWording`、`TestOpeningSharePanelDoesNotListen`、`TestRelayImportPreviewIsLocalAndAddsDisabledAutoconnect`、`TestRelayImportRejectsDuplicates`、`TestRelayImportRollsBackOnSaveFailure`、`TestRelayImportRejectsBrokenCodes`、`TestRelayNodeNeverOpensVPNEditor`、`TestDeletingRelayNodeDropsCache`。
 - **恢复策略边界**：`TestBlockedNeedsExplicitRetry` 证明 Blocked 不会被 2 秒巡检偷偷拉起，只能由「重试恢复」推进；`TestRestoreBindConflictIsBlocked` 证明端口冲突在恢复路径是 Blocked 而不是静默换端口。
 - **B 端重启保护**：`TestLoadRelayKnownProtectsAcrossRestart` 在同一个数据目录上重开 store/manager，证明缓存会把托管目标判为「不可直连」，而缓存缺失（标记仍在）会把门控打开，并把该节点移出自动登录集合（手动登录仍是修复路径）；`TestBlockedRelayNodeSkipsAutoConnect` 证明被暂停的节点不会随启动自动连接、但可手动登录。
+- **应用层装配（不是只有控制器）**：`TestAppShareSurvivesRestartThroughAppWiring` 直接调用生产接线函数 `setupLANShare` / `loadRelayKnown` / `resumeLANShare` / `shutdownLANShare`，在同一数据目录与同一凭据库上重开 app：开启 → 退出 → 重启恢复同一分享口令 → 再次重启仍恢复 → `关闭共享` → 重启保持 Off 且无口令。
 - **真实 Store 适配器**：`TestLANShareSurvivesRestartThroughRealStore` 用 `store.RelayShareStore` + 真实监听完成 开启 → 关闭应用 → 重开 → 恢复同一身份/地址/端口 → 客户端可建立隧道 → 关闭共享 → 重启保持关闭；`TestLANShareRestoreWaitsWithoutVPNThroughRealStore` 覆盖同一适配器下的 Waiting → 就绪恢复。`TestRelayShareSettingsDoNotLeakSecretsIntoConfig` 证明口令不写进 config.json。
 - **DNS 不是开放解析器**：`TestRelayShareSourceDNSIsScoped` 证明只解析该接入点声明的域名/静态记录，公网名字被 `dns_unauthorized` 拒绝且**没有到达 VPN 会话**；传输区、多问题、非查询报文在进入会话前就被拒绝。服务端的 `TestDNSRequestBinding` 证明 `/v1/dns-query` 用裸 `application/dns-message` 请求体、epoch/revision 走协议头，过期代次/版本被拒，且分享 token 不能用于该客户端端点。
 - **诊断**：正确 pin 全链路通过；错误 pin 停在身份阶段；端口拒绝不被写成防火墙结论；越权目标给出确定结论。
@@ -569,6 +570,7 @@ go test -race ./internal/vpn -run 'Relay|Headless|Seed'  通过
 - **系统代理**：本次没有改动 `systemproxy_*` 的平台实现。B 端仍按既有平台能力工作（Windows 写 WinINET、macOS 读写各服务、Linux 不支持），没有新增「一键就绪」承诺。
 - **工具覆盖**：浏览器、Git HTTPS、显式代理 curl、SSH/数据库等具体工具未逐个验证。
 - **DNS**：内网 DNS 只做「转发到绑定会话」的实现与单测；没有接管 B 的全局 DNS，也不解决应用提前解析/DoH。
+- **非 RFC1918 局域网不支持**：按 §4 的口令约束，只有 10/8、172.16/12、192.168/16 的地址能作为分享监听与口令主机。运营商 CGNAT（100.64/10）、公网地址、IPv6、链路本地与 AP 隔离网络都不在首版范围内；`lanAddresses` 也只枚举 RFC1918 地址，因此这类网络里面板会显示「没有可用的局域网地址」。
 - **二维码**：口令文本是唯一载荷；面板未内嵌二维码渲染（复制口令已可用），因此「显示二维码」不在已实现范围内。
 - **客户端逐人踢出、更换口令按钮**：「更换口令并断开现有连接」按钮目前是禁用的占位（禁用是为了不提供未验证的入口），首版关闭再开启即可换身份。
 - **「取消首次开启」没有独立按钮**：`Enable` 是同步完成（生成身份 → 绑定 → 落盘）后才返回，面板在 busy 期间禁用开启按钮；`Controller.CancelEnable` 仍是可用 API，但正常交互里没有可取消的长时间窗口。

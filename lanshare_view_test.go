@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -661,4 +663,218 @@ func TestRelayProtocolLabel(t *testing.T) {
 	if got := protocolLabel(model.ProtocolEasyConnect); got != "EasyConnect" {
 		t.Fatalf("protocolLabel(easyconnect) = %q", got)
 	}
+}
+
+// ---- app-level share wiring ------------------------------------------------
+
+// appTestSource is a Source that authorizes one range and dials a local echo
+// endpoint, so the app-level wiring can be exercised without a VPN.
+type appTestSource struct {
+	echo   string
+	done   chan struct{}
+	closed sync.Once
+	snap   relay.SourceSnapshot
+}
+
+func newAppTestSource(echo string) *appTestSource {
+	res := &relay.ResourceSnapshot{
+		IPRules: []relay.IPRule{{Min: "10.5.0.0", Max: "10.5.255.255", PortMin: 443, PortMax: 443, Protocol: "tcp"}},
+	}
+	res.Normalize()
+	caps := relay.Capabilities{StrictTCP: true}
+	return &appTestSource{
+		echo: echo,
+		done: make(chan struct{}),
+		snap: relay.SourceSnapshot{Epoch: 1, Revision: res.Revision(caps), Resources: res, Capabilities: caps},
+	}
+}
+
+func (s *appTestSource) Snapshot(context.Context) (relay.SourceSnapshot, error) {
+	return s.snap, nil
+}
+
+func (s *appTestSource) DialVPN(ctx context.Context, revision, target string) (net.Conn, error) {
+	return net.Dial("tcp", s.echo)
+}
+
+func (s *appTestSource) ExchangeDNS(context.Context, string, []byte) ([]byte, error) {
+	return nil, relay.NewError(relay.CodeProtocolUnsupported, "not supported")
+}
+
+func (s *appTestSource) Changes() <-chan struct{} { return make(chan struct{}) }
+func (s *appTestSource) Done() <-chan struct{}    { return s.done }
+func (s *appTestSource) Close() error {
+	s.closed.Do(func() { close(s.done) })
+	return nil
+}
+
+// appTestSink binds every point to a fresh source.
+type appTestSink struct {
+	mu    sync.Mutex
+	names map[string]string
+	echo  string
+}
+
+func (s *appTestSink) AcquireSource(ctx context.Context, id string) (relay.Source, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.names[id]; !ok {
+		return nil, relay.ErrPointMissing
+	}
+	return newAppTestSource(s.echo), nil
+}
+
+func (s *appTestSink) PointName(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.names[id]
+}
+
+func (s *appTestSink) PointExists(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.names[id]
+	return ok
+}
+
+func installLANShare(t *testing.T, a *app, sink relay.Sink) *relay.Controller {
+	t.Helper()
+	ctrl := relay.NewController(store.RelayShareStore{Store: a.store}, sink, emptyNets{}, nil, a.invalidate)
+	a.lanShare = ctrl
+	a.lanShareUI.results = make(chan lanShareResult, 4)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = ctrl.Shutdown(ctx)
+	})
+	return ctrl
+}
+
+// reopenAppWithSink builds a second app over the same data directory and secret
+// store, which is what an application restart is.
+func reopenAppWithSink(t *testing.T, dir string, sink relay.Sink) *app {
+	t.Helper()
+	secrets, err := store.NewFileSecrets(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(dir, secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &app{store: st, dir: dir, bus: vpn.NewLogBus(50), icon: loadAppIcon()}
+	a.cfg = st.Config()
+	a.mgr = vpn.NewManager(
+		func(context.Context, model.AccessPoint, vpn.Credentials) (vpn.Session, error) {
+			return stubSession{ip: "10.10.1.23"}, nil
+		},
+		a.credentials, a.bus, a.invalidate,
+	)
+	t.Cleanup(a.mgr.Close)
+	a.mgr.Apply(a.cfg)
+	a.loadRelayKnown()
+	installLANShare(t, a, sink)
+	return a
+}
+
+func waitAppShare(t *testing.T, a *app, want relay.State) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if a.lanShare.View().State == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("share state = %s, want %s (%+v)", a.lanShare.View().State, want, a.lanShare.View())
+}
+
+// TestAppShareSurvivesRestartThroughAppWiring exercises the exact production
+// hooks (setupLANShare/loadRelayKnown/resumeLANShare/shutdownLANShare): enable →
+// shutdown → restart → same code → shutdown again → still restored → disable →
+// restart stays off.
+func TestAppShareSurvivesRestartThroughAppWiring(t *testing.T) {
+	a := testApp(t)
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Add(model.AccessPoint{ID: "a1", Name: "公司 VPN", Protocol: model.ProtocolATrust, Server: "vpn.example.com", Port: 443, Username: "u", InPool: true})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.setConfig(a.store.Config())
+	a.mgr.Apply(a.cfg)
+	echo, closeEcho := echoListenerForTest(t)
+	defer closeEcho()
+	sink := &appTestSink{names: map[string]string{"a1": "公司 VPN"}, echo: echo}
+	ctrl := installLANShare(t, a, sink)
+
+	ctx := context.Background()
+	if err := ctrl.Enable(ctx, relay.EnableOptions{PointID: "a1", PreferredIPv4: "127.0.0.1"}); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	codeBefore, err := ctrl.ShareCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.shutdownLANShare()
+
+	b := reopenAppWithSink(t, a.store.Dir(), sink)
+	if !b.cfg.Settings.LANShare.Enabled {
+		t.Fatal("the enable intent did not survive the restart")
+	}
+	b.resumeLANShare()
+	waitAppShare(t, b, relay.StateRunning)
+	codeAfter, err := b.lanShare.ShareCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if codeAfter != codeBefore {
+		t.Fatalf("app restart changed the share code:\n%s\n%s", codeBefore, codeAfter)
+	}
+	b.shutdownLANShare()
+
+	// A share that is still enabled keeps resuming on further starts.
+	c := reopenAppWithSink(t, a.store.Dir(), sink)
+	c.resumeLANShare()
+	waitAppShare(t, c, relay.StateRunning)
+
+	// 关闭共享 then restart: off, no listener, no code.
+	if err := c.lanShare.Disable(ctx); err != nil {
+		t.Fatalf("Disable: %v", err)
+	}
+	c.shutdownLANShare()
+	d := reopenAppWithSink(t, a.store.Dir(), sink)
+	if d.cfg.Settings.LANShare.Enabled {
+		t.Fatal("the disabled state did not survive the restart")
+	}
+	d.resumeLANShare()
+	time.Sleep(150 * time.Millisecond)
+	if view := d.lanShare.View(); view.State != relay.StateOff || view.Enabled {
+		t.Fatalf("a disabled share came back: %+v", view)
+	}
+	if _, err := d.lanShare.ShareCode(); err == nil {
+		t.Fatal("a disabled share still exposes a code")
+	}
+}
+
+// echoListenerForTest runs a loopback echo endpoint for the app-level share test.
+func echoListenerForTest(t *testing.T) (string, func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				_, _ = io.Copy(c, c)
+			}(conn)
+		}
+	}()
+	return ln.Addr().String(), func() { _ = ln.Close() }
 }

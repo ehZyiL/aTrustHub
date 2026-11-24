@@ -455,6 +455,16 @@ func (a *app) lanShareDiscoveryView(c *ui.Context, view relay.View) {
 		})
 		ui.Text(c, "同一网络的其他设备可以看到该名称和连接地址；加入仍需分享口令。发现不会开启共享、VPN 或系统代理。").
 			FontSize(11).TextColor(t.TextMuted).Wrap()
+		if d.discoverySavePending {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "发现已停止，但偏好没有保存成功：重启后可能恢复。").
+					FontSize(11).TextColor(t.Warning).Wrap()
+				ui.Row(c).Grow(1)
+				if ui.Button(c, "重试保存").FontSize(11).Disabled(d.discoveryBusy).Clicked() {
+					a.retryLANDiscoverySave()
+				}
+			})
+		}
 		if status.State == discovery.StatusFailed {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "发现不可用："+status.Message+"（分享仍在运行，可以使用口令）").
@@ -502,7 +512,25 @@ func (a *app) toggleLANDiscovery(on bool) {
 		if err == nil && !on {
 			notice = "已停止被发现；分享和口令继续有效。"
 		}
-		a.postLANShareResult(lanShareResult{action: "discovery", err: err, notice: notice})
+		a.postLANShareResult(lanShareResult{
+			action: "discovery", err: err, notice: notice,
+			saveFailed: err != nil && !on,
+		})
+	}()
+	a.invalidate()
+}
+
+// retryLANDiscoverySave re-attempts the failed switch-off write.
+func (a *app) retryLANDiscoverySave() {
+	d := &a.lanShareUI
+	d.discoveryBusy = true
+	go func() {
+		err := a.retryLANDiscoveryPreference()
+		notice := ""
+		if err == nil {
+			notice = "发现偏好已保存。"
+		}
+		a.postLANShareResult(lanShareResult{action: "discovery-retry", err: err, notice: notice})
 	}()
 	a.invalidate()
 }

@@ -26,6 +26,9 @@ type lanShareResult struct {
 	action string
 	err    error
 	notice string
+	// saveFailed marks a switch-off whose preference could not be written; the
+	// panel then offers a retry instead of silently claiming success.
+	saveFailed bool
 }
 
 // lanShareDraft is the 局域网分享 panel state. It holds no credential: the share
@@ -53,7 +56,11 @@ type lanShareDraft struct {
 	// discoveryEditing opens the inline rename field of the running panel.
 	discoveryEditing bool
 	discoveryBusy    bool
-	results          chan lanShareResult
+	// discoverySavePending means the user turned discovery off but the
+	// preference could not be written; the network is already stopped and the
+	// panel offers a retry.
+	discoverySavePending bool
+	results              chan lanShareResult
 }
 
 // relaySink binds the relay controller to the app's manager and configuration.
@@ -850,10 +857,15 @@ func (a *app) drainLANShareResults() {
 		case res := <-d.results:
 			d.busy = false
 			d.busyAction = ""
-			if res.action == "discovery" || res.action == "discovery-name" {
+			if res.action == "discovery" || res.action == "discovery-name" ||
+				res.action == "discovery-retry" {
 				d.discoveryBusy = false
 				if res.err == nil {
 					d.discoveryEditing = false
+					d.discoverySavePending = false
+				}
+				if res.saveFailed {
+					d.discoverySavePending = true
 				}
 			}
 			if res.err != nil {

@@ -182,6 +182,18 @@ env GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./...
 
 真实组播用例在本机实际跑通：发布 → 发现 → goodbye → 移除，全部走真实 UDP 组播。
 
+本机实测（20 轮，接口 `enp1s0`，`TestLiveDiscoveryLatency`）：
+
+```text
+首次发现时延：min=268µs  median=463µs  p95=938µs  max=938µs
+```
+
+这是同机回环组播的数字，只说明协议与事件链路本身的开销；跨机时延还取决于无线环境与
+AP 隔离，按 §9 待实机。
+
+端到端链路（`TestLiveDiscoveryJoinEndToEnd`）：A 用生产后端发布并服务，B 用生产后端
+发现、用 A 的口令加入，B 的中继会话真实上线（真实 UDP 组播 + 真实 TLS）。
+
 ## 9. 未验证（不得当作已支持）
 
 | 项 | 现状 | 需要的证据 |
@@ -232,6 +244,8 @@ env GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./...
 | --- | --- | --- | --- | --- |
 | R3-1 [P1] | 规格 | `browseInterfaces` 只在「本机也开启过共享」时才枚举网卡，于是**从未分享过的同事端一律显示「没有可用的局域网网卡」**，发现功能对客户端完全不可用 | `TestAcceptanceBrowsingWorksWithoutSharing`；端到端用例先复现「B tab=1、err=没有可用的局域网网卡」 | 网卡列表直接取自本机地址枚举，不再依赖共享控制器 |
 | R3-2 | 证据 | 缺少「发现 → 加入 → 真实会话」的链路证据 | 新增 `TestLiveDiscoveryJoinEndToEnd`：A 用生产后端发布并监听真实端口，B 用生产后端浏览、用 A 的口令加入、B 的中继会话真实上线 | — |
+| R3-3 [P2] | 规格 | 关闭发现保存失败时只有一行错误，没有 §4 要求的「重试保存」入口 | `TestAcceptanceFailedOffSaveOffersARetry` | 面板显示「偏好没有保存成功…」并提供「重试保存」；重试成功清除提示 |
+| R3-4 [P3] | 规格 | 公告未拒绝把 5353 当作分享端口 | `TestAnnouncementRejectsUnusableValues` | 显式拒绝发现端口 |
 
 `TestLiveDiscoveryJoinEndToEnd` 覆盖的链路：
 

@@ -805,3 +805,41 @@ func TestAcceptanceBrowsingWorksWithoutSharing(t *testing.T) {
 		t.Fatal("浏览会话没有启动")
 	}
 }
+
+// Spec §4/§12 A6: when the switch-off cannot be saved, the panel must offer a
+// retry instead of claiming the preference was stored.
+func TestAcceptanceFailedOffSaveOffersARetry(t *testing.T) {
+	a, _, iface := discoveryApp(t)
+	enableShare(t, a, iface, true, "会议室")
+	a.openLANShare()
+	unblock := blockStoreSaves(t, a)
+	on := a.lanShare.View().DiscoveryEnabled
+	a.toggleLANDiscovery(!on)
+	waitCondition(t, "switch-off handled", func() bool {
+		a.drainLANShareResults()
+		return !a.lanShareUI.discoveryBusy
+	})
+	if !a.lanShareUI.discoverySavePending {
+		t.Fatalf("保存失败没有进入待重试状态：%q", a.lanShareUI.err)
+	}
+	tt := ui.NewTester(a.view, 1120, 800)
+	texts := strings.Join(tt.Texts(), "|")
+	for _, want := range []string{"偏好没有保存成功", "重试保存"} {
+		if !strings.Contains(texts, want) {
+			t.Fatalf("面板缺少 %q：%s", want, texts)
+		}
+	}
+	// The retry clears the flag and writes the preference.
+	unblock()
+	a.retryLANDiscoverySave()
+	waitCondition(t, "retry saved", func() bool {
+		a.drainLANShareResults()
+		return !a.lanShareUI.discoveryBusy
+	})
+	if a.lanShareUI.discoverySavePending {
+		t.Fatal("重试成功后仍显示待重试")
+	}
+	if got := a.store.Config().Settings.LANShare.DiscoveryEnabled; got == nil || *got {
+		t.Fatalf("重试后偏好仍不是 false：%v", got)
+	}
+}

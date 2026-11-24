@@ -300,6 +300,11 @@ func (s *relaySession) heartbeat() {
 		if status.RemainingSeconds <= 0 {
 			leaseUntil = time.Now().Add(time.Duration(status.LeaseSeconds) * time.Second)
 		}
+		// A successful heartbeat clears the unreachable budget, so one old
+		// blip cannot shorten a later failure window.
+		s.mu.Lock()
+		s.unreachableSince = time.Time{}
+		s.mu.Unlock()
 		if err := s.refresh(status); err != nil {
 			var re *relay.Error
 			if errors.As(err, &re) && re.Code.Terminal() {

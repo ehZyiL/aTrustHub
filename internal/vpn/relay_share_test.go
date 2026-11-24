@@ -295,3 +295,45 @@ func base64Raw16() string {
 	}
 	return base64.RawURLEncoding.EncodeToString(b)
 }
+
+// TestNeedsRestartRelayIdentity pins which relay changes reconnect a node: the
+// share identity yes, the history marker no.
+func TestNeedsRestartRelayIdentity(t *testing.T) {
+	base := model.AccessPoint{
+		ID: "r1", Protocol: model.ProtocolLANRelay, Server: "192.168.1.50", Port: 23456,
+		InPool: true,
+		Relay:  &model.RelayPointOptions{Version: 1, ShareID: base64Raw16(), CertificateSHA256: strings.Repeat("ab", 32)},
+	}
+	clone := func() model.AccessPoint {
+		out := base
+		relay := *base.Relay
+		out.Relay = &relay
+		return out
+	}
+	if needsRestart(base, clone()) {
+		t.Fatal("an identical relay point requested a restart")
+	}
+	marked := clone()
+	marked.Relay.HistoryInitialized = true
+	if needsRestart(base, marked) {
+		t.Fatal("the history marker must not trigger a reconnect")
+	}
+	newShare := clone()
+	newShare.Relay.ShareID = base64Raw16() + "A"
+	if !needsRestart(base, newShare) {
+		t.Fatal("a changed share ID must reconnect")
+	}
+	newPin := clone()
+	newPin.Relay.CertificateSHA256 = strings.Repeat("cd", 32)
+	if !needsRestart(base, newPin) {
+		t.Fatal("a changed certificate pin must reconnect")
+	}
+	newVersion := clone()
+	newVersion.Relay.Version = 2
+	if !needsRestart(base, newVersion) {
+		t.Fatal("a changed protocol version must reconnect")
+	}
+	if !needsRestart(base, model.AccessPoint{ID: "r1", Protocol: model.ProtocolATrust}) {
+		t.Fatal("dropping the relay metadata must reconnect")
+	}
+}

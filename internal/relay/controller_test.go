@@ -126,6 +126,16 @@ func (s *fakeSink) PointExists(id string) bool {
 	return ok
 }
 
+func (s *fakeSink) setPoint(id, name string) {
+	s.mu.Lock()
+	if name == "" {
+		delete(s.names, id)
+	} else {
+		s.names[id] = name
+	}
+	s.mu.Unlock()
+}
+
 func (s *fakeSink) setOffline(v bool) {
 	s.mu.Lock()
 	s.offline = v
@@ -572,4 +582,40 @@ func TestAddressChangeIsBlocked(t *testing.T) {
 	if !strings.Contains(view.Failure, "地址已变化") {
 		t.Fatalf("failure = %q", view.Failure)
 	}
+}
+
+// TestBlockedNeedsExplicitRetry: an automatic tick must not keep starting a share
+// whose problem needs the user (a missing point, a taken port, a changed
+// address). Only Waiting recovers by itself.
+func TestBlockedNeedsExplicitRetry(t *testing.T) {
+	p, sink, nets, c, _ := setupShare(t)
+	ctx := context.Background()
+	sink.setOffline(true)
+	if err := c.Enable(ctx, EnableOptions{PointID: "p1"}); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, c, StateWaiting)
+	// The point disappears while the share waits.
+	sink.setPoint("p1", "")
+	sink.setOffline(false)
+	c.Wake()
+	waitState(t, c, StateBlocked)
+	before := c.View().Operation
+	// Give the 2s loop two chances: it must not touch a Blocked share.
+	time.Sleep(2500 * time.Millisecond)
+	after := c.View()
+	if after.State != StateBlocked {
+		t.Fatalf("a Blocked share restarted by itself: %+v", after)
+	}
+	if after.Operation != before {
+		t.Fatalf("the reconcile loop advanced the operation of a Blocked share: %d → %d", before, after.Operation)
+	}
+	// Fixing the point plus an explicit retry works.
+	sink.setPoint("p1", "接入点 p1")
+	if err := c.Retry(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, c, StateRunning)
+	_ = nets
+	_ = p
 }

@@ -55,6 +55,7 @@ type app struct {
 	lanShareUI    lanShareDraft
 	relayImport   relayImportDraft
 	relayDiagnose relayDiagnoseDraft
+	relayPoint    relayPointDraft
 	// cfg is what the UI thread reads and writes. Background loops must use
 	// configForBackground: a whole-struct reassignment while another goroutine
 	// reads a field is a data race, and Settings/Points/LocalApps are big enough

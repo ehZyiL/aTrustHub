@@ -132,6 +132,7 @@ func (a *app) view(c *ui.Context) {
 	a.lanShareView(c)
 	a.relayImportView(c)
 	a.relayDiagnoseView(c)
+	a.relayPointView(c)
 }
 
 // qrCard was removed: WeCom's QR login now uses a WebView popup.
@@ -2463,6 +2464,13 @@ func (a *app) openEditor(v vpn.View) {
 	if p == nil {
 		return
 	}
+	// A LAN relay node has no VPN login form: showing the aTrust/EasyConnect
+	// editor would let a save silently rewrite its protocol and drop the share
+	// identity it needs to connect. It gets its own read-only panel instead.
+	if p.Protocol == model.ProtocolLANRelay {
+		a.openRelayPoint(p.ID)
+		return
+	}
 	mode := model.AuthMode(p.AuthMode)
 	if mode == model.AuthModeAuto {
 		// "自动识别" is gone from the editor: show what the old point has
@@ -2979,6 +2987,15 @@ func (a *app) settingsDirty() bool {
 }
 
 func (a *app) removePoint(id string) {
+	// Sharing a point that no longer exists would leave a Blocked share with a
+	// dangling identity, so the share is switched off first.
+	if a.lanShare != nil {
+		if settings := a.lanShare.Settings(); settings.Enabled && settings.PointID == id {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = a.lanShare.Disable(ctx)
+			cancel()
+		}
+	}
 	for _, p := range a.cfg.LocalApps {
 		if p.PointID == id {
 			a.toast = "「" + p.Name + "」仍使用此接入点，请先在本机软件中更换或删除"
@@ -2997,6 +3014,9 @@ func (a *app) removePoint(id string) {
 		return
 	}
 	_ = a.store.DeleteSecrets(id)
+	// A relay node also leaves an attribution cache behind. Removing it is part
+	// of deleting the node; the deleted point cannot protect anything.
+	_ = a.store.DeleteRelayKnown(id)
 	if a.revealPointID == id {
 		a.revealPointID = ""
 	}

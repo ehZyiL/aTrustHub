@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -973,4 +974,95 @@ func errText(err error) string {
 		return "未知原因"
 	}
 	return err.Error()
+}
+
+// relayPointDraft is the read-only detail panel of an imported node. It exists
+// so a relay node never ends up in the VPN login editor.
+type relayPointDraft struct {
+	open    bool
+	pointID string
+}
+
+func (a *app) openRelayPoint(pointID string) {
+	a.relayPoint = relayPointDraft{open: true, pointID: pointID}
+	a.invalidate()
+}
+
+func (a *app) relayPointView(c *ui.Context) {
+	d := &a.relayPoint
+	if !d.open {
+		return
+	}
+	p := a.cfg.Find(d.pointID)
+	if p == nil {
+		d.open = false
+		return
+	}
+	t := c.Theme()
+	view, _ := a.mgr.View(p.ID)
+	ui.Modal(c, &d.open, func() {
+		ui.Column(c).Width(dialogRegular).Gap(10).Children(func() {
+			dialogHeader(c, "局域网中继接入点", p.Name)
+			ui.Scroll(c).MaxHeight(a.dialogBodyMaxHeight()).MinHeight(0).
+				ScrollbarInsets(4, 2, 4, 0).Children(func() {
+				ui.Column(c).Padding(0, 14, 8, 0).Gap(8).Children(func() {
+					ui.Text(c, "本机不直接登录这个网关：连接由同事的分享主机转发，公网走本机网络。").
+						FontSize(12).TextColor(t.TextMuted).Wrap()
+					rows := [][2]string{
+						{"分享主机", net.JoinHostPort(p.Server, strconv.Itoa(p.Port))},
+						{"状态", view.State.Label()},
+						{"分享 ID", shortFingerprint(orDash(relayShareIDOf(p)))},
+						{"证书指纹", shortFingerprint(orDash(relayPinOf(p)))},
+						{"加入统一入口", boolLabel(p.InPool)},
+						{"启动时自动连接", boolLabel(p.AutoConnect)},
+					}
+					for _, row := range rows {
+						ui.Row(c).Gap(8).Children(func() {
+							ui.Text(c, row[0]).FontSize(12).TextColor(t.TextMuted).Width(120)
+							ui.Text(c, row[1]).FontSize(12).Wrap()
+						})
+					}
+					if view.Error != "" {
+						ui.Text(c, view.Error).FontSize(12).TextColor(t.Danger).Wrap()
+					}
+				})
+			})
+			dialogFooter(c, func() {
+				if ui.Button(c, "删除接入点").FontSize(11).Background(t.Danger).
+					TextColor(t.AccentText).Clicked() {
+					d.open = false
+					a.deleting = p.ID
+				}
+				ui.Row(c).Grow(1)
+				if ui.Button(c, "连接诊断").FontSize(11).Clicked() {
+					d.open = false
+					a.openRelayDiagnose(p.ID)
+				}
+				if ui.Button(c, "关闭").FontSize(11).Clicked() {
+					d.open = false
+				}
+			})
+		})
+	})
+}
+
+func relayShareIDOf(p *model.AccessPoint) string {
+	if p.Relay == nil {
+		return ""
+	}
+	return p.Relay.ShareID
+}
+
+func relayPinOf(p *model.AccessPoint) string {
+	if p.Relay == nil {
+		return ""
+	}
+	return p.Relay.CertificateSHA256
+}
+
+func boolLabel(v bool) string {
+	if v {
+		return "是"
+	}
+	return "否"
 }

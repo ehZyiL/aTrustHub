@@ -15,6 +15,7 @@ import (
 	"github.com/ehzyil/connect-hub/internal/model"
 	"github.com/ehzyil/connect-hub/internal/relay"
 	"github.com/ehzyil/connect-hub/internal/store"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 // testRelaySink is the controller's outside world inside the UI tests: one
@@ -390,5 +391,89 @@ func TestLANShareSelfDiagnoseShowsRealState(t *testing.T) {
 	}
 	if !strings.Contains(lines, "整个接入点") {
 		t.Fatalf("self-diagnose did not state the scope:\n%s", lines)
+	}
+}
+
+// TestRelayNodeNeverOpensVPNEditor: the VPN form would rewrite the protocol and
+// drop the share identity on save, so a relay node opens its own panel.
+func TestRelayNodeNeverOpensVPNEditor(t *testing.T) {
+	a := testApp(t)
+	withLANShare(t, a)
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Add(model.AccessPoint{
+			Name: "同事分享", Protocol: model.ProtocolLANRelay, Server: "192.168.1.50",
+			Port: 23456, InPool: true,
+			Relay: &model.RelayPointOptions{
+				Version: 1, ShareID: base64.RawURLEncoding.EncodeToString([]byte("aaaaaaaaaaaaaaaa")),
+				CertificateSHA256: strings.Repeat("ab", 32),
+			},
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.setConfig(a.store.Config())
+	a.mgr.Apply(a.cfg)
+	point := a.cfg.Points[0]
+	view, ok := a.mgr.View(point.ID)
+	if !ok {
+		t.Fatal("relay point missing from the manager")
+	}
+	a.openEditor(view)
+	if a.editor.open {
+		t.Fatal("a relay node opened the VPN editor")
+	}
+	if !a.relayPoint.open || a.relayPoint.pointID != point.ID {
+		t.Fatal("a relay node did not open its own panel")
+	}
+	tt := ui.NewTester(a.view, 1120, 800)
+	texts := strings.Join(tt.Texts(), "|")
+	for _, want := range []string{"局域网中继接入点", "192.168.1.50:23456", "连接诊断"} {
+		if !strings.Contains(texts, want) {
+			t.Errorf("relay panel lacks %q; texts = %s", want, texts)
+		}
+	}
+	// The panel must not offer VPN credentials.
+	for _, unwanted := range []string{"用户名", "登录域", "验证码"} {
+		if strings.Contains(texts, unwanted) {
+			t.Errorf("relay panel shows VPN login field %q", unwanted)
+		}
+	}
+}
+
+// TestDeletingRelayNodeDropsCache keeps a deleted node from leaving a protection
+// record that can never be verified again.
+func TestDeletingRelayNodeDropsCache(t *testing.T) {
+	a := testApp(t)
+	withLANShare(t, a)
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Add(model.AccessPoint{
+			Name: "同事分享", Protocol: model.ProtocolLANRelay, Server: "192.168.1.50",
+			Port: 23456, InPool: true,
+			Relay: &model.RelayPointOptions{
+				Version: 1, ShareID: base64.RawURLEncoding.EncodeToString([]byte("aaaaaaaaaaaaaaaa")),
+				CertificateSHA256: strings.Repeat("ab", 32),
+			},
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.setConfig(a.store.Config())
+	a.mgr.Apply(a.cfg)
+	point := a.cfg.Points[0]
+	if err := a.store.SaveRelayKnown(point.ID, "src", &workeripc.ResourceSnapshot{
+		Tunnel:  "ipv4-l3",
+		IPRules: []workeripc.IPRule{{Min: "10.5.0.0", Max: "10.5.0.9", PortMin: 443, PortMax: 443, Protocol: "tcp"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.removePoint(point.ID)
+	if known, err := a.store.LoadRelayKnown(point.ID); err != nil || known != nil {
+		t.Fatalf("cache survived node deletion: %+v %v", known, err)
+	}
+	a.setConfig(a.store.Config())
+	if len(a.cfg.Points) != 0 {
+		t.Fatal("node was not deleted")
 	}
 }

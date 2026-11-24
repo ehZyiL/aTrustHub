@@ -256,16 +256,14 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	c, cerr := s.clients.create(req.ClientID, sanitizeClientName(req.Name), token, now)
-	if cerr == errReauth {
+	if _, cerr := s.clients.create(req.ClientID, sanitizeClientName(req.Name), token, now); cerr == errReauth {
 		// A retry of an existing instance replaces its lease instead of
 		// counting as a second client.
-		c = s.clients.replace(req.ClientID, sanitizeClientName(req.Name), token, now)
+		s.clients.replace(req.ClientID, sanitizeClientName(req.Name), token, now)
 	} else if cerr != nil {
 		writeError(w, cerr)
 		return
 	}
-	_ = c
 	resp := SessionResponse{
 		Version:          ProtocolVersion,
 		ShareID:          s.shareID,

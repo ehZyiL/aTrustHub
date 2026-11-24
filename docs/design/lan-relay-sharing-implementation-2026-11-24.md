@@ -507,6 +507,7 @@ go test -race ./internal/relay ./internal/vpn ./internal/store
 | 3 | T05/T06/T07 | 分享服务（会话/状态/资源/DNS/撤销/CONNECT）、连接登记、租约、限流；控制器状态机（Enable/Restore/等待/Disable/Shutdown）；B 端 client 与 `relaySession`；历史归属缓存与 `relayHistoryUnverified` 门控 |
 | 4 | T08/T09 | 「局域网分享」入口与面板、状态条、托盘入口、同事分享导入；分层诊断、防火墙指引与 Windows 最小规则工具 |
 | 5 | T10 | 资源接管排除、文档同步、全量测试与竞态检查 |
+| 6 | 收尾修复 | relay 节点改用只读详情面板（避免 VPN 表单静默改写协议、丢掉分享身份）；删除节点时清理历史缓存并先关闭共享；仅 Waiting 自动重试（Blocked 需用户重试、CleanupPending 不重新监听）；心跳成功后清空不可达预算 |
 
 ### 16.2 已自动化验证的行为
 
@@ -523,7 +524,9 @@ go test -race ./internal/relay ./internal/vpn ./internal/store
 - **TLS**：正确 pin 通过；错误 pin、过期/未生效、用途错误、地址不符、缺失对端证书全部拒绝；`TestWrongPinNeverSeesTheToken` 证明指纹不匹配时对端根本没收到请求。
 - **租约与限额**：`TestClientLeaseExpiry`、`TestConcurrentConnectLimitIsBounded`、`TestSessionCreationBodyBound`。
 - **应用接管排除**：`TestRelayPointIsExcludedFromAppCapture` 与 `resourceCaptureConfigs` 的显式跳过。
-- **UI 文案与流程**：`TestLANShareWording`、`TestOpeningSharePanelDoesNotListen`、`TestRelayImportPreviewIsLocalAndAddsDisabledAutoconnect`、`TestRelayImportRejectsDuplicates`、`TestRelayImportRollsBackOnSaveFailure`、`TestRelayImportRejectsBrokenCodes`。
+- **UI 文案与流程**：`TestLANShareWording`、`TestOpeningSharePanelDoesNotListen`、`TestRelayImportPreviewIsLocalAndAddsDisabledAutoconnect`、`TestRelayImportRejectsDuplicates`、`TestRelayImportRollsBackOnSaveFailure`、`TestRelayImportRejectsBrokenCodes`、`TestRelayNodeNeverOpensVPNEditor`、`TestDeletingRelayNodeDropsCache`。
+- **恢复策略边界**：`TestBlockedNeedsExplicitRetry` 证明 Blocked 不会被 2 秒巡检偷偷拉起，只能由「重试恢复」推进；`TestRestoreBindConflictIsBlocked` 证明端口冲突在恢复路径是 Blocked 而不是静默换端口。
+- **真实 Store 适配器**：`TestLANShareSurvivesRestartThroughRealStore` 用 `store.RelayShareStore` + 真实监听完成 开启 → 关闭应用 → 重开 → 恢复同一身份/地址/端口 → 客户端可建立隧道 → 关闭共享 → 重启保持关闭；`TestLANShareRestoreWaitsWithoutVPNThroughRealStore` 覆盖同一适配器下的 Waiting → 就绪恢复。`TestRelayShareSettingsDoNotLeakSecretsIntoConfig` 证明口令不写进 config.json。
 - **诊断**：正确 pin 全链路通过；错误 pin 停在身份阶段；端口拒绝不被写成防火墙结论；越权目标给出确定结论。
 
 已执行命令与结果：

@@ -514,7 +514,10 @@ func (c *Controller) reconcileTick() {
 			return
 		}
 	}
-	if c.state != StateWaiting && c.state != StateBlocked && c.state != StateOff && c.state != StateCleanupPending {
+	// Only Waiting is retried automatically: a Blocked share needs an explicit
+	// 重试恢复 (or a fix), and CleanupPending must never start listening again
+	// before its cleanup finished.
+	if c.state != StateWaiting {
 		c.mu.Unlock()
 		return
 	}
@@ -548,9 +551,12 @@ func (c *Controller) reconcileLocked(ctx context.Context, first bool) error {
 		return errors.New(msg)
 	}
 	waiting := func(msg string) error {
+		unchanged := c.state == StateWaiting && c.failure == msg && c.failCode == ""
 		c.state = StateWaiting
 		c.failCode, c.failure = "", msg
-		c.publishLocked()
+		if !unchanged {
+			c.publishLocked()
+		}
 		return nil
 	}
 	if s.ShareID == "" || s.Fingerprint == "" {

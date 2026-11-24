@@ -649,6 +649,8 @@ go test -race ./internal/vpn -run 'Relay|Headless|Seed'  通过
 - **R5 的撤销时机**：`registry` 在锁内标记失效，锁外统一执行 `onEvict`（取消 ctx + 关闭连接），因此 `lookup/count/create/replace/remove/sweep` 任一路径都会产生同样的清理效果。
 - **R2 的失败策略**：缓存损坏时仍允许写入新的已验证快照（否则连当前历史也会丢），但损坏文件保留为证据，并继续让保护门生效。
 - **S2 的提权模型**：没有新增二进制，复用已在打包清单里的 `connect-hub-capture.exe`；新增的 `--firewall-op` 分支要求自身已提权、父进程身份匹配、参数通过 JSON 文件传递，PowerShell 只把值作为 cmdlet 参数使用。
+- **查询不提权**：读取防火墙规则不需要管理员权限，因此 `query` 走进程内 PowerShell（`CREATE_NO_WINDOW`），
+  只有 `apply`/`delete` 才启动提权助手。否则每次启动做遗留核对都会弹一次 UAC，这与「启动自动恢复」直接冲突。
 - **S3 的清理时机**：正常退出删除规则但保留 `Enabled`（下次启动恢复同一身份）；`关闭共享` 撤销身份并删除规则；两者都由同一 `Reconcile` 驱动。
 - **S3 的执行线程**：删除规则同样是特权操作（可能弹 UAC），因此对账在后台单飞执行（`fwRunning`/`fwAgain`
   合并重复请求），渲染路径只做「状态是否变化」的比较，绝不在 UI 线程等授权。窗口已销毁时不再回写 UI 字段，

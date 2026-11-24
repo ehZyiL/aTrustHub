@@ -54,10 +54,17 @@ func NewElevatedFirewall() FirewallExecutor {
 	return &ElevatedFirewall{resultTimeout: FirewallOpBudget}
 }
 
-// Run launches the helper for one operation and waits for its structured answer.
+// Run performs one firewall operation.
+//
+// Reading the rule set needs no privilege, so a query runs in-process: that is
+// what startup verification uses, and it must never pop a UAC prompt. Creating
+// and deleting a rule are privileged, so those go through the elevated helper.
 func (e *ElevatedFirewall) Run(ctx context.Context, op FirewallOperation) (FirewallResult, error) {
 	if err := op.Validate(); err != nil {
 		return FirewallResult{Outcome: FirewallFailed, Detail: err.Error()}, err
+	}
+	if op.Op == FirewallOpQuery {
+		return executeFirewallOperation(op), nil
 	}
 	helper, err := e.helperPath()
 	if err != nil {
@@ -409,6 +416,9 @@ func executeFirewallOperation(op FirewallOperation) FirewallResult {
 		return result
 	}
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", psFirewallScript)
+	// A GUI process has no console: keep the helper invisible instead of letting
+	// Windows allocate one.
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	cmd.Env = append(os.Environ(),
 		"CONNECT_HUB_FW_OP="+opPath,
 		"CONNECT_HUB_FW_OUT="+outPath)

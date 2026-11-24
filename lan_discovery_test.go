@@ -909,3 +909,52 @@ func openFDs(t *testing.T) int {
 	}
 	return len(entries)
 }
+
+// Review round 5: the discovery page renders per frame, so it must not enumerate
+// interfaces per frame, and the browsing set must carry the interface subnet so
+// reflected announcements can be dropped.
+func TestAcceptanceBrowsingSetIsCachedAndCarriesTheSubnet(t *testing.T) {
+	a, _, _ := discoveryApp(t)
+	ifaces := a.browseInterfaces("")
+	if len(ifaces) == 0 {
+		t.Skip("本机没有局域网网卡，跳过")
+	}
+	if ifaces[0].Subnet == "" {
+		t.Fatal("浏览网卡没有带子网信息，反射公告将无法识别")
+	}
+	// Two calls in the same second must not re-enumerate: the second returns the
+	// cached copy (same content, no syscalls).
+	again := a.browseInterfaces("")
+	if len(again) != len(ifaces) {
+		t.Fatalf("缓存前后数量不同：%d vs %d", len(ifaces), len(again))
+	}
+	a.lanDisc.mu.Lock()
+	cached := len(a.lanDisc.localAddrs) > 0
+	a.lanDisc.mu.Unlock()
+	if !cached {
+		t.Fatal("网卡列表没有被缓存")
+	}
+	if len(a.browseInterfaces("")) > maxBrowsedInterfaces {
+		t.Fatal("浏览网卡数量没有上限")
+	}
+}
+
+// The picker must list every adapter even though browsing is bounded, otherwise
+// an interface beyond the bound could never be selected.
+func TestAcceptanceInterfacePickerIsNotCapped(t *testing.T) {
+	a, _, _ := discoveryApp(t)
+	all := a.allLANInterfaces()
+	browsed := a.browseInterfaces("")
+	if len(all) < len(browsed) {
+		t.Fatalf("选择器比浏览集合还少：%d < %d", len(all), len(browsed))
+	}
+	labels, byLabel := a.discoveryInterfaceChoices()
+	if len(labels) != len(all) {
+		t.Fatalf("选择器列出 %d 个，实际 %d 个", len(labels), len(all))
+	}
+	for _, label := range labels {
+		if byLabel[label] == "" {
+			t.Fatalf("选择项 %q 没有对应网卡", label)
+		}
+	}
+}

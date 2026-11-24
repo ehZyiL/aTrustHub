@@ -42,8 +42,12 @@ type lanDiscovery struct {
 	// frameWanted is the background-readable copy of "the open page is still
 	// searching", so the coordinator never touches UI-thread fields.
 	frameWanted bool
-	pending     *discovery.Snapshot
-	lastErr     string
+	// localAddrs caches this machine's LAN addresses. Enumerating interfaces is
+	// a syscall per address, and the page renders per frame.
+	localAddrs []relay.Interface
+	localAt    time.Time
+	pending    *discovery.Snapshot
+	lastErr    string
 
 	// ui is UI-thread only.
 	ui lanDiscoveryUI
@@ -285,7 +289,7 @@ func (a *app) retryLANDiscoveryPreference() error {
 func (a *app) browseInterfaces(choice string) []discovery.Interface {
 	// Browsing must work on a machine that never shared anything: the address
 	// list comes from the machine, not from the share controller.
-	source := lanAddresses{}.LANCandidates()
+	source := a.localLANCandidates()
 	seen := make(map[string]bool)
 	var out []discovery.Interface
 	for _, cand := range source {
@@ -299,7 +303,13 @@ func (a *app) browseInterfaces(choice string) []discovery.Interface {
 			continue
 		}
 		seen[cand.Name+"|"+cand.IPv4] = true
-		out = append(out, discovery.Interface{Name: cand.Name, IPv4: cand.IPv4})
+		iface := discovery.Interface{Name: cand.Name, IPv4: cand.IPv4}
+		// The subnet is what later rejects an announcement reflected from
+		// another network.
+		if subnet, err := relay.SubnetOfAddress(cand.IPv4); err == nil {
+			iface.Subnet = subnet
+		}
+		out = append(out, iface)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Name != out[j].Name {
@@ -307,10 +317,53 @@ func (a *app) browseInterfaces(choice string) []discovery.Interface {
 		}
 		return out[i].IPv4 < out[j].IPv4
 	})
-	if len(out) > 4 {
-		out = out[:4]
+	// A browser per interface is a real cost, so a machine with dozens of
+	// adapters is bounded; the picker still lists every one of them.
+	if len(out) > maxBrowsedInterfaces {
+		out = out[:maxBrowsedInterfaces]
 	}
 	return out
+}
+
+// maxBrowsedInterfaces bounds how many adapters browse at once.
+const maxBrowsedInterfaces = 8
+
+// allLANInterfaces is the uncapped list behind the network picker.
+func (a *app) allLANInterfaces() []discovery.Interface {
+	var out []discovery.Interface
+	seen := map[string]bool{}
+	for _, cand := range a.localLANCandidates() {
+		if cand.IPv4 == "" || virtualInterface(cand.Name) || seen[cand.Name] {
+			continue
+		}
+		seen[cand.Name] = true
+		out = append(out, discovery.Interface{Name: cand.Name, IPv4: cand.IPv4})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// localLANCandidates returns the machine's LAN addresses, refreshed at most once
+// per second. The discovery page asks for them on every frame.
+func (a *app) localLANCandidates() []relay.Interface {
+	now := time.Now()
+	if a.lanDisc != nil {
+		a.lanDisc.mu.Lock()
+		if len(a.lanDisc.localAddrs) > 0 && now.Sub(a.lanDisc.localAt) < time.Second {
+			cached := append([]relay.Interface(nil), a.lanDisc.localAddrs...)
+			a.lanDisc.mu.Unlock()
+			return cached
+		}
+		a.lanDisc.mu.Unlock()
+	}
+	list := lanAddresses{}.LANCandidates()
+	if a.lanDisc != nil {
+		a.lanDisc.mu.Lock()
+		a.lanDisc.localAddrs = append([]relay.Interface(nil), list...)
+		a.lanDisc.localAt = now
+		a.lanDisc.mu.Unlock()
+	}
+	return list
 }
 
 // openLANDiscovery is called by the UI when the discovery tab becomes visible.
@@ -663,13 +716,14 @@ func (a *app) relayDiscoveryAction(c *ui.Context, d *relayImportDraft, cand disc
 	}
 }
 
-// discoveryInterfaceChoices lists the browsing networks. An empty name means
-// automatic selection.
+// discoveryInterfaceChoices lists every browsing network the machine has. The
+// picker must show all of them even though only a bounded set browses at once,
+// otherwise an adapter beyond the bound could not be chosen at all.
 func (a *app) discoveryInterfaceChoices() ([]string, map[string]string) {
 	var labels []string
 	byLabel := map[string]string{}
 	seen := map[string]bool{}
-	for _, cand := range a.browseInterfaces("") {
+	for _, cand := range a.allLANInterfaces() {
 		if seen[cand.Name] {
 			continue
 		}
@@ -737,7 +791,7 @@ func (a *app) withoutOwnShare(cands []discovery.Candidate) []discovery.Candidate
 		return cands
 	}
 	local := make(map[string]bool)
-	for _, cand := range (lanAddresses{}).LANCandidates() {
+	for _, cand := range a.localLANCandidates() {
 		local[cand.IPv4] = true
 	}
 	out := make([]discovery.Candidate, 0, len(cands))

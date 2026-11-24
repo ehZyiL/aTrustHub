@@ -1026,3 +1026,59 @@ func TestPublisherRejectsANilRegistration(t *testing.T) {
 		t.Fatalf("状态信息不明确：%q", pub.Status().Message)
 	}
 }
+
+// Spec §5.2: an announcement reflected from another subnet is not a share the
+// user can reach on the interface they picked.
+func TestOnLinkOnlyAcceptsTheInterfacesSubnet(t *testing.T) {
+	iface := Interface{Name: "en0", IPv4: "192.168.31.61", Subnet: "192.168.31.0/24"}
+	for _, tc := range []struct {
+		ip string
+		ok bool
+	}{
+		{"192.168.31.62", true},
+		{"192.168.31.61", true},
+		{"192.168.99.5", false},
+		{"10.0.0.5", false},
+		{"8.8.8.8", false},
+		{"not-an-ip", false},
+	} {
+		if got := iface.OnLink(tc.ip); got != tc.ok {
+			t.Fatalf("OnLink(%q) = %v, want %v", tc.ip, got, tc.ok)
+		}
+	}
+	// An interface without a subnet keeps the old behaviour: no extra check.
+	plain := Interface{Name: "en0", IPv4: "192.168.31.61"}
+	if !plain.OnLink("10.1.2.3") {
+		t.Fatal("没有子网信息时不应拒绝")
+	}
+	// A malformed subnet fails closed rather than accepting everything.
+	broken := Interface{Name: "en0", Subnet: "nonsense"}
+	if broken.OnLink("192.168.31.62") {
+		t.Fatal("子网信息损坏时应当拒绝")
+	}
+}
+
+// The browser applies the same check with the interface it was given, so a
+// record that arrives on en0 pointing at another subnet never becomes a row.
+func TestBrowserDropsOffLinkRecords(t *testing.T) {
+	hub := newHub()
+	backend := &captureBackend{hub: hub}
+	b := NewBrowser(BrowserOptions{Backend: backend, Emit: func(Snapshot) {}})
+	defer b.Close()
+	iface := Interface{Name: "en0", IPv4: "192.168.31.61", Subnet: "192.168.31.0/24"}
+	if err := b.Start([]Interface{iface}); err != nil {
+		t.Fatal(err)
+	}
+	inject := backend.last()
+	ann := testAnnouncement(1, "共享")
+	records := recordsFor(ann, "en0")
+	records[3].IPv4 = "192.168.99.5"
+	inject(records)
+	time.Sleep(20 * time.Millisecond)
+	if got := len(b.Snapshot().Candidates); got != 0 {
+		t.Fatalf("异网段公告进入了列表：%d", got)
+	}
+	records[3].IPv4 = "192.168.31.62"
+	inject(records)
+	waitFor(t, "on-link candidate", func() bool { return len(b.Snapshot().Candidates) == 1 })
+}

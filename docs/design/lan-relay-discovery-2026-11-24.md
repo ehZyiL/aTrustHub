@@ -327,3 +327,16 @@ PTR 留下 2432 个 `entries`、4096 个 owner 留下 4096 个 `hosts`。
 
 实现：`internal/relay/firewall_helper_policy.go`（平台中立，可在 Linux 上测试）+
 `FirewallHelperMain` 在读取操作文件前先校验路径、读取后校验操作内容。
+
+## 14. 第五轮复审（自查）
+
+在修复第四轮两项之后继续按同两轴复查，发现 3 项。
+
+| 编号 | 轴 | 问题 | 证据 | 修复 |
+| --- | --- | --- | --- | --- |
+| R4-1 [P2] | 规格 | §5.2 要求「发布地址必须能关联到接收接口的直连子网，忽略反射到其他子网的公告」，但接收侧只检查地址是否 RFC1918，没有和接收网卡比对 | `TestOnLinkOnlyAcceptsTheInterfacesSubnet`、`TestBrowserDropsOffLinkRecords` | `discovery.Interface` 增加 `Subnet`，应用侧用 `relay.SubnetOfAddress` 填；浏览器丢弃不在该网段内的 A 记录。没有子网信息时保持旧行为，子网信息损坏时失败关闭 |
+| R4-2 [P3] | 标准 | 发现页每帧都会枚举网卡（`withoutOwnShare`、选择器），每帧多次 syscall | `TestAcceptanceBrowsingSetIsCachedAndCarriesTheSubnet` | 网卡列表按 1 秒 TTL 缓存在 `lanDiscovery` 中，选择器与过滤共用 |
+| R4-3 [P3] | 规格 | 浏览集合被限制为 4 个网卡，而选择器用的是同一个函数，于是第 5 个网卡**根本选不到** | `TestAcceptanceInterfacePickerIsNotCapped` | 选择器改用不设上限的 `allLANInterfaces()`；真正建立浏览会话的上限提高到 8 并单独命名 |
+
+R4-1 的两层落点：`OnLink`（纯函数，覆盖同网段/异网段/公网/坏输入/无子网/坏子网六种情形）
+与浏览器记录过滤（用真实回调注入异网段 A 记录，列表保持为空，换成同网段后立即出现）。

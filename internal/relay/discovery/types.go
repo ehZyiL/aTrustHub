@@ -53,6 +53,27 @@ var (
 type Interface struct {
 	Name string
 	IPv4 string
+	// Subnet is the interface's own CIDR. When set, a candidate whose address is
+	// not on this link is ignored: an announcement reflected from another subnet
+	// is not a share the user can reach from here.
+	Subnet string
+}
+
+// OnLink reports whether ip belongs to this interface's subnet. An empty Subnet
+// means the caller did not supply one, and the check is skipped.
+func (i Interface) OnLink(ip string) bool {
+	if i.Subnet == "" {
+		return true
+	}
+	_, network, err := net.ParseCIDR(i.Subnet)
+	if err != nil {
+		return false
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() == nil {
+		return false
+	}
+	return network.Contains(parsed)
 }
 
 // Valid reports whether the interface is usable for discovery: a name and an

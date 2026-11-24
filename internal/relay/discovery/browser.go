@@ -190,9 +190,14 @@ func (b *Browser) Close() error {
 func (b *Browser) apply(gen uint64, records []Record) {
 	b.mu.Lock()
 	current, closed := b.gen, b.closed
+	ifaces := b.ifaces
 	b.mu.Unlock()
 	if gen != current || closed {
 		return
+	}
+	byName := make(map[string]Interface, len(ifaces))
+	for _, ifi := range ifaces {
+		byName[ifi.Name] = ifi
 	}
 	changed := false
 	for _, rec := range records {
@@ -200,6 +205,13 @@ func (b *Browser) apply(gen uint64, records []Record) {
 		// empty Instance is expected there.
 		if rec.Instance == "" && rec.Host == "" {
 			continue
+		}
+		if rec.Kind == KindA && !rec.Gone() {
+			if ifi, ok := byName[rec.Interface]; ok && !ifi.OnLink(rec.IPv4) {
+				// Reflected from another subnet: the user cannot reach it from
+				// the network they picked, so it is not a candidate.
+				continue
+			}
 		}
 		if events := b.cache.apply(rec); len(events) > 0 {
 			changed = true

@@ -749,14 +749,14 @@ func (c *limitedConn) Close() error {
 
 // slotLimiter bounds concurrent DNS queries globally and per client.
 type slotLimiter struct {
-	total chan struct{}
-	each  chan struct{}
-	mu    sync.Mutex
-	per   map[string]int
+	total     chan struct{}
+	maxPerOne int
+	mu        sync.Mutex
+	per       map[string]int
 }
 
 func newSlotLimiter(total, each int) *slotLimiter {
-	return &slotLimiter{total: make(chan struct{}, total), each: make(chan struct{}, each), per: map[string]int{}}
+	return &slotLimiter{total: make(chan struct{}, total), maxPerOne: each, per: map[string]int{}}
 }
 
 func (l *slotLimiter) acquire(token string) (func(), error) {
@@ -766,7 +766,7 @@ func (l *slotLimiter) acquire(token string) (func(), error) {
 		return nil, NewError(CodeBusy, "DNS 查询并发已满")
 	}
 	l.mu.Lock()
-	if l.per[token] >= cap(l.each) {
+	if l.per[token] >= l.maxPerOne {
 		l.mu.Unlock()
 		<-l.total
 		return nil, NewError(CodeBusy, "该客户端的 DNS 查询并发已满")

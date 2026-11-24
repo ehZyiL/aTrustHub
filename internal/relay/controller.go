@@ -146,7 +146,6 @@ func NewController(p Persistence, sink Sink, nets NetworkProvider, logf func(str
 		state:   StateOff,
 		stopCh:  make(chan struct{}),
 		kickCh:  make(chan struct{}, 1),
-		subs:    map[chan struct{}]struct{}{},
 	}
 	c.settings = p.ShareSettings()
 	if !c.settings.Enabled {
@@ -214,33 +213,9 @@ func (c *Controller) ShareCode() (string, error) {
 	}.String(), nil
 }
 
-// Subscribe returns a channel that receives a value whenever the view changes.
-func (c *Controller) Subscribe() <-chan struct{} {
-	ch := make(chan struct{}, 1)
-	c.mu.Lock()
-	c.subs[ch] = struct{}{}
-	c.mu.Unlock()
-	return ch
-}
-
-// Unsubscribe drops a subscription.
-func (c *Controller) Unsubscribe(ch <-chan struct{}) {
-	c.mu.Lock()
-	for sub := range c.subs {
-		if sub == ch {
-			delete(c.subs, sub)
-		}
-	}
-	c.mu.Unlock()
-}
-
+// publishLocked tells the UI thread that the view changed. It never calls back
+// into the controller, so a render pass cannot deadlock the state machine.
 func (c *Controller) publishLocked() {
-	for ch := range c.subs {
-		select {
-		case ch <- struct{}{}:
-		default:
-		}
-	}
 	if c.notify != nil {
 		go c.notify()
 	}

@@ -29,7 +29,8 @@ docs/
 │   ├── networking.md    四种接管方式、路由与 DNS 归属、范围边界
 │   ├── recovery.md      退出顺序、事务日志、生效时机、硬杀矩阵、已知缺口
 │   ├── lan-relay-sharing-plan-2026-11-24.md          局域网分享：需求与 UI/UX（已实现）
-│   └── lan-relay-sharing-implementation-2026-11-24.md 局域网分享：协议/生命周期/验收（已实现）
+│   ├── lan-relay-sharing-implementation-2026-11-24.md 局域网分享：协议/生命周期/验收（已实现）
+│   └── lan-relay-discovery-2026-11-24.md             局域网分享自动发现：协议/缓存/生命周期（已实现）
 ├── review/
 │   └── errata.md        旧文档勘误 —— 回答“旧说法哪里不对”
 ├── roadmap.md           未完成事项 —— 回答“还差什么”（拆成代码可判定 / 待实机）
@@ -47,6 +48,7 @@ docs/
 | [design/recovery.md](design/recovery.md) | 正常退出与硬杀分别会清理什么、事务日志在哪、还剩哪些洞 |
 | [design/lan-relay-sharing-plan-2026-11-24.md](design/lan-relay-sharing-plan-2026-11-24.md) | 局域网分享要做什么、UI/UX 怎么组织、哪些能力刻意不做 |
 | [design/lan-relay-sharing-implementation-2026-11-24.md](design/lan-relay-sharing-implementation-2026-11-24.md) | 分享协议 v1、严格出口边界、启停/恢复顺序，以及本次验证证据与未验证项 |
+| [design/lan-relay-discovery-2026-11-24.md](design/lan-relay-discovery-2026-11-24.md) | 自动发现的后端选型、DNS-SD 协议 v1、缓存上限、发布/浏览生命周期与验收用例 |
 | [review/errata.md](review/errata.md) | 旧文档哪些说法与代码不符、错在哪 |
 | [review/lan-relay-sharing-review-e888e47-2026-11-24.md](review/lan-relay-sharing-review-e888e47-2026-11-24.md) | 局域网分享合并前的 10 项审查发现（S1–S3、R1–R7）与复现方式 |
 | [review/lan-relay-sharing-remediation-e888e47-2026-11-24.md](review/lan-relay-sharing-remediation-e888e47-2026-11-24.md) | 上述 10 项的处理方案、约束与验收用例 |

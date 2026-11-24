@@ -44,7 +44,16 @@ type lanShareDraft struct {
 	notice        string
 	confirmClose  bool
 	showCode      bool
-	results       chan lanShareResult
+	// discovery is the 允许同事发现 checkbox of the enable form. It is an
+	// explicit choice saved with the rest of the intent, default-checked only
+	// when the user has never chosen before.
+	discovery        bool
+	discoveryName    string
+	discoveryTouched bool
+	// discoveryEditing opens the inline rename field of the running panel.
+	discoveryEditing bool
+	discoveryBusy    bool
+	results          chan lanShareResult
 }
 
 // relaySink binds the relay controller to the app's manager and configuration.
@@ -158,9 +167,17 @@ func (a *app) setupLANShare() {
 				a.bus.Add("app", fmt.Sprintf(format, args...))
 			}
 		},
-		a.invalidateCoalesced,
+		a.lanShareChanged,
 	)
 	a.lanShareUI.results = make(chan lanShareResult, 4)
+	a.setupLANDiscovery()
+}
+
+// lanShareChanged is the controller's change notification. Discovery follows the
+// share from here, not from the render loop.
+func (a *app) lanShareChanged() {
+	a.kickLANDiscovery()
+	a.invalidateCoalesced()
 }
 
 // resumeLANShare runs after the configuration and credentials are loaded. A
@@ -176,11 +193,15 @@ func (a *app) resumeLANShare() {
 	// Verify any rule left from the previous run before this run relies on it:
 	// an unverified rule is either reused (same share, same scope) or removed.
 	a.syncLanShareFirewall()
+	a.resumeLANDiscovery()
 }
 
 // shutdownLANShare stops serving but keeps the enable intent, so the next start
 // resumes it.
 func (a *app) shutdownLANShare() {
+	// The announcement goes before the listener: colleagues must not be able to
+	// dial a share that is already going away.
+	a.shutdownLANDiscovery()
 	if a.lanShare != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = a.lanShare.Shutdown(ctx)
@@ -341,6 +362,16 @@ func (a *app) openLANShare() {
 	d.pointID = settings.PointID
 	d.interfaceName = settings.InterfaceName
 	d.ipv4 = settings.PreferredIPv4
+	// A share that was never asked about discovery shows the box checked in the
+	// enable form (an explicit choice is required to save), while a share that
+	// already chose false keeps it unchecked.
+	d.discovery = true
+	d.discoveryTouched = false
+	if settings.DiscoveryEnabled != nil {
+		d.discovery = *settings.DiscoveryEnabled
+		d.discoveryTouched = true
+	}
+	d.discoveryName = settings.DiscoveryName
 	if settings.Port != 0 {
 		d.portText = fmt.Sprint(settings.Port)
 	}
@@ -680,6 +711,21 @@ func (a *app) lanShareEnableForm(c *ui.Context, d *lanShareDraft) {
 		ui.Text(c, "没有可用的局域网地址（需要已连接的 Wi-Fi 或有线网络）").
 			FontSize(12).TextColor(c.Theme().Warning).Wrap()
 	}
+	ui.Column(c).Gap(4).Children(func() {
+		ui.Checkbox(c, &d.discovery, "允许同一网络的同事发现").
+			Label("允许同一网络的同事发现这条分享")
+		ui.Text(c, "同一网络的其他设备可以看到公开名称和连接地址；加入仍需分享口令。").
+			FontSize(11).TextColor(c.Theme().TextMuted).Wrap()
+		if d.discovery {
+			ui.Field(c, "公开名称", func() {
+				ui.TextInput(c, &d.discoveryName).
+					Placeholder(model.DefaultDiscoveryName(model.NewID()[:6])).
+					Width(320).Changed()
+				ui.Text(c, "留空使用默认名称；不会使用 VPN 名称、账号或计算机名。").
+					FontSize(11).TextColor(c.Theme().TextMuted).Wrap()
+			})
+		}
+	})
 	ui.Checkbox(c, &d.advanced, "高级选项（固定端口）")
 	if d.advanced {
 		ui.Field(c, "监听端口", func() {
@@ -735,6 +781,7 @@ func (a *app) lanShareManageBody(c *ui.Context, d *lanShareDraft, view relay.Vie
 	if view.State == relay.StateBlocked && view.Failure != "" {
 		ui.Text(c, "原因："+view.Failure).FontSize(12).TextColor(t.Danger).Wrap()
 	}
+	a.lanShareDiscoveryView(c, view)
 	if view.State == relay.StateRunning {
 		info := relay.FirewallInfo()
 		ui.Column(c).Gap(3).Children(func() {
@@ -803,6 +850,12 @@ func (a *app) drainLANShareResults() {
 		case res := <-d.results:
 			d.busy = false
 			d.busyAction = ""
+			if res.action == "discovery" || res.action == "discovery-name" {
+				d.discoveryBusy = false
+				if res.err == nil {
+					d.discoveryEditing = false
+				}
+			}
 			if res.err != nil {
 				d.err = res.err.Error()
 			} else if res.notice != "" {
@@ -851,11 +904,19 @@ func (a *app) enableLANShare() {
 			port = n
 		}
 	}
+	if name := strings.TrimSpace(d.discoveryName); d.discovery && name != "" {
+		if err := model.ValidDiscoveryName(name); err != nil {
+			d.err = err.Error()
+			return
+		}
+	}
 	opts := relay.EnableOptions{
 		PointID:       d.pointID,
 		InterfaceName: d.interfaceName,
 		PreferredIPv4: d.ipv4,
 		Port:          port,
+		Discovery:     d.discovery,
+		DiscoveryName: d.discoveryName,
 	}
 	d.busy, d.busyAction = true, "enable"
 	d.err, d.notice = "", ""

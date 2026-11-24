@@ -81,6 +81,16 @@ cat > "$contents/Info.plist" <<EOF
 	<string>11.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<!-- 局域网分享: macOS 15 asks for local network access before an app may
+	     talk to devices on the same network. Discovery uses DNS-SD, so the
+	     service type is declared here as well. Keep both in sync with
+	     internal/relay/discovery.ServiceType; a test enforces it. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>用于发现同一局域网内同事开启的分享，以及连接这些分享。</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_connecthub._tcp</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

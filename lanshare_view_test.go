@@ -69,7 +69,7 @@ func withLANShare(t *testing.T, a *app) *testRelaySink {
 	for _, p := range a.cfg.Points {
 		sink.points[p.ID] = p.Name
 	}
-	ctrl := relay.NewController(store.RelayShareStore{Store: a.store}, sink, emptyNets{}, nil, a.invalidate)
+	ctrl := relay.NewController(store.RelayShareStore{Store: a.store}, sink, emptyNets{}, nil, a.lanShareChanged)
 	a.lanShare = ctrl
 	a.lanShareUI.results = make(chan lanShareResult, 4)
 	t.Cleanup(func() {
@@ -164,7 +164,7 @@ func TestRelayImportPreviewIsLocalAndAddsDisabledAutoconnect(t *testing.T) {
 	}
 	tt := ui.NewTester(a.view, 1120, 800)
 	texts := strings.Join(tt.Texts(), "|")
-	for _, want := range []string{"导入同事分享", "VPN 资源走共享主机，公网走本机", "现场主机", "192.168.1.50:23456"} {
+	for _, want := range []string{"同事分享", "VPN 资源走共享主机，公网走本机", "现场主机", "192.168.1.50:23456"} {
 		if !strings.Contains(texts, want) {
 			t.Errorf("preview lacks %q; texts = %s", want, texts)
 		}
@@ -757,7 +757,8 @@ func installLANShare(t *testing.T, a *app, sink relay.Sink) *relay.Controller {
 // real interface instead of the loopback stand-in.
 func installLANShareWith(t *testing.T, a *app, sink relay.Sink, nets relay.NetworkProvider) *relay.Controller {
 	t.Helper()
-	ctrl := relay.NewController(store.RelayShareStore{Store: a.store}, sink, nets, nil, a.invalidate)
+	// The production notification: discovery follows the share from here.
+	ctrl := relay.NewController(store.RelayShareStore{Store: a.store}, sink, nets, nil, a.lanShareChanged)
 	a.lanShare = ctrl
 	a.lanShareUI.results = make(chan lanShareResult, 4)
 	t.Cleanup(func() {

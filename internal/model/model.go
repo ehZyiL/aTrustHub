@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ehzyil/connect-hub/internal/lanname"
 	"github.com/ehzyil/connect-hub/internal/routing"
 )
 
@@ -214,6 +215,27 @@ type LANShareSettings struct {
 	// ShareID and CertificateSHA256 identify the persisted sharing identity.
 	ShareID           string `json:"shareId,omitempty"`
 	CertificateSHA256 string `json:"certificateSHA256,omitempty"`
+	// DiscoveryEnabled lets colleagues on the same network find this share over
+	// DNS-SD. It is a pointer on purpose: nil means "the user never chose",
+	// which is the state of every configuration written before discovery
+	// existed. Discovery never turns sharing on, and a nil value is never
+	// rewritten to true by Normalize or by the restore path.
+	DiscoveryEnabled *bool `json:"discoveryEnabled,omitempty"`
+	// DiscoveryName is the public alias broadcast on the LAN. Empty means the
+	// default derived from the share ID; it never falls back to the VPN point
+	// name, the account or the computer name.
+	DiscoveryName string `json:"discoveryName,omitempty"`
+}
+
+// IsZero reports whether no field carries a value. It replaces comparing the
+// struct with a zero literal: with a pointer field that comparison still
+// compiles but a configuration holding only discovery=false would stop looking
+// empty and would silently skip Settings.Normalize's default backfill.
+func (s LANShareSettings) IsZero() bool {
+	return s.Enabled == false && s.PointID == "" && s.InterfaceName == "" &&
+		s.PreferredIPv4 == "" && s.Port == 0 && s.BoundPort == 0 &&
+		s.ShareID == "" && s.CertificateSHA256 == "" &&
+		s.DiscoveryEnabled == nil && s.DiscoveryName == ""
 }
 
 // ShareIDBytes is the size of a share identity, Base64URL-encoded without
@@ -228,6 +250,19 @@ func ValidShareID(s string) bool {
 	b, err := base64.RawURLEncoding.DecodeString(s)
 	return err == nil && len(b) == ShareIDBytes
 }
+
+// DiscoveryNameMaxRunes and DiscoveryNameMaxBytes mirror the rules in
+// internal/lanname, which every boundary uses.
+const (
+	DiscoveryNameMaxRunes = lanname.MaxRunes
+	DiscoveryNameMaxBytes = lanname.MaxBytes
+)
+
+// ValidDiscoveryName checks a public alias; see internal/lanname.
+func ValidDiscoveryName(name string) error { return lanname.Valid(name) }
+
+// DefaultDiscoveryName is the alias used when the user did not type one.
+func DefaultDiscoveryName(shareID string) string { return lanname.Default(shareID) }
 
 // ValidShareToken reports whether s is a well-formed v1 bearer token.
 func ValidShareToken(s string) bool {
@@ -532,7 +567,7 @@ func (s *Settings) Normalize() {
 	// 不受影响：应用自己写出的配置总带着其它字段，不会命中这个早退分支。
 	if s.ListenHost == "" && s.AggregatePort == 0 && s.Routing == "" &&
 		s.HealthIntervalSec == 0 && !s.AggregateEnabled && !s.AutoReconnect && len(s.SharedExits) == 0 && len(s.RoutePolicies) == 0 && len(s.DNSBindings) == 0 && s.DialTimeoutMS == 0 && s.TotalTimeoutMS == 0 && s.CaptureMode == "" && !s.SimpleMode && !s.AutoRestoreAppCapture && !s.AutoCheckUpdate &&
-		!s.RelayClipboardDetection && s.LANShare == (LANShareSettings{}) {
+		!s.RelayClipboardDetection && s.LANShare.IsZero() {
 		*s = DefaultSettings()
 		return
 	}
@@ -597,6 +632,13 @@ func (s *LANShareSettings) Normalize() {
 	}
 	if s.PreferredIPv4 != "" && !RFC1918(net.ParseIP(s.PreferredIPv4)) {
 		s.PreferredIPv4 = ""
+	}
+	// A public alias that cannot be broadcast is dropped rather than repaired
+	// into something the user did not choose: the default applies instead.
+	if s.DiscoveryName = strings.TrimSpace(s.DiscoveryName); s.DiscoveryName != "" {
+		if err := ValidDiscoveryName(s.DiscoveryName); err != nil {
+			s.DiscoveryName = ""
+		}
 	}
 }
 
@@ -845,6 +887,12 @@ func (s *Settings) Validate() error {
 }
 
 func (s Settings) Clone() Settings {
+	// The discovery preference is a pointer, so a clone must not share it with
+	// the caller (or with the store's snapshot).
+	if s.LANShare.DiscoveryEnabled != nil {
+		enabled := *s.LANShare.DiscoveryEnabled
+		s.LANShare.DiscoveryEnabled = &enabled
+	}
 	s.DNSBindings = append([]routing.DNSBinding(nil), s.DNSBindings...)
 	s.RoutePolicies = append([]routing.Policy(nil), s.RoutePolicies...)
 	s.SharedExits = append([]routing.Group(nil), s.SharedExits...)

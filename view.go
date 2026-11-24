@@ -135,6 +135,7 @@ func (a *app) view(c *ui.Context) {
 	a.localAppDeleteView(c)
 	a.certificateProbeView(c)
 	a.lanShareView(c)
+	a.drainLANDiscovery()
 	a.relayImportView(c)
 	a.relayDiagnoseView(c)
 	a.relayPointView(c)

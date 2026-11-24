@@ -27,6 +27,7 @@ import (
 	"github.com/ehzyil/connect-hub/internal/localapps"
 	"github.com/ehzyil/connect-hub/internal/model"
 	"github.com/ehzyil/connect-hub/internal/relay"
+	"github.com/ehzyil/connect-hub/internal/relay/discovery"
 	"github.com/ehzyil/connect-hub/internal/store"
 	"github.com/ehzyil/connect-hub/internal/vpn"
 )
@@ -56,6 +57,12 @@ type app struct {
 	relayImport   relayImportDraft
 	relayDiagnose relayDiagnoseDraft
 	relayPoint    relayPointDraft
+	// lanDisc is the discovery side of 局域网分享: the publisher that follows the
+	// share and the browser that lives only while its page is open.
+	lanDisc *lanDiscovery
+	// discoveryBackend is the platform seam: nil means real multicast DNS.
+	// Tests replace it with an in-memory one, the same way fwExec is replaced.
+	discoveryBackend discovery.Backend
 	// askingClearRelayHistory is the node whose protection the user is about to
 	// drop; it drives the confirmation dialog.
 	askingClearRelayHistory string

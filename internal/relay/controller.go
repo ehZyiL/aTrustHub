@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/ehzyil/connect-hub/internal/lanname"
 )
 
 // State is the share lifecycle. Enabled (a persisted user intent) and State (a
@@ -34,6 +37,20 @@ type Settings struct {
 	BoundPort     int
 	ShareID       string
 	Fingerprint   string
+	// DiscoveryEnabled is nil until the user makes a choice, exactly like the
+	// persisted field. A nil value never announces anything.
+	DiscoveryEnabled *bool
+	DiscoveryName    string
+}
+
+// clone copies the settings so callers can never mutate the controller through
+// a shared pointer.
+func (s Settings) clone() Settings {
+	if s.DiscoveryEnabled != nil {
+		enabled := *s.DiscoveryEnabled
+		s.DiscoveryEnabled = &enabled
+	}
+	return s
 }
 
 // Persistence keeps the intent in the configuration and the long-lived secrets
@@ -68,6 +85,11 @@ type EnableOptions struct {
 	InterfaceName string
 	PreferredIPv4 string
 	Port          int
+	// Discovery is the checkbox of the enable form, an explicit choice saved
+	// together with the rest of the intent. DiscoveryName may be empty, in
+	// which case the default alias derived from the share ID applies.
+	Discovery     bool
+	DiscoveryName string
 }
 
 // View is an immutable snapshot for the UI. It carries no token.
@@ -88,6 +110,26 @@ type View struct {
 	// CleanupPending means Stop could not finish in its budget; the instance
 	// is still not restarted.
 	CleanupPending bool
+	// DiscoveryEnabled is the persisted preference; DiscoveryName is the
+	// public alias the user chose (empty means "use the default").
+	DiscoveryEnabled bool
+	DiscoveryName    string
+}
+
+// DiscoveryAnnouncement is the credential-free snapshot the discovery publisher
+// broadcasts. It only exists while the share is Running, so a waiting or
+// blocked instance never advertises an endpoint that cannot be used, and it
+// cannot carry a token: the code that builds it has no access to one.
+type DiscoveryAnnouncement struct {
+	// Generation changes whenever the share instance changes. A registration
+	// that finishes after a generation change is revoked instead of published.
+	Generation      uint64
+	ShareID         string
+	Name            string
+	ProtocolVersion int
+	InterfaceName   string
+	Address         string
+	Port            int
 }
 
 // Controller owns A's share lifecycle: enable intent, restore, suspend, disable
@@ -173,6 +215,10 @@ func (c *Controller) View() View {
 		Failure:        c.failure,
 		FailureCode:    c.failCode,
 		CleanupPending: c.cleanup,
+		DiscoveryName:  c.settings.DiscoveryName,
+	}
+	if c.settings.DiscoveryEnabled != nil {
+		view.DiscoveryEnabled = *c.settings.DiscoveryEnabled
 	}
 	if c.sink != nil && c.settings.PointID != "" {
 		view.PointName = c.sink.PointName(c.settings.PointID)
@@ -187,7 +233,63 @@ func (c *Controller) View() View {
 func (c *Controller) Settings() Settings {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.settings
+	return c.settings.clone()
+}
+
+// DiscoverySnapshot returns what may be announced right now. ok is false unless
+// the share is completely committed and running: the announcement carries the
+// address and port that actually bound, never a requested one.
+func (c *Controller) DiscoverySnapshot() (DiscoveryAnnouncement, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.settings.Enabled || c.settings.DiscoveryEnabled == nil || !*c.settings.DiscoveryEnabled {
+		return DiscoveryAnnouncement{}, false
+	}
+	if c.state != StateRunning || c.server == nil {
+		return DiscoveryAnnouncement{}, false
+	}
+	if c.settings.ShareID == "" || c.address == "" || c.port == 0 {
+		return DiscoveryAnnouncement{}, false
+	}
+	// The alias may be empty here: the app fills the default from the share ID
+	// before publishing, so this package stays independent of model.
+	return DiscoveryAnnouncement{
+		Generation:      c.opID,
+		ShareID:         c.settings.ShareID,
+		Name:            c.settings.DiscoveryName,
+		ProtocolVersion: ProtocolVersion,
+		InterfaceName:   c.iface,
+		Address:         c.address,
+		Port:            c.port,
+	}, true
+}
+
+// SetDiscovery changes only the discovery preference. It never restarts the
+// share, never touches the token, the certificate, the port or the access point
+// selection, and it cannot switch sharing on: a disabled share keeps its
+// preference for the next manual enable.
+func (c *Controller) SetDiscovery(enabled bool, name string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return errors.New("分享已退出")
+	}
+	name = strings.TrimSpace(name)
+	if name != "" {
+		if err := lanname.Valid(name); err != nil {
+			return err
+		}
+	}
+	previous := c.settings.clone()
+	want := enabled
+	c.settings.DiscoveryEnabled = &want
+	c.settings.DiscoveryName = name
+	if err := c.persistLocked(); err != nil {
+		c.settings = previous
+		return errors.New("发现偏好无法保存：" + err.Error())
+	}
+	c.publishLocked()
+	return nil
 }
 
 // ShareCode returns the current share code. It only exists while Running: a
@@ -232,6 +334,11 @@ func (c *Controller) Enable(ctx context.Context, opts EnableOptions) error {
 	if opts.PointID == "" {
 		return errors.New("请选择要共享的接入点")
 	}
+	if name := strings.TrimSpace(opts.DiscoveryName); name != "" {
+		if err := lanname.Valid(name); err != nil {
+			return err
+		}
+	}
 	if c.sink != nil && !c.sink.PointExists(opts.PointID) {
 		return errors.New("所选接入点不存在")
 	}
@@ -251,6 +358,11 @@ func (c *Controller) Enable(ctx context.Context, opts EnableOptions) error {
 	if opts.Port >= 0 && opts.Port <= 65535 {
 		c.settings.Port = opts.Port
 	}
+	// The checkbox is an explicit choice, saved with the rest of the intent.
+	// Discovery still cannot publish until the share is Running.
+	discovery := opts.Discovery
+	c.settings.DiscoveryEnabled = &discovery
+	c.settings.DiscoveryName = strings.TrimSpace(opts.DiscoveryName)
 	c.restoreSuppressed = false
 	c.failure, c.failCode = "", ""
 	c.state = StateStarting

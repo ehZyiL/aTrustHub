@@ -19,15 +19,23 @@ var _ relay.Persistence = RelayShareStore{}
 // ShareSettings reads the persisted share intent.
 func (a RelayShareStore) ShareSettings() relay.Settings {
 	share := a.Store.Config().Settings.LANShare
+	var discovery *bool
+	if share.DiscoveryEnabled != nil {
+		// The store's snapshot must never share the pointer with the controller.
+		enabled := *share.DiscoveryEnabled
+		discovery = &enabled
+	}
 	return relay.Settings{
-		Enabled:       share.Enabled,
-		PointID:       share.PointID,
-		InterfaceName: share.InterfaceName,
-		PreferredIPv4: share.PreferredIPv4,
-		Port:          share.Port,
-		BoundPort:     share.BoundPort,
-		ShareID:       share.ShareID,
-		Fingerprint:   share.CertificateSHA256,
+		Enabled:          share.Enabled,
+		PointID:          share.PointID,
+		InterfaceName:    share.InterfaceName,
+		PreferredIPv4:    share.PreferredIPv4,
+		Port:             share.Port,
+		BoundPort:        share.BoundPort,
+		ShareID:          share.ShareID,
+		Fingerprint:      share.CertificateSHA256,
+		DiscoveryEnabled: discovery,
+		DiscoveryName:    share.DiscoveryName,
 	}
 }
 
@@ -35,6 +43,11 @@ func (a RelayShareStore) ShareSettings() relay.Settings {
 // the controller never stores Running.
 func (a RelayShareStore) SaveShareSettings(s relay.Settings) error {
 	_, err := a.Store.Update(func(cfg *model.Config) error {
+		var discovery *bool
+		if s.DiscoveryEnabled != nil {
+			enabled := *s.DiscoveryEnabled
+			discovery = &enabled
+		}
 		cfg.Settings.LANShare = model.LANShareSettings{
 			Enabled:           s.Enabled,
 			PointID:           s.PointID,
@@ -44,6 +57,8 @@ func (a RelayShareStore) SaveShareSettings(s relay.Settings) error {
 			BoundPort:         s.BoundPort,
 			ShareID:           s.ShareID,
 			CertificateSHA256: s.Fingerprint,
+			DiscoveryEnabled:  discovery,
+			DiscoveryName:     s.DiscoveryName,
 		}
 		return nil
 	})

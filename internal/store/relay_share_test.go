@@ -519,3 +519,46 @@ func TestClearRelayKnownIncompleteWorksOnACorruptCache(t *testing.T) {
 		t.Fatal("the release was undone by the next snapshot")
 	}
 }
+
+// The discovery preference is a pointer: the store and the controller must not
+// share it, and a reload must see exactly what was written.
+func TestRelayShareStoreRoundTripsDiscoveryWithoutAliasing(t *testing.T) {
+	st := relayTestStore(t)
+	adapter := RelayShareStore{Store: st}
+	on := true
+	if err := adapter.SaveShareSettings(relay.Settings{
+		Enabled: true, PointID: "p1", DiscoveryEnabled: &on, DiscoveryName: "会议室",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	read := adapter.ShareSettings()
+	if read.DiscoveryEnabled == nil || !*read.DiscoveryEnabled || read.DiscoveryName != "会议室" {
+		t.Fatalf("读取结果不对：%+v", read)
+	}
+	// Mutating what we read must not reach the stored configuration.
+	*read.DiscoveryEnabled = false
+	if got := st.Config().Settings.LANShare.DiscoveryEnabled; got == nil || !*got {
+		t.Fatal("读出的指针与存储共享了内存")
+	}
+
+	// nil means "never asked" and must survive the round trip as nil.
+	if err := adapter.SaveShareSettings(relay.Settings{Enabled: false, PointID: "p1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := adapter.ShareSettings().DiscoveryEnabled; got != nil {
+		t.Fatalf("nil 被写成了指针：%v", *got)
+	}
+
+	// A second open (a restart) sees the same value.
+	if err := adapter.SaveShareSettings(relay.Settings{Enabled: true, PointID: "p1", DiscoveryEnabled: &on}); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Open(st.Dir(), NewMemorySecrets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded := RelayShareStore{Store: again}.ShareSettings()
+	if reloaded.DiscoveryEnabled == nil || !*reloaded.DiscoveryEnabled {
+		t.Fatalf("重启后偏好丢失：%+v", reloaded)
+	}
+}

@@ -2,7 +2,23 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"net"
+)
+
+// Reasons a source cannot be bound. The controller maps them to Waiting or
+// Blocked instead of guessing.
+var (
+	// ErrPointMissing means the access point is gone from the configuration.
+	ErrPointMissing = errors.New("接入点不存在")
+	// ErrPointNotReady means the point exists but is not logged in yet.
+	ErrPointNotReady = errors.New("接入点尚未连接")
+	// ErrPointUnsupported means the point cannot prove strict dialing.
+	ErrPointUnsupported = errors.New("接入点缺少严格分享能力")
+	// ErrPointTunOwned means the old global TUN owns the tunnel.
+	ErrPointTunOwned = errors.New("接入点已移交给系统 TUN")
+	// ErrPointIsRelay refuses sharing a relay node, which would loop.
+	ErrPointIsRelay = errors.New("不能分享局域网中继接入点")
 )
 
 // Source is the sharing host's view of one bound access point. The vpn package

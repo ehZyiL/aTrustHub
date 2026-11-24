@@ -94,6 +94,16 @@ func (m *Manager) dialRoute(ctx context.Context, request routing.Request, requir
 	if udp && decision.Action == "direct" {
 		decision.Action, decision.Reason = "blocked", "UDP 捕获没有可用的原网络出口"
 	}
+	m.mu.RLock()
+	historyGate := m.relayHistoryUnverified
+	m.mu.RUnlock()
+	if decision.Action == "direct" && historyGate && request.GatewayID == "" {
+		// A relay node's attribution could not be verified, so an unknown
+		// target might actually be a managed resource of that share. Refuse
+		// instead of silently sending it out the local network.
+		decision.Action = "blocked"
+		decision.Reason = "局域网分享的历史归属无法校验，暂不允许未知目标直连"
+	}
 	if decision.Action == "blocked" {
 		err := errors.New(decision.Reason)
 		m.logRoute(request, decision, routedSession{}, 0, 0, err)

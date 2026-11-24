@@ -9,6 +9,7 @@ import (
 
 	"github.com/ehzyil/connect-hub/internal/relay"
 	"github.com/ehzyil/connect-hub/internal/routing"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 // ErrRelaySourceUnavailable says the access point cannot be shared right now:
@@ -314,6 +315,37 @@ func (m *Manager) closeShareSourcesLocked(pointID string) {
 		src.signalChange()
 	}
 	delete(m.shareSubs, pointID)
+}
+
+// SeedRelayKnown loads persisted attribution into Known before any node starts.
+// Known only stops automatic direct dialing; it never authorizes a dial.
+func (m *Manager) SeedRelayKnown(pointID string, resources *workeripc.ResourceSnapshot) {
+	if resources == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ep := m.points[pointID]
+	if ep == nil {
+		return
+	}
+	ep.knownResources = rememberResources(ep.knownResources, resources)
+}
+
+// SetRelayHistoryUnverified turns the "unknown targets must not go direct"
+// gate on. It is a local routing constraint from local state; a LAN request
+// field can never set it.
+func (m *Manager) SetRelayHistoryUnverified(v bool) {
+	m.mu.Lock()
+	m.relayHistoryUnverified = v
+	m.mu.Unlock()
+}
+
+// RelayHistoryUnverified reports the current gate.
+func (m *Manager) RelayHistoryUnverified() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.relayHistoryUnverified
 }
 
 // ShareSourceRevision reports the current published revision, for diagnostics.

@@ -223,6 +223,10 @@ type Manager struct {
 	// shareSubs tracks live LAN-share sources per point, so resource changes,
 	// disconnects and removals can end them promptly.
 	shareSubs map[string][]*RelayShareSource
+	// relayHistoryUnverified blocks unowned traffic from silently going direct
+	// while a relay node's attribution could not be loaded. Another gateway's
+	// verified resources keep working; only unknown targets are refused.
+	relayHistoryUnverified bool
 }
 
 type endpoint struct {
@@ -289,6 +293,9 @@ type endpoint struct {
 	// shareRevision is the SHA-256 of the effective TCP-published content of
 	// this epoch. It is not resourceVersion, which identifies the mapping pool.
 	shareRevision string
+	// updateSeq is the newest session update applied, so a late or duplicated
+	// update cannot overwrite a newer snapshot or cross a reconnect.
+	updateSeq uint64
 }
 
 // NewManager returns a manager that uses connector to log in and creds to
@@ -448,10 +455,23 @@ func sameStrings(a, b []string) bool {
 }
 
 func needsRestart(a, b model.AccessPoint) bool {
-	return a.Server != b.Server || a.Port != b.Port ||
+	if a.Server != b.Server || a.Port != b.Port ||
 		a.Username != b.Username || a.AuthMode != b.AuthMode ||
 		a.LoginDomain != b.LoginDomain || a.SocksPort != b.SocksPort ||
-		a.Protocol != b.Protocol || a.RemoteDNS != b.RemoteDNS || a.CertificateSHA256 != b.CertificateSHA256 || strings.Join(a.InternalDomains, "\n") != strings.Join(b.InternalDomains, "\n")
+		a.Protocol != b.Protocol || a.RemoteDNS != b.RemoteDNS || a.CertificateSHA256 != b.CertificateSHA256 || strings.Join(a.InternalDomains, "\n") != strings.Join(b.InternalDomains, "\n") {
+		return true
+	}
+	// The relay identity is a connection identity: a changed share or
+	// fingerprint must reconnect. The history-cache marker must not.
+	if a.Relay == nil && b.Relay == nil {
+		return false
+	}
+	if a.Relay == nil || b.Relay == nil {
+		return true
+	}
+	return a.Relay.Version != b.Relay.Version ||
+		a.Relay.ShareID != b.Relay.ShareID ||
+		a.Relay.CertificateSHA256 != b.Relay.CertificateSHA256
 }
 
 type closeLater struct {
@@ -651,26 +671,35 @@ func (m *Manager) connect(id string, gen int) {
 			return
 		}
 	}
-	switch model.AuthMode(cfg.AuthMode) {
-	case model.AuthModeWeCom:
-		if creds.ExternalLogin == nil {
-			m.fail(id, gen, "扫码登录窗口不可用")
-			return
-		}
-	case model.AuthModeSSO:
-		// Single sign-on keeps no password here: the browser login saved
-		// the session, and the connector resumes it. When that session is
-		// gone the connector says so, which is more useful than a
-		// credential error.
-	case model.AuthModeAuto:
-		if strings.TrimSpace(creds.Login) == "" && creds.ExternalLogin == nil {
-			m.fail(id, gen, "自动识别需要密码或扫码登录窗口")
-			return
-		}
-	default:
+	if cfg.Protocol == model.ProtocolLANRelay {
+		// A relay node has no VPN login. Its only credential is the share
+		// token, so the aTrust wording ("密码") would be wrong here.
 		if strings.TrimSpace(creds.Login) == "" {
-			m.fail(id, gen, "没有保存密码：先编辑接入点填上密码")
+			m.fail(id, gen, "没有保存分享口令：请重新导入同事分享")
 			return
+		}
+	} else {
+		switch model.AuthMode(cfg.AuthMode) {
+		case model.AuthModeWeCom:
+			if creds.ExternalLogin == nil {
+				m.fail(id, gen, "扫码登录窗口不可用")
+				return
+			}
+		case model.AuthModeSSO:
+			// Single sign-on keeps no password here: the browser login saved
+			// the session, and the connector resumes it. When that session is
+			// gone the connector says so, which is more useful than a
+			// credential error.
+		case model.AuthModeAuto:
+			if strings.TrimSpace(creds.Login) == "" && creds.ExternalLogin == nil {
+				m.fail(id, gen, "自动识别需要密码或扫码登录窗口")
+				return
+			}
+		default:
+			if strings.TrimSpace(creds.Login) == "" {
+				m.fail(id, gen, "没有保存密码：先编辑接入点填上密码")
+				return
+			}
 		}
 	}
 
@@ -747,7 +776,59 @@ func (m *Manager) connect(id string, gen int) {
 
 	m.logf("[%s] 已登录，用时 %s，隧道地址 %s", cfg.Name, time.Since(start).Round(time.Millisecond), sess.Info().ClientIP)
 	m.changed()
+	m.consumeUpdates(id, gen, sess)
 	m.watch(id, gen, sess)
+}
+
+// consumeUpdates applies session-published snapshots. Every message is checked
+// against the same endpoint, generation and session, and against an increasing
+// sequence, so a late update after a reconnect is dropped instead of replacing
+// the current rules.
+func (m *Manager) consumeUpdates(id string, gen int, sess Session) {
+	updater, ok := sess.(SessionUpdater)
+	if !ok {
+		return
+	}
+	for {
+		select {
+		case update, open := <-updater.Updates():
+			if !open {
+				return
+			}
+			m.mu.Lock()
+			cur := m.points[id]
+			if cur == nil || cur.gen != gen || cur.sess != sess || cur.state != StateOnline {
+				m.mu.Unlock()
+				return
+			}
+			if update.Sequence <= cur.updateSeq {
+				m.mu.Unlock()
+				continue
+			}
+			cur.updateSeq = update.Sequence
+			info := cloneSessionInfo(update.Info)
+			if cur.cfg.HealthTarget != "" {
+				info.HealthTarget = cur.cfg.HealthTarget
+			}
+			cur.info = info
+			cur.rawResources = info.Resources
+			cur.publishResourcesLocked()
+			cur.knownResources = rememberResources(cur.knownResources, info.Resources)
+			m.mu.Unlock()
+			m.logf("[%s] 分享资源已更新", id)
+			m.changed()
+		case <-time.After(30 * time.Second):
+			// Wake up occasionally so a closed session cannot leak this
+			// goroutine; the sequence/identity checks keep it harmless.
+			m.mu.RLock()
+			cur := m.points[id]
+			alive := cur != nil && cur.gen == gen && cur.sess == sess && cur.state == StateOnline
+			m.mu.RUnlock()
+			if !alive {
+				return
+			}
+		}
+	}
 }
 
 // watch notices a tunnel that ends by itself, as when the server signs the

@@ -26,14 +26,24 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+// NewProtocolConnector dispatches explicitly. Three protocols exist and an
+// unknown value is refused: a LAN relay node must never accidentally run the
+// aTrust login with a share token as its password.
 func NewProtocolConnector(options ZJUOptions) Connector {
 	atrust := NewZJUConnector(options)
 	easy := NewEasyConnectConnector("")
+	lan := NewRelayConnector(RelayConnectorOptions{Dial: options.RelayDial, SaveSnapshot: options.RelaySaveSnapshot})
 	return func(ctx context.Context, point model.AccessPoint, creds Credentials) (Session, error) {
-		if point.Protocol == model.ProtocolEasyConnect {
+		switch point.Protocol {
+		case model.ProtocolEasyConnect:
 			return easy(ctx, point, creds)
+		case model.ProtocolLANRelay:
+			return lan(ctx, point, creds)
+		case model.ProtocolATrust, "":
+			return atrust(ctx, point, creds)
+		default:
+			return nil, fmt.Errorf("不支持的 VPN 协议：%q", point.Protocol)
 		}
-		return atrust(ctx, point, creds)
 	}
 }
 

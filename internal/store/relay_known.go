@@ -1,0 +1,144 @@
+package store
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
+)
+
+// RelayKnownSchema is the cache format version.
+const RelayKnownSchema = 1
+
+// RelayKnownMaxBytes bounds one point's attribution cache. An oversized cache is
+// an error, never silently truncated: losing history could let a known managed
+// target fall back to the original network.
+const RelayKnownMaxBytes = 4 << 20
+
+// ErrRelayKnownCorrupt means the cache exists but cannot be trusted.
+var ErrRelayKnownCorrupt = errors.New("局域网分享的历史归属缓存损坏")
+
+// RelayKnown is the attribution cache of one imported share. It only ever stops
+// automatic direct dialing; it never authorizes a connection.
+type RelayKnown struct {
+	Schema    int                         `json:"schema"`
+	PointID   string                      `json:"pointId"`
+	Source    string                      `json:"source"`
+	ShareID   string                      `json:"shareId,omitempty"`
+	SavedAt   int64                       `json:"savedAt"`
+	Resources *workeripc.ResourceSnapshot `json:"resources"`
+}
+
+// RelayKnownPath is where a point's cache lives. The directory is private to the
+// user and the file name comes from the local point id, never from a peer name.
+func (s *Store) RelayKnownPath(pointID string) string {
+	return filepath.Join(s.dir, "relay-known", safePointFile(pointID)+".json")
+}
+
+// safePointFile keeps a local id usable as a file name and refuses traversal.
+func safePointFile(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('_')
+	}
+	out := b.String()
+	if out == "" {
+		return "point"
+	}
+	return out
+}
+
+// LoadRelayKnown reads one point's cache. A missing file returns
+// (nil, nil), which the caller treats as "never initialised"; a broken file
+// returns ErrRelayKnownCorrupt so the protection gap is visible.
+func (s *Store) LoadRelayKnown(pointID string) (*RelayKnown, error) {
+	path := s.RelayKnownPath(pointID)
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > RelayKnownMaxBytes {
+		return nil, fmt.Errorf("%w：文件超过 %d 字节", ErrRelayKnownCorrupt, RelayKnownMaxBytes)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var known RelayKnown
+	if err := json.Unmarshal(data, &known); err != nil {
+		return nil, fmt.Errorf("%w：%v", ErrRelayKnownCorrupt, err)
+	}
+	if known.Schema != RelayKnownSchema || known.PointID != pointID || known.Resources == nil {
+		return nil, fmt.Errorf("%w：字段不匹配", ErrRelayKnownCorrupt)
+	}
+	return &known, nil
+}
+
+// SaveRelayKnown writes the cache atomically (0700 directory, 0600 file).
+func (s *Store) SaveRelayKnown(pointID, source string, resources *workeripc.ResourceSnapshot) error {
+	if resources == nil {
+		return nil
+	}
+	known := RelayKnown{
+		Schema:    RelayKnownSchema,
+		PointID:   pointID,
+		Source:    source,
+		SavedAt:   time.Now().Unix(),
+		Resources: resources,
+	}
+	data, err := json.MarshalIndent(known, "", "  ")
+	if err != nil {
+		return err
+	}
+	if len(data) > RelayKnownMaxBytes {
+		return fmt.Errorf("局域网分享的历史归属超过 %d 字节，未保存", RelayKnownMaxBytes)
+	}
+	dir := filepath.Join(s.dir, "relay-known")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return writeFileAtomic(filepath.Join(dir, safePointFile(pointID)+".json"), append(data, '\n'), 0o600)
+}
+
+// DeleteRelayKnown removes a point's cache, which deleting the node does.
+func (s *Store) DeleteRelayKnown(pointID string) error {
+	err := os.Remove(s.RelayKnownPath(pointID))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+// SetRelayHistoryInitialized flips the point's history marker and persists it.
+// The marker says "a first verified snapshot was stored"; it is not a
+// credential and grants nothing.
+func (s *Store) SetRelayHistoryInitialized(pointID string) error {
+	_, err := s.Update(func(cfg *model.Config) error {
+		point := cfg.Find(pointID)
+		if point == nil {
+			return fmt.Errorf("接入点 %s 不存在", pointID)
+		}
+		if point.Relay == nil {
+			return fmt.Errorf("接入点 %s 不是局域网中继节点", pointID)
+		}
+		point.Relay.HistoryInitialized = true
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return s.Save()
+}

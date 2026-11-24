@@ -22,6 +22,8 @@ import (
 	"github.com/mythologyli/zju-connect/underlay"
 
 	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/relay"
+	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 // ZJUOptions configure the ZJU-Connect backed connector.
@@ -36,6 +38,12 @@ type ZJUOptions struct {
 	DNSTTL uint64
 	// Debug turns on ZJU-Connect's debug log.
 	Debug bool
+	// RelayDial dials the lantern network for LAN relay nodes. nil means the
+	// direct dialer; the client never uses a system proxy either way.
+	RelayDial relay.Dialer
+	// RelaySaveSnapshot persists the imported share's attribution before it is
+	// published as usable.
+	RelaySaveSnapshot func(pointID string, resources *workeripc.ResourceSnapshot) error
 }
 
 // NewZJUConnector returns a Connector that logs in with ZJU-Connect's

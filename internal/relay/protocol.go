@@ -1,6 +1,8 @@
 package relay
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -284,4 +286,22 @@ func writeError(w http.ResponseWriter, err error) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_, _ = w.Write(data)
+}
+
+// randomShareID returns a fresh share identity.
+func randomShareID() (string, error) {
+	b := make([]byte, shareIDLen)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// randomShareToken returns a fresh share token.
+func randomShareToken() (string, error) {
+	b := make([]byte, shareTokenLen)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }

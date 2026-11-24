@@ -33,8 +33,19 @@ func shareTestResources() *workeripc.ResourceSnapshot {
 
 func startShareTestPoint(t *testing.T, cfg model.Config) (*Manager, *fakeConnector) {
 	t.Helper()
+	return startShareTestPointWithSession(t, cfg, newFakeSession(cfg.Points[0].ID))
+}
+
+// startShareTestPointWithSession connects a session whose Info already carries
+// the resources. Mutating Info after Connect would race with the manager's own
+// read of it, which is a test artifact, not a production path.
+func startShareTestPointWithSession(t *testing.T, cfg model.Config, sess *fakeSession) (*Manager, *fakeConnector) {
+	t.Helper()
 	conn := &fakeConnector{}
-	m := newTestManager(t, conn.Connect, cfg)
+	m := newTestManager(t, func(context.Context, model.AccessPoint, Credentials) (Session, error) {
+		return sess, nil
+	}, cfg)
+	_ = conn
 	m.Connect(cfg.Points[0].ID)
 	waitFor(t, "point online", func() bool {
 		online, _, _ := m.Counts()
@@ -57,14 +68,9 @@ func sharePointConfig() model.Config {
 
 func TestRelayShareSourcePublishesTCPOnly(t *testing.T) {
 	cfg := sharePointConfig()
-	m, conn := startShareTestPoint(t, cfg)
-	conn.session("p1").info.Resources = shareTestResources()
-	// publishResourcesLocked runs on connect; trigger a republish the same way
-	// the disabled-app toggle does.
-	m.mu.Lock()
-	m.points["p1"].rawResources = shareTestResources()
-	m.points["p1"].publishResourcesLocked()
-	m.mu.Unlock()
+	sess := newFakeSession("p1")
+	sess.info.Resources = shareTestResources()
+	m, _ := startShareTestPointWithSession(t, cfg, sess)
 
 	src, err := m.AcquireRelayShareSource("p1")
 	if err != nil {
@@ -100,12 +106,9 @@ func TestRelayShareSourcePublishesTCPOnly(t *testing.T) {
 }
 
 func TestRelayShareSourceRefusesUnknownTargets(t *testing.T) {
-	m, conn := startShareTestPoint(t, sharePointConfig())
-	conn.session("p1").info.Resources = shareTestResources()
-	m.mu.Lock()
-	m.points["p1"].rawResources = shareTestResources()
-	m.points["p1"].publishResourcesLocked()
-	m.mu.Unlock()
+	sess := newFakeSession("p1")
+	sess.info.Resources = shareTestResources()
+	m, _ := startShareTestPointWithSession(t, sharePointConfig(), sess)
 
 	src, err := m.AcquireRelayShareSource("p1")
 	if err != nil {
@@ -157,12 +160,9 @@ func TestRelayShareSourceRefusesDirectPolicy(t *testing.T) {
 	cfg.Settings.RoutePolicies = []routing.Policy{{
 		ID: "p-direct", Pattern: "10.1.0.0/16", Protocol: "tcp", PortMin: 1, PortMax: 65535, Action: "direct",
 	}}
-	m, conn := startShareTestPoint(t, cfg)
-	conn.session("p1").info.Resources = shareTestResources()
-	m.mu.Lock()
-	m.points["p1"].rawResources = shareTestResources()
-	m.points["p1"].publishResourcesLocked()
-	m.mu.Unlock()
+	sess := newFakeSession("p1")
+	sess.info.Resources = shareTestResources()
+	m, _ := startShareTestPointWithSession(t, cfg, sess)
 
 	src, err := m.AcquireRelayShareSource("p1")
 	if err != nil {
@@ -182,12 +182,9 @@ func TestRelayShareSourceRefusesDirectPolicy(t *testing.T) {
 }
 
 func TestRelayShareSourceRefusesStaleRevision(t *testing.T) {
-	m, conn := startShareTestPoint(t, sharePointConfig())
-	conn.session("p1").info.Resources = shareTestResources()
-	m.mu.Lock()
-	m.points["p1"].rawResources = shareTestResources()
-	m.points["p1"].publishResourcesLocked()
-	m.mu.Unlock()
+	sess := newFakeSession("p1")
+	sess.info.Resources = shareTestResources()
+	m, _ := startShareTestPointWithSession(t, sharePointConfig(), sess)
 	src, err := m.AcquireRelayShareSource("p1")
 	if err != nil {
 		t.Fatal(err)

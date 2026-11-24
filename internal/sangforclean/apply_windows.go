@@ -357,7 +357,7 @@ func executeDeleteCert(f Finding) (ReportStatus, string) {
 
 	deleted := false
 	for _, localMachine := range []bool{true, false} {
-		hStore, err := openSystemRootStore(localMachine)
+		hStore, err := openSystemRootStoreWithMode(localMachine, false)
 		if err != nil || hStore == 0 {
 			continue
 		}

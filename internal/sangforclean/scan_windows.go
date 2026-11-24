@@ -31,6 +31,7 @@ const (
 	CERT_STORE_PROV_SYSTEM_W        = 10
 	CERT_SYSTEM_STORE_LOCAL_MACHINE = 0x00020000
 	CERT_SYSTEM_STORE_CURRENT_USER  = 0x00010000
+	CERT_STORE_READONLY_FLAG        = 0x00008000
 	CERT_CLOSE_STORE_FORCE_FLAG     = 0x00000001
 
 	CERT_NAME_SIMPLE_DISPLAY_TYPE = 4
@@ -38,6 +39,10 @@ const (
 )
 
 func openSystemRootStore(localMachine bool) (uintptr, error) {
+	return openSystemRootStoreWithMode(localMachine, true)
+}
+
+func openSystemRootStoreWithMode(localMachine bool, readOnly bool) (uintptr, error) {
 	storeName, err := windows.UTF16PtrFromString("Root")
 	if err != nil {
 		return 0, err
@@ -45,6 +50,9 @@ func openSystemRootStore(localMachine bool) (uintptr, error) {
 	flags := uintptr(CERT_SYSTEM_STORE_CURRENT_USER)
 	if localMachine {
 		flags = uintptr(CERT_SYSTEM_STORE_LOCAL_MACHINE)
+	}
+	if readOnly {
+		flags |= uintptr(CERT_STORE_READONLY_FLAG)
 	}
 
 	hStore, _, err := procCertOpenStore.Call(
@@ -485,7 +493,7 @@ func scanCertificates(plan *Plan) {
 				thumbprint := hex.EncodeToString(h.Sum(nil))
 
 				plan.Findings = append(plan.Findings, Finding{
-					ID:     fmt.Sprintf("cert:%s", thumbprint),
+					ID:     fmt.Sprintf("cert:%s_%s", storeDesc, thumbprint),
 					Group:  "cert",
 					Title:  fmt.Sprintf("根证书: %s", subject),
 					Detail: fmt.Sprintf("存储: %s, 签发者: %s (指纹: %s)", storeDesc, issuer, thumbprint),

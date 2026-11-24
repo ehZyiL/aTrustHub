@@ -40,10 +40,10 @@ func (f *appFirewall) calls() []relay.FirewallOperation {
 // privileged executor. It also prevents the real one from ever being built.
 func installFirewall(t *testing.T, a *app, exec relay.FirewallExecutor) *relay.Rules {
 	t.Helper()
-	rules := relay.NewRules(a.dir, exec, func(string, ...any) {})
-	a.fwOnce.Do(func() {}) // mark as built
-	a.fwRules = rules
-	return rules
+	// Set the executor before the coordinator exists: the coordinator is built
+	// lazily on first use, exactly like in production.
+	a.fwExec = exec
+	return a.firewallRules()
 }
 
 // awaitFirewall waits for the scheduled reconciliation to finish. The UI thread

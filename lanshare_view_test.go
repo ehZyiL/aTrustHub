@@ -827,6 +827,7 @@ func TestAppShareSurvivesRestartThroughAppWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.shutdownLANShare()
+	a.awaitFirewall(t)
 
 	b := reopenAppWithSink(t, a.store.Dir(), sink)
 	if !b.cfg.Settings.LANShare.Enabled {
@@ -842,6 +843,7 @@ func TestAppShareSurvivesRestartThroughAppWiring(t *testing.T) {
 		t.Fatalf("app restart changed the share code:\n%s\n%s", codeBefore, codeAfter)
 	}
 	b.shutdownLANShare()
+	b.awaitFirewall(t)
 
 	// A share that is still enabled keeps resuming on further starts.
 	c := reopenAppWithSink(t, a.store.Dir(), sink)
@@ -853,6 +855,7 @@ func TestAppShareSurvivesRestartThroughAppWiring(t *testing.T) {
 		t.Fatalf("Disable: %v", err)
 	}
 	c.shutdownLANShare()
+	c.awaitFirewall(t)
 	d := reopenAppWithSink(t, a.store.Dir(), sink)
 	if d.cfg.Settings.LANShare.Enabled {
 		t.Fatal("the disabled state did not survive the restart")

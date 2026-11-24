@@ -64,6 +64,7 @@ type app struct {
 	// fwOnce/fwRules own every firewall rule this app creates; fwSeen remembers
 	// the share state whose rules were already reconciled.
 	fwOnce    sync.Once
+	fwExec    relay.FirewallExecutor
 	fwRules   *relay.Rules
 	fwSeen    fwSeenState
 	fwRunning atomic.Bool

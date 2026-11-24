@@ -21,7 +21,11 @@ import (
 // test app without a data directory never touches the disk.
 func (a *app) firewallRules() *relay.Rules {
 	a.fwOnce.Do(func() {
-		a.fwRules = relay.NewRules(a.dir, relay.NewElevatedFirewall(), func(format string, args ...any) {
+		exec := a.fwExec
+		if exec == nil {
+			exec = relay.NewElevatedFirewall()
+		}
+		a.fwRules = relay.NewRules(a.dir, exec, func(format string, args ...any) {
 			if a.bus != nil {
 				a.bus.Add("app", fmt.Sprintf(format, args...))
 			}
@@ -333,10 +337,13 @@ func (a *app) removeLanShareFirewall() {
 // cancelPendingFirewallOps tells the coordinator that in-flight creations are no
 // longer wanted, so a prompt answered after 关闭共享 cannot leave a rule behind.
 func (a *app) cancelPendingFirewallOps() {
-	if a.fwRules == nil {
+	if a.dir == "" {
 		return
 	}
-	for _, entry := range a.fwRules.Pending() {
-		a.fwRules.Cancel(entry.OperationID)
+	// Go through firewallRules() so the lazy construction is published by the
+	// same sync.Once for every caller, never by a bare field read.
+	rules := a.firewallRules()
+	for _, entry := range rules.Pending() {
+		rules.Cancel(entry.OperationID)
 	}
 }

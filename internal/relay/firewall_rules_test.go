@@ -118,6 +118,13 @@ func TestFirewallOperationIsAClosedSet(t *testing.T) {
 			t.Fatalf("valid operation rejected: %+v %v", op, err)
 		}
 	}
+	// A wildcard in the name would let -DisplayName match other rules.
+	for _, id := range []string{FirewallRulePrefix + "*", FirewallRulePrefix + "1?", FirewallRulePrefix + "[1]"} {
+		op := FirewallOperation{OperationID: "op", Op: FirewallOpDelete, RuleID: id}
+		if err := op.Validate(); err == nil {
+			t.Fatalf("a wildcard rule id was accepted: %q", id)
+		}
+	}
 	bad := []FirewallOperation{
 		{OperationID: "", Op: FirewallOpQuery, RuleID: rule.ID},
 		{OperationID: "op", Op: "run", RuleID: rule.ID},

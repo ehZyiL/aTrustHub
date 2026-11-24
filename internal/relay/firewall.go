@@ -49,6 +49,9 @@ func (r FirewallRule) Validate() error {
 	if len(r.ID) > 128 {
 		return errors.New("防火墙规则 ID 过长")
 	}
+	if !safeRuleID(r.ID) {
+		return errors.New("防火墙规则 ID 含有非法字符")
+	}
 	if r.ProgramPath == "" {
 		return errors.New("防火墙规则缺少程序路径")
 	}
@@ -74,6 +77,21 @@ func (r FirewallRule) Validate() error {
 		}
 	}
 	return nil
+}
+
+// safeRuleID restricts a rule name to characters that PowerShell's -DisplayName
+// (a wildcard-capable parameter) cannot reinterpret, so a crafted id can never
+// match or delete a rule this app did not create.
+func safeRuleID(id string) bool {
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '-', r == '_', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // absoluteProgramPath accepts the forms an absolute program path can take on the
@@ -117,6 +135,9 @@ func (o FirewallOperation) Validate() error {
 	case FirewallOpQuery, FirewallOpDelete:
 		if o.RuleID == "" || !strings.HasPrefix(o.RuleID, FirewallRulePrefix) {
 			return errors.New("防火墙操作只能针对本程序创建的规则")
+		}
+		if !safeRuleID(o.RuleID) {
+			return errors.New("防火墙规则 ID 含有非法字符")
 		}
 		return nil
 	default:

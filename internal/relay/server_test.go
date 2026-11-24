@@ -546,3 +546,41 @@ func TestRevocationCancelsPendingDial(t *testing.T) {
 		t.Fatal("revocation did not cancel the pending dial")
 	}
 }
+
+// TestDNSRequestBinding: the v1 DNS body is a raw DNS message, and a stale
+// epoch/revision must be refused instead of answered with newer authorization.
+func TestDNSRequestBinding(t *testing.T) {
+	fx := startShareFixture(t, "share-token-123456")
+	client := fx.client(t)
+	ctx := context.Background()
+	state, token, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Correct epoch/revision: answered by the source.
+	answer, err := client.ExchangeDNS(ctx, token, state.Epoch, state.Revision, []byte("q"))
+	if err != nil || string(answer) != "answer:q" {
+		t.Fatalf("valid DNS query: %q %v", answer, err)
+	}
+	// Wrong epoch: refused as stale, never served.
+	if _, err := client.ExchangeDNS(ctx, token, state.Epoch+7, state.Revision, []byte("q")); err == nil {
+		t.Fatal("stale epoch was answered")
+	} else {
+		var re *Error
+		if !errors.As(err, &re) || re.Code != CodeStaleResources {
+			t.Fatalf("want stale_resources, got %v", err)
+		}
+	}
+	// Wrong revision: same.
+	if _, err := client.ExchangeDNS(ctx, token, state.Epoch, "not-the-revision", []byte("q")); err == nil {
+		t.Fatal("stale revision was answered")
+	}
+	// Oversized body is bounded.
+	if _, err := client.ExchangeDNS(ctx, token, state.Epoch, state.Revision, make([]byte, MaxDNSBody+1)); err == nil {
+		t.Fatal("oversized DNS body accepted")
+	}
+	// The share token is not accepted on this endpoint either.
+	if _, err := client.ExchangeDNS(ctx, fx.code.Token, state.Epoch, state.Revision, []byte("q")); err == nil {
+		t.Fatal("share token authenticated a client endpoint")
+	}
+}

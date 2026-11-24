@@ -265,21 +265,24 @@ func (c *Client) Resources(ctx context.Context, token, etag string) (*ResourcesR
 	return &out, false, nil
 }
 
-// ExchangeDNS asks the sharing host to resolve one internal name.
+// ExchangeDNS asks the sharing host to resolve one internal name. The body is a
+// raw DNS message; epoch and revision travel in the protocol headers, so a stale
+// client is refused instead of being served from newer authorization.
 func (c *Client) ExchangeDNS(ctx context.Context, token string, epoch uint64, revision string, query []byte) ([]byte, error) {
-	body := DNSRequest{Epoch: epoch, Revision: revision, Query: query}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/v1/dns-query", nil)
+	if len(query) == 0 || len(query) > MaxDNSBody {
+		return nil, NewError(CodeInvalidRequest, "DNS 查询大小无效")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/v1/dns-query", bytes.NewReader(query))
 	if err != nil {
 		return nil, err
 	}
-	data, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	req.Body = io.NopCloser(bytes.NewReader(data))
-	req.ContentLength = int64(len(data))
 	c.setHeaders(req)
+	req.Header.Set("Content-Type", DNSMediaType)
 	req.Header.Set(HeaderAuthorization, "Bearer "+token)
+	req.Header.Set(HeaderShareEpoch, itoa(int(epoch)))
+	if revision != "" {
+		req.Header.Set(HeaderResourceRev, revision)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, NewError(CodeTargetUnreachable, "无法连接分享主机：%v", err)

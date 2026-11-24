@@ -146,13 +146,6 @@ type ResourcesResponse struct {
 	Resources *ResourceSnapshot `json:"resources"`
 }
 
-// DNSRequest is one bounded DNS question for the share's source.
-type DNSRequest struct {
-	Epoch    uint64 `json:"epoch"`
-	Revision string `json:"revision"`
-	Query    []byte `json:"query"`
-}
-
 // SourceSnapshot is what the sharing host may publish at one moment: the epoch,
 // the effective revision and the rules behind them.
 type SourceSnapshot struct {

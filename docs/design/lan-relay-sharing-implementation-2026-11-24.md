@@ -534,6 +534,7 @@ go test -race ./internal/relay ./internal/vpn ./internal/store
 - **恢复策略边界**：`TestBlockedNeedsExplicitRetry` 证明 Blocked 不会被 2 秒巡检偷偷拉起，只能由「重试恢复」推进；`TestRestoreBindConflictIsBlocked` 证明端口冲突在恢复路径是 Blocked 而不是静默换端口。
 - **B 端重启保护**：`TestLoadRelayKnownProtectsAcrossRestart` 在同一个数据目录上重开 store/manager，证明缓存会把托管目标判为「不可直连」，而缓存缺失（标记仍在）会把门控打开。
 - **真实 Store 适配器**：`TestLANShareSurvivesRestartThroughRealStore` 用 `store.RelayShareStore` + 真实监听完成 开启 → 关闭应用 → 重开 → 恢复同一身份/地址/端口 → 客户端可建立隧道 → 关闭共享 → 重启保持关闭；`TestLANShareRestoreWaitsWithoutVPNThroughRealStore` 覆盖同一适配器下的 Waiting → 就绪恢复。`TestRelayShareSettingsDoNotLeakSecretsIntoConfig` 证明口令不写进 config.json。
+- **DNS 不是开放解析器**：`TestRelayShareSourceDNSIsScoped` 证明只解析该接入点声明的域名/静态记录，公网名字被 `dns_unauthorized` 拒绝且**没有到达 VPN 会话**；传输区、多问题、非查询报文在进入会话前就被拒绝。服务端的 `TestDNSRequestBinding` 证明 `/v1/dns-query` 用裸 `application/dns-message` 请求体、epoch/revision 走协议头，过期代次/版本被拒，且分享 token 不能用于该客户端端点。
 - **诊断**：正确 pin 全链路通过；错误 pin 停在身份阶段；端口拒绝不被写成防火墙结论；越权目标给出确定结论。
 
 已执行命令与结果：

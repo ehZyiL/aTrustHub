@@ -354,6 +354,12 @@ func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	// The documented v1 body is a raw DNS message; epoch and revision travel in
+	// the protocol headers so the query itself stays a standard wire format.
+	if ct := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type"))); ct != "" && ct != DNSMediaType {
+		writeError(w, NewError(CodeInvalidRequest, "DNS 查询必须是 %s", DNSMediaType))
+		return
+	}
 	snap, err := s.snapshot(r.Context())
 	if err != nil {
 		writeError(w, err)
@@ -363,25 +369,23 @@ func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, NewError(CodeProtocolUnsupported, "分享主机不支持内网 DNS 查询"))
 		return
 	}
-	body, err := readBounded(r.Body, MaxDNSBody)
+	if got := strings.TrimSpace(r.Header.Get(HeaderShareEpoch)); got != "" {
+		if n, perr := strconv.ParseUint(got, 10, 64); perr != nil || n != snap.Epoch {
+			writeError(w, NewError(CodeStaleResources, "资源版本已变化，请刷新后重试"))
+			return
+		}
+	}
+	if rev := strings.TrimSpace(r.Header.Get(HeaderResourceRev)); rev != "" && rev != snap.Revision {
+		writeError(w, NewError(CodeStaleResources, "资源版本已变化，请刷新后重试"))
+		return
+	}
+	query, err := readBounded(r.Body, MaxDNSBody)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	var req DNSRequest
-	if len(body) > 0 {
-		if err := decodeStrictJSON(body, &req); err != nil {
-			writeError(w, err)
-			return
-		}
-	}
-	if len(req.Query) == 0 {
-		// Allow the raw application/dns-message form too; both are bounded.
+	if len(query) == 0 {
 		writeError(w, NewError(CodeInvalidRequest, "DNS 查询为空"))
-		return
-	}
-	if req.Epoch != 0 && req.Epoch != snap.Epoch || req.Revision != "" && req.Revision != snap.Revision {
-		writeError(w, NewError(CodeStaleResources, "资源版本已变化，请刷新后重试"))
 		return
 	}
 	release, err := s.dnsSlots.acquire(c.token)
@@ -392,7 +396,7 @@ func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
 	defer release()
 	ctx, cancel := context.WithTimeout(r.Context(), ControlTimeout)
 	defer cancel()
-	answer, err := s.source.ExchangeDNS(ctx, snap.Revision, req.Query)
+	answer, err := s.source.ExchangeDNS(ctx, snap.Revision, query)
 	if err != nil {
 		writeError(w, err)
 		return

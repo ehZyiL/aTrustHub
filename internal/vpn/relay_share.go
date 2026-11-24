@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/ehzyil/connect-hub/internal/relay"
 	"github.com/ehzyil/connect-hub/internal/routing"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
+	"github.com/miekg/dns"
 )
 
 // ErrRelaySourceUnavailable says the access point cannot be shared right now:
@@ -244,6 +246,10 @@ func (s *RelayShareSource) ExchangeDNS(ctx context.Context, revision string, que
 	if len(query) == 0 || len(query) > relay.MaxDNSBody {
 		return nil, relay.NewError(relay.CodeInvalidRequest, "DNS 查询大小无效")
 	}
+	question, err := shareDNSQuestion(query)
+	if err != nil {
+		return nil, err
+	}
 	m := s.m
 	m.mu.RLock()
 	ep := s.currentLocked()
@@ -252,9 +258,15 @@ func (s *RelayShareSource) ExchangeDNS(ctx context.Context, revision string, que
 		return nil, relay.NewError(relay.CodeVPNUnavailable, "分享接入点已断开")
 	}
 	currentRevision := ep.shareRevision
+	resources := ep.info.Resources
 	m.mu.RUnlock()
 	if revision != "" && currentRevision != "" && revision != currentRevision {
 		return nil, relay.NewError(relay.CodeStaleResources, "资源版本已变化，请刷新后重试")
+	}
+	// The share is not an open resolver: only names this access point actually
+	// declares may be resolved through it.
+	if !shareOwnsName(resources, question) {
+		return nil, relay.NewError(relay.CodeDNSUnauthorized, "该名称不属于此分享范围")
 	}
 	answer, err := exchanger.ExchangeDNS(ctx, query)
 	if err != nil {
@@ -356,4 +368,59 @@ func (m *Manager) ShareSourceRevision(pointID string) string {
 		return ep.shareRevision
 	}
 	return ""
+}
+
+// shareDNSQuestion validates one DNS message before it may reach the bound
+// session: query only, one question, IN class, no zone transfer and no TSIG.
+func shareDNSQuestion(packet []byte) (string, error) {
+	var msg dns.Msg
+	if err := msg.Unpack(packet); err != nil {
+		return "", relay.NewError(relay.CodeInvalidRequest, "DNS 查询无法解析")
+	}
+	if msg.Response || msg.Opcode != dns.OpcodeQuery {
+		return "", relay.NewError(relay.CodeInvalidRequest, "只接受 DNS 查询")
+	}
+	if len(msg.Question) != 1 {
+		return "", relay.NewError(relay.CodeInvalidRequest, "只接受单个问题的 DNS 查询")
+	}
+	q := msg.Question[0]
+	if q.Qclass != dns.ClassINET {
+		return "", relay.NewError(relay.CodeInvalidRequest, "只接受 IN class 的 DNS 查询")
+	}
+	if q.Qtype == dns.TypeAXFR || q.Qtype == dns.TypeIXFR {
+		return "", relay.NewError(relay.CodeInvalidRequest, "不接受传输区查询")
+	}
+	if msg.IsTsig() != nil {
+		return "", relay.NewError(relay.CodeInvalidRequest, "不接受 TSIG 签名查询")
+	}
+	name, err := routing.NormalizeHost(strings.TrimSuffix(q.Name, "."))
+	if err != nil || name == "" {
+		return "", relay.NewError(relay.CodeDNSUnauthorized, "DNS 查询名称无效")
+	}
+	return name, nil
+}
+
+// shareOwnsName reports whether the snapshot declares name. Static DNS and the
+// internal-domain list grant attribution only; the session still validates the
+// resolved answer and the business port.
+func shareOwnsName(resources *workeripc.ResourceSnapshot, name string) bool {
+	if resources == nil {
+		return false
+	}
+	for _, rule := range resources.DomainRules {
+		if routing.DomainSpecificity(rule.Domain, name) > 0 {
+			return true
+		}
+	}
+	for _, suffix := range resources.InternalDomains {
+		if routing.DomainSpecificity(suffix, name) > 0 {
+			return true
+		}
+	}
+	for _, record := range resources.StaticDNS {
+		if strings.TrimSuffix(strings.ToLower(record.Name), ".") == name {
+			return true
+		}
+	}
+	return false
 }

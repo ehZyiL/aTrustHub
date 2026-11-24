@@ -14,6 +14,7 @@ import (
 	"github.com/ehzyil/connect-hub/internal/relay"
 	"github.com/ehzyil/connect-hub/internal/routing"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
+	"github.com/miekg/dns"
 )
 
 func shareTestResources() *workeripc.ResourceSnapshot {
@@ -41,7 +42,7 @@ func startShareTestPoint(t *testing.T, cfg model.Config) (*Manager, *fakeConnect
 // startShareTestPointWithSession connects a session whose Info already carries
 // the resources. Mutating Info after Connect would race with the manager's own
 // read of it, which is a test artifact, not a production path.
-func startShareTestPointWithSession(t *testing.T, cfg model.Config, sess *fakeSession) (*Manager, *fakeConnector) {
+func startShareTestPointWithSession(t *testing.T, cfg model.Config, sess Session) (*Manager, *fakeConnector) {
 	t.Helper()
 	conn := &fakeConnector{}
 	m := newTestManager(t, func(context.Context, model.AccessPoint, Credentials) (Session, error) {
@@ -335,5 +336,98 @@ func TestNeedsRestartRelayIdentity(t *testing.T) {
 	}
 	if !needsRestart(base, model.AccessPoint{ID: "r1", Protocol: model.ProtocolATrust}) {
 		t.Fatal("dropping the relay metadata must reconnect")
+	}
+}
+
+// dnsCapableSession implements DNSExchanger so the share's DNS scope can be
+// exercised without a real VPN.
+type dnsCapableSession struct {
+	*fakeSession
+	mu      sync.Mutex
+	queries int
+}
+
+func (d *dnsCapableSession) ExchangeDNS(ctx context.Context, packet []byte) ([]byte, error) {
+	d.mu.Lock()
+	d.queries++
+	d.mu.Unlock()
+	answer := new(dns.Msg)
+	if err := answer.Unpack(packet); err != nil {
+		return nil, err
+	}
+	answer.Response = true
+	return answer.Pack()
+}
+
+func dnsQuery(t *testing.T, name string) []byte {
+	t.Helper()
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(name), dns.TypeA)
+	packet, err := m.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return packet
+}
+
+// TestRelayShareSourceDNSIsScoped proves the share is not an open resolver: only
+// names the access point declares may be resolved through it, and only valid
+// single-question IN queries are accepted.
+func TestRelayShareSourceDNSIsScoped(t *testing.T) {
+	sess := &dnsCapableSession{fakeSession: newFakeSession("p1")}
+	sess.info.Resources = shareTestResources()
+	m, _ := startShareTestPointWithSession(t, sharePointConfig(), sess)
+	src, err := m.AcquireRelayShareSource("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	snap, err := src.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snap.Capabilities.InternalDNS {
+		t.Fatal("internal DNS should be declared for a DNS-capable session")
+	}
+
+	// Declared names: a domain rule and a static record.
+	for _, name := range []string{"git.corp.test", "corp.test", "other.corp.test"} {
+		if _, err := src.ExchangeDNS(context.Background(), snap.Revision, dnsQuery(t, name)); err != nil {
+			t.Fatalf("%s should resolve through the share: %v", name, err)
+		}
+	}
+	// A public name is not part of the share: refused and never queried.
+	before := sess.queries
+	if _, err := src.ExchangeDNS(context.Background(), snap.Revision, dnsQuery(t, "example.com")); err == nil {
+		t.Fatal("public name resolved through the share")
+	} else {
+		var re *relay.Error
+		if !errors.As(err, &re) || re.Code != relay.CodeDNSUnauthorized {
+			t.Fatalf("want dns_unauthorized, got %v", err)
+		}
+	}
+	if sess.queries != before {
+		t.Fatal("a refused name reached the VPN session")
+	}
+
+	// Zone transfers, multiple questions and non-query messages are refused
+	// before the session sees them.
+	transfer := new(dns.Msg)
+	transfer.SetQuestion(dns.Fqdn("corp.test"), dns.TypeAXFR)
+	packet, _ := transfer.Pack()
+	if _, err := src.ExchangeDNS(context.Background(), snap.Revision, packet); err == nil {
+		t.Fatal("zone transfer accepted")
+	}
+	multi := new(dns.Msg)
+	multi.Question = []dns.Question{
+		{Name: dns.Fqdn("corp.test"), Qtype: dns.TypeA, Qclass: dns.ClassINET},
+		{Name: dns.Fqdn("git.corp.test"), Qtype: dns.TypeA, Qclass: dns.ClassINET},
+	}
+	packet, _ = multi.Pack()
+	if _, err := src.ExchangeDNS(context.Background(), snap.Revision, packet); err == nil {
+		t.Fatal("multi-question DNS accepted")
+	}
+	if sess.queries != before {
+		t.Fatalf("invalid DNS queries reached the session: %d → %d", before, sess.queries)
 	}
 }

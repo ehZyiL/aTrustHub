@@ -147,6 +147,10 @@ func TestLANShareSurvivesRestartThroughRealStore(t *testing.T) {
 	defer closeEcho()
 	sink := &integrationSink{names: map[string]string{"a1": "公司 VPN"}, echo: echo}
 
+	// Enabling a share must not touch the local proxy entry the user relies on.
+	proxyBefore := st.Config().Settings
+	proxyBeforeCopy := proxyBefore.Clone()
+
 	ctrl := relay.NewController(store.RelayShareStore{Store: st}, sink, loopbackNet{}, nil, nil)
 	ctx := context.Background()
 	if err := ctrl.Restore(ctx); err != nil {
@@ -177,6 +181,13 @@ func TestLANShareSurvivesRestartThroughRealStore(t *testing.T) {
 	}
 	if _, err := adapter.GetSecret(relay.ShareTokenKey(shareID)); err != nil {
 		t.Fatalf("share token not in the credential store: %v", err)
+	}
+	afterEnable := st.Config().Settings
+	if afterEnable.ListenHost != proxyBeforeCopy.ListenHost ||
+		afterEnable.AggregatePort != proxyBeforeCopy.AggregatePort ||
+		afterEnable.AggregateEnabled != proxyBeforeCopy.AggregateEnabled ||
+		afterEnable.ProxyPassword != proxyBeforeCopy.ProxyPassword {
+		t.Fatalf("enabling a share changed the local proxy settings: %+v → %+v", proxyBeforeCopy, afterEnable)
 	}
 
 	if err := ctrl.Shutdown(ctx); err != nil {
@@ -244,6 +255,12 @@ func TestLANShareSurvivesRestartThroughRealStore(t *testing.T) {
 	adapter2 := store.RelayShareStore{Store: st2}
 	if adapter2.ShareSettings().Enabled {
 		t.Fatal("Disable did not persist Enabled=false")
+	}
+	afterDisable := st2.Config().Settings
+	if afterDisable.ListenHost != proxyBeforeCopy.ListenHost ||
+		afterDisable.AggregatePort != proxyBeforeCopy.AggregatePort ||
+		afterDisable.AggregateEnabled != proxyBeforeCopy.AggregateEnabled {
+		t.Fatalf("disabling a share changed the local proxy settings: %+v", afterDisable)
 	}
 	if _, err := adapter2.GetSecret(relay.ShareTokenKey(shareID)); err == nil {
 		t.Fatal("the share token survived a deliberate disable")

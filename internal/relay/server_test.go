@@ -632,3 +632,31 @@ func TestConnectRefusesRequestBody(t *testing.T) {
 		t.Fatalf("a rejected CONNECT reached the source: %v", got)
 	}
 }
+
+// TestClientTransportIsDirectAndPinned: the share client must not pick up a
+// proxy environment, HTTP/2 or a non-pinned TLS path.
+func TestClientTransportIsDirectAndPinned(t *testing.T) {
+	code := ShareCode{Version: 1, Host: "192.168.1.50", Port: 23456,
+		ShareID: "sid", Token: "tok", Fingerprint: strings.Repeat("ab", 32)}
+	client, err := NewClient(ClientOptions{Code: code})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	transport := client.transport
+	if transport.Proxy != nil {
+		t.Fatal("the share client may use a system proxy")
+	}
+	if transport.DialContext == nil {
+		t.Fatal("the share client must dial only through the injected dialer")
+	}
+	if transport.ForceAttemptHTTP2 {
+		t.Fatal("v1 must stay on HTTP/1.1")
+	}
+	if transport.TLSClientConfig == nil || transport.TLSClientConfig.VerifyConnection == nil {
+		t.Fatal("the share client must verify the pinned certificate")
+	}
+	if transport.TLSClientConfig.MinVersion != tls.VersionTLS13 {
+		t.Fatalf("MinVersion = %x", transport.TLSClientConfig.MinVersion)
+	}
+}

@@ -459,3 +459,79 @@ func TestBlockedRelayNodeSkipsAutoConnect(t *testing.T) {
 		t.Fatal("unblock did not take effect")
 	}
 }
+
+// terminalSession ends immediately with a terminal share error, which is what a
+// revoked token looks like to the Manager.
+type terminalSession struct {
+	*fakeSession
+	done chan struct{}
+	err  error
+}
+
+func (t *terminalSession) Done() <-chan struct{} { return t.done }
+func (t *terminalSession) Err() error            { return t.err }
+
+// TestTerminalShareErrorStopsAutoReconnect: a revoked or closed share must not be
+// retried every few seconds by the generic AutoReconnect policy.
+func TestTerminalShareErrorStopsAutoReconnect(t *testing.T) {
+	point := model.AccessPoint{
+		ID: "r1", Name: "同事分享", Protocol: model.ProtocolLANRelay,
+		Server: "192.168.1.50", Port: 23456, InPool: true, AutoConnect: true,
+		Relay: &model.RelayPointOptions{Version: 1, ShareID: base64Raw16(), CertificateSHA256: strings.Repeat("ab", 32)},
+	}
+	cfg := testConfig(point)
+	cfg.Settings.AutoReconnect = true
+	var mu sync.Mutex
+	attempts := 0
+	m := newTestManager(t, func(context.Context, model.AccessPoint, Credentials) (Session, error) {
+		mu.Lock()
+		attempts++
+		mu.Unlock()
+		s := &terminalSession{
+			fakeSession: newFakeSession("r1"),
+			done:        make(chan struct{}),
+			err:         &relay.Error{Code: relay.CodeShareClosed, Message: "分享已关闭"},
+		}
+		close(s.done)
+		return s, nil
+	}, cfg)
+	m.reconnectDelay = 50 * time.Millisecond
+	m.ConnectAll(true)
+	waitFor(t, "first attempt", func() bool { mu.Lock(); defer mu.Unlock(); return attempts == 1 })
+	waitFor(t, "terminal state", func() bool {
+		v, ok := m.View("r1")
+		return ok && v.State == StateError
+	})
+	time.Sleep(400 * time.Millisecond)
+	mu.Lock()
+	got := attempts
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("terminal share error was retried: %d attempts", got)
+	}
+
+	// A transient error keeps the bounded AutoReconnect behaviour.
+	var mu2 sync.Mutex
+	transient := 0
+	point2 := point
+	point2.ID = "r2"
+	cfg2 := testConfig(point2)
+	cfg2.Settings.AutoReconnect = true
+	m2 := newTestManager(t, func(context.Context, model.AccessPoint, Credentials) (Session, error) {
+		mu2.Lock()
+		transient++
+		count := transient
+		mu2.Unlock()
+		s := &terminalSession{
+			fakeSession: newFakeSession("r2"),
+			done:        make(chan struct{}),
+			err:         &relay.Error{Code: relay.CodeTargetUnreachable, Message: "网络中断", Retryable: true},
+		}
+		close(s.done)
+		_ = count
+		return s, nil
+	}, cfg2)
+	m2.reconnectDelay = 30 * time.Millisecond
+	m2.ConnectAll(true)
+	waitFor(t, "transient retries", func() bool { mu2.Lock(); defer mu2.Unlock(); return transient >= 2 })
+}

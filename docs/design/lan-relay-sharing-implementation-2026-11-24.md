@@ -522,6 +522,8 @@ go test -race ./internal/relay ./internal/vpn ./internal/store
 - **已知资源断线后不自动直连**：`TestHeadlessLanRelayEndToEnd` 末段与 `TestSeedRelayKnownOnlyBlocksDirect` 证明 Known 归属只阻止直连、不授予拨号；`TestRelayHistoryGateBlocksUnknownTargets` 证明缓存不可信时未知目标被拒绝直连。
 - **口令严格性**：`sharecode_test.go` 覆盖填充、非规范 Base64、重复/未知键、尾随 JSON、类型错误、端口溢出、非 RFC1918、控制字符、超长输入、fuzz 不 panic。
 - **TLS**：正确 pin 通过；错误 pin、过期/未生效、用途错误、地址不符、缺失对端证书全部拒绝；`TestWrongPinNeverSeesTheToken` 证明指纹不匹配时对端根本没收到请求。
+- **重连分类**：`TestTerminalShareErrorStopsAutoReconnect` 证明撤销/关闭/协议不兼容这类终态错误不会被 `AutoReconnect` 每 5 秒无限重试，而可重试错误仍然重连。
+- **不动本地代理**：真实 Store 集成测试断言开启与关闭前后 `ListenHost`、`AggregatePort`、`AggregateEnabled`、代理密码完全不变；`TestClientTransportIsDirectAndPinned` 断言分享客户端 `Proxy=nil`、只走注入的原网络 dialer、不开 HTTP/2、TLS≥1.3 且必须验证 pin。
 - **租约与限额**：`TestClientLeaseExpiry`、`TestConcurrentConnectLimitIsBounded`、`TestSessionCreationBodyBound`。
 - **撤销的拨号竞态**：`TestRevocationCancelsPendingDial` 证明关闭共享会中止**尚未完成**的拨号（服务端 lifecycle context），而不是等它成功后变成隧道。
 - **持久化失败回滚**：`TestEnableRollsBackWhenSecretsCannotBeStored`（身份/口令写不进凭据库 → 不监听、不落 Enabled、不留半份秘密、重试可用）、`TestRetryPersistDisableCompletesTheClose`（禁用保存失败后「重试保存关闭状态」成功才删除恢复身份，重启保持关闭）。

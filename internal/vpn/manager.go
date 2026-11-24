@@ -231,6 +231,9 @@ type Manager struct {
 	// verified out of the automatic login set. A manual login still works, so
 	// the user can repair the node without losing control of it.
 	autoConnectBlocked map[string]bool
+	// reconnectDelay overrides the post-failure retry delay. Zero means 5s;
+	// tests shorten it so a retry policy can be observed quickly.
+	reconnectDelay time.Duration
 }
 
 type endpoint struct {
@@ -854,6 +857,12 @@ func (m *Manager) watch(id string, gen int, sess Session) {
 	msg := "连接已被服务器断开"
 	if err := w.Err(); err != nil {
 		msg = err.Error()
+		// A terminal share failure (revoked token, closed share, incompatible
+		// protocol) is not something a 5-second retry can fix: retrying forever
+		// would only spam the log and burn the host's auth budget.
+		if !RelayReconnectable(err) {
+			auto = false
+		}
 	}
 	cur.state = StateError
 	cur.errMsg = msg
@@ -877,7 +886,11 @@ func (m *Manager) watch(id string, gen int, sess Session) {
 	m.logf("[%s] %s", name, msg)
 	m.changed()
 	if auto {
-		m.reconnectAfter(id, 5*time.Second)
+		delay := 5 * time.Second
+		if d := m.reconnectDelay; d > 0 {
+			delay = d
+		}
+		m.reconnectAfter(id, delay)
 	}
 }
 

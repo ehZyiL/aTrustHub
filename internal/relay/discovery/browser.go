@@ -64,10 +64,9 @@ func NewBrowser(opts BrowserOptions) *Browser {
 // previous generation is closed first and its cache discarded.
 func (b *Browser) Start(ifaces []Interface) error {
 	b.mu.Lock()
-	if b.closed {
-		b.mu.Unlock()
-		return nil
-	}
+	// Close ends a browsing session, not the browser: reopening the page must
+	// work again (the app closes it whenever the dialog closes).
+	b.closed = false
 	old := b.session
 	oldCancel := b.cancel
 	b.gen++

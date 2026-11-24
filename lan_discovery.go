@@ -49,16 +49,20 @@ type lanDiscovery struct {
 type lanDiscoveryUI struct {
 	open bool
 	// tab is 0 for discovery and 1 for pasting a share code.
-	tab        int
-	ifaceName  string
-	busy       bool
-	err        string
-	snap       discovery.Snapshot
-	cands      []discovery.Candidate
-	pinnedKey  string
-	pinned     discovery.Candidate
-	notice     string
-	loadedOnce bool
+	tab       int
+	ifaceName string
+	busy      bool
+	err       string
+	snap      discovery.Snapshot
+	cands     []discovery.Candidate
+	notice    string
+	// searching is true during the first seconds of a browse: an empty list
+	// then means "still looking", not "there is nothing".
+	searching bool
+	startedAt time.Time
+	// searchWindow is how long an empty list reads as "still looking". It is a
+	// variable so tests can shorten it.
+	searchWindow time.Duration
 }
 
 // setupLANDiscovery builds the publisher and the browser. The browser emits
@@ -112,6 +116,9 @@ func (a *app) setupLANDiscovery() {
 				return
 			case <-d.kick:
 			case <-ticker.C:
+				// A frame at least every two seconds keeps the time-based UI
+				// state (the first-seconds "searching" text) from going stale.
+				a.invalidateCoalesced()
 			}
 			a.syncLANDiscovery()
 		}
@@ -244,7 +251,10 @@ func (a *app) retryLANDiscoveryPreference() error {
 	if d == nil || a.lanShare == nil {
 		return fmt.Errorf("发现尚未初始化")
 	}
-	if err := a.lanShare.SetDiscovery(false, ""); err != nil {
+	// The retry only re-attempts the write; the public name the user chose
+	// must survive it.
+	name := a.lanShare.Settings().DiscoveryName
+	if err := a.lanShare.SetDiscovery(false, name); err != nil {
 		return err
 	}
 	d.mu.Lock()
@@ -309,8 +319,7 @@ func (a *app) closeLANDiscovery() {
 		return
 	}
 	d.ui.open = false
-	d.ui.pinned = discovery.Candidate{}
-	d.ui.pinnedKey = ""
+	d.ui.searching = false
 	d.ui.cands = nil
 	_ = d.browser.Close()
 }
@@ -326,7 +335,8 @@ func (a *app) startLANDiscoveryBrowsing() {
 	d.ui.notice = ""
 	d.ui.cands = nil
 	d.ui.snap = discovery.Snapshot{}
-	d.ui.loadedOnce = true
+	d.ui.searching = true
+	d.ui.startedAt = time.Now()
 	if err := d.browser.Start(ifaces); err != nil {
 		d.ui.err = err.Error()
 	}
@@ -364,36 +374,25 @@ func (a *app) setLANDiscoveryInterface(name string) {
 // only writer of the list, which keeps the UI free of locking.
 func (a *app) drainLANDiscovery() {
 	d := a.lanDisc
-	if d == nil {
+	if d == nil || !d.ui.open {
 		return
 	}
 	d.mu.Lock()
 	snap := d.pending
 	d.pending = nil
 	d.mu.Unlock()
-	if snap == nil || !d.ui.open {
-		return
-	}
-	if d.ui.snap.Generation != 0 && snap.Generation < d.ui.snap.Generation {
+	if snap != nil && (d.ui.snap.Generation == 0 || snap.Generation >= d.ui.snap.Generation) {
 		// A snapshot from an older generation must not overwrite a newer list.
-		return
+		d.ui.snap = *snap
+		d.ui.cands = snap.Candidates
 	}
-	d.ui.snap = *snap
-	d.ui.cands = snap.Candidates
-	if d.ui.pinnedKey != "" {
-		found := false
-		for _, cand := range snap.Candidates {
-			if cand.Key() == d.ui.pinnedKey {
-				d.ui.pinned = cand
-				found = true
-			}
-		}
-		if !found {
-			// The share went away: keep the dialog usable for pasting a code
-			// but do not pretend the candidate is still there.
-			d.ui.pinned = discovery.Candidate{}
-		}
+	// The "still looking" flag is time-based, so it is recomputed on every frame
+	// instead of only when a snapshot arrives.
+	window := d.ui.searchWindow
+	if window <= 0 {
+		window = 5 * time.Second
 	}
+	d.ui.searching = len(d.ui.cands) == 0 && time.Since(d.ui.startedAt) < window
 }
 
 // ---- host panel ----------------------------------------------------------
@@ -557,8 +556,14 @@ func (a *app) relayDiscoveryBody(c *ui.Context, d *relayImportDraft) {
 		})
 	}
 	if len(disc.ui.cands) == 0 {
-		ui.Text(c, "暂未发现分享。请确认主机已开启共享并允许被发现；也可以粘贴分享口令。").
-			FontSize(11).TextColor(t.TextMuted).Wrap()
+		// The first seconds must not claim "nothing there": multicast answers
+		// take a moment, and a premature empty state reads as "it is broken".
+		if disc.ui.searching {
+			ui.Text(c, "正在查找局域网分享…").FontSize(12).TextColor(t.TextMuted)
+		} else {
+			ui.Text(c, "暂未发现分享。请确认主机已开启共享并允许被发现；也可以粘贴分享口令。").
+				FontSize(11).TextColor(t.TextMuted).Wrap()
+		}
 		return
 	}
 	for _, cand := range disc.ui.cands {
@@ -586,7 +591,7 @@ func (a *app) relayDiscoveryBody(c *ui.Context, d *relayImportDraft) {
 // relayDiscoveryAction renders 加入 / 已导入 / 地址不同 for one candidate.
 func (a *app) relayDiscoveryAction(c *ui.Context, d *relayImportDraft, cand discovery.Candidate) {
 	t := c.Theme()
-	if existing, sameEndpoint := a.findRelayPointByShareID(cand.ShareID); existing != nil {
+	if existing, sameEndpoint := a.findRelayPointByShareID(cand); existing != nil {
 		if sameEndpoint {
 			ui.Text(c, "已导入，待验证").FontSize(11).TextColor(t.TextMuted)
 			if ui.Button(c, "连接").FontSize(11).Clicked() {
@@ -632,13 +637,28 @@ func (a *app) discoveryInterfaceChoices() ([]string, map[string]string) {
 // reports whether its saved endpoint equals the discovered one. A match is a
 // convenience, never proof of identity: the saved fingerprint and credentials
 // still decide the connection.
-func (a *app) findRelayPointByShareID(shareID string) (*model.AccessPoint, bool) {
+func (a *app) findRelayPointByShareID(cand discovery.Candidate) (*model.AccessPoint, bool) {
 	for i := range a.cfg.Points {
 		p := &a.cfg.Points[i]
-		if p.Protocol != model.ProtocolLANRelay || p.Relay == nil || p.Relay.ShareID != shareID {
+		if p.Protocol != model.ProtocolLANRelay || p.Relay == nil || p.Relay.ShareID != cand.ShareID {
 			continue
 		}
-		return p, true
+		// Only an identical endpoint may reuse the saved node. A different
+		// address is a different offer that needs a fresh code.
+		return p, p.Server == cand.Address && p.Port == cand.Port
 	}
 	return nil, false
+}
+
+// discoveryNamePlaceholder is the example shown in the name field. It must be
+// stable across frames: a random example would flicker on every render.
+func (a *app) discoveryNamePlaceholder() string {
+	shareID := ""
+	if a.lanShare != nil {
+		shareID = a.lanShare.Settings().ShareID
+	}
+	if shareID == "" {
+		return "例如：会议室共享"
+	}
+	return model.DefaultDiscoveryName(shareID)
 }

@@ -746,3 +746,30 @@ func TestBrowserCloseWithPacketsInFlight(t *testing.T) {
 	close(done)
 	_ = ann
 }
+
+// Review: closing the page closed the browser for good, so reopening the dialog
+// never discovered anything again. Start must reopen a closed browser.
+func TestBrowserReopensAfterClose(t *testing.T) {
+	hub := newHub()
+	backend := newHubBackend(hub)
+	b := NewBrowser(BrowserOptions{Backend: backend, Emit: func(Snapshot) {}})
+	defer b.Close()
+	if err := b.Start([]Interface{testInterface("en0")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Start([]Interface{testInterface("en0")}); err != nil {
+		t.Fatalf("重新打开浏览失败：%v", err)
+	}
+	ann := testAnnouncement(1, "共享")
+	// A real announcement travels through the hub, so this also proves the
+	// session was actually rebuilt.
+	reg, err := backend.Advertise(context.Background(), ann)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reg.Close()
+	waitFor(t, "candidate after reopen", func() bool { return len(b.Snapshot().Candidates) == 1 })
+}

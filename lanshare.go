@@ -719,7 +719,7 @@ func (a *app) lanShareEnableForm(c *ui.Context, d *lanShareDraft) {
 		if d.discovery {
 			ui.Field(c, "公开名称", func() {
 				ui.TextInput(c, &d.discoveryName).
-					Placeholder(model.DefaultDiscoveryName(model.NewID()[:6])).
+					Placeholder(a.discoveryNamePlaceholder()).
 					Width(320).Changed()
 				ui.Text(c, "留空使用默认名称；不会使用 VPN 名称、账号或计算机名。").
 					FontSize(11).TextColor(c.Theme().TextMuted).Wrap()

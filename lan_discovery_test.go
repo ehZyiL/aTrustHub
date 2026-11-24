@@ -471,11 +471,33 @@ func TestAcceptanceDiscoveryDoesNotTouchSavedNodes(t *testing.T) {
 		got.Relay == nil || saved.Relay == nil || got.Relay.CertificateSHA256 != saved.Relay.CertificateSHA256 {
 		t.Fatalf("发现改写了已保存的节点：%+v", got)
 	}
-	if existing, same := a.findRelayPointByShareID(code.ShareID); existing == nil || !same {
-		t.Fatal("已导入节点应当匹配")
+	// The forged endpoint (another address and port) must be reported as a
+	// different offer, not as the imported node.
+	forged := discovery.Candidate{ShareID: code.ShareID, Address: "192.168.31.240", Port: 29999}
+	if existing, same := a.findRelayPointByShareID(forged); existing == nil || same {
+		t.Fatalf("地址不同的候选被当成了已导入节点：%v %v", existing, same)
 	}
-	if existing, _ := a.findRelayPointByShareID(code.ShareID); existing.Server != code.Host {
+	// The saved endpoint still matches exactly.
+	savedCand := discovery.Candidate{ShareID: code.ShareID, Address: code.Host, Port: code.Port}
+	existing, same := a.findRelayPointByShareID(savedCand)
+	if existing == nil || !same {
+		t.Fatal("已保存的 endpoint 应当匹配")
+	}
+	if existing.Server != code.Host {
 		t.Fatalf("匹配改动了已保存地址：%s", existing.Server)
+	}
+	a.relayImport.open = true
+	a.relayImport.tab = 0
+	a.drainLANDiscovery()
+	tt := ui.NewTester(a.view, 1120, 800)
+	texts := strings.Join(tt.Texts(), "|")
+	if !strings.Contains(texts, "地址不同") {
+		t.Fatalf("界面没有提示地址不同：%s", texts)
+	}
+	for _, bad := range []string{"已导入，待验证"} {
+		if strings.Contains(texts, bad) {
+			t.Fatalf("地址不同的候选被显示成 %q", bad)
+		}
 	}
 }
 
@@ -556,5 +578,56 @@ func TestAcceptanceMacPackageDeclaresDiscovery(t *testing.T) {
 	// The declared service type must match the one the code browses.
 	if !strings.Contains(text, strings.TrimSuffix(discovery.ServiceType, ".local.")) {
 		t.Errorf("打包脚本里的服务类型与 discovery.ServiceType 不一致")
+	}
+}
+
+// A9/E30 (spec §9.1.3): the first seconds must read as "still searching", not
+// as "there is nothing", and the transition must happen without a user action.
+func TestAcceptanceFirstSecondsReadAsSearching(t *testing.T) {
+	a, _, _ := discoveryApp(t)
+	a.lanDisc.ui.searchWindow = 40 * time.Millisecond
+	a.openRelayImport()
+	a.relayImport.tab = 0
+	a.drainLANDiscovery()
+	tt := ui.NewTester(a.view, 1120, 800)
+	texts := strings.Join(tt.Texts(), "|")
+	if !strings.Contains(texts, "正在查找局域网分享") {
+		t.Fatalf("首轮没有搜索提示：%s", texts)
+	}
+	if strings.Contains(texts, "暂未发现分享") {
+		t.Fatalf("首轮过早判定没有分享：%s", texts)
+	}
+	// After the window, the honest empty state takes over on the next frame.
+	time.Sleep(60 * time.Millisecond)
+	a.drainLANDiscovery()
+	a.invalidate()
+	tt = ui.NewTester(a.view, 1120, 800)
+	texts = strings.Join(tt.Texts(), "|")
+	if !strings.Contains(texts, "暂未发现分享") {
+		t.Fatalf("搜索窗口结束后没有空态：%s", texts)
+	}
+}
+
+// A6 (spec §4): a failed "off" save keeps the name the user chose, so a retry
+// does not silently drop it.
+func TestAcceptanceRetryKeepsThePublicName(t *testing.T) {
+	a, _, iface := discoveryApp(t)
+	enableShare(t, a, iface, true, "会议室")
+	unblock := blockStoreSaves(t, a)
+	if err := a.setLANDiscoveryPreference(false, ""); err == nil {
+		t.Fatal("保存失败时应当返回错误")
+	}
+	if name := a.lanShare.Settings().DiscoveryName; name != "会议室" {
+		t.Fatalf("保存失败后名称丢了：%q", name)
+	}
+	unblock()
+	if err := a.retryLANDiscoveryPreference(); err != nil {
+		t.Fatal(err)
+	}
+	if name := a.lanShare.Settings().DiscoveryName; name != "会议室" {
+		t.Fatalf("重试后名称丢了：%q", name)
+	}
+	if got := a.store.Config().Settings.LANShare.DiscoveryName; got != "会议室" {
+		t.Fatalf("落盘的名称不对：%q", got)
 	}
 }

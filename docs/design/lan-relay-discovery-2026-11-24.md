@@ -200,3 +200,16 @@ env GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./...
 - 收到的公告只是「线索」：不做 TCP 探测、不读凭据、不写配置；加入必须另有口令。
 - 伪造同 sid 的不同 endpoint 不会覆盖已保存节点，也不会获得旧 token。
 - 接收侧不解析任意域名、不做 DNS 递归、不接受公网地址。
+
+## 11. 复审记录
+
+### 11.1 第一轮（标准 + 规格覆盖）
+
+| 编号 | 轴 | 问题 | 证据 | 修复 |
+| --- | --- | --- | --- | --- |
+| R1-1 [P1] | 标准 | `Browser.Close` 之后 `Start` 直接返回，**关闭一次弹窗后再也发现不了** | `TestBrowserReopensAfterClose`（旧行为：重开后收到公告但列表为空） | `Start` 重新打开浏览器；关闭只结束当前浏览会话 |
+| R1-2 [P2] | 规格 | `findRelayPointByShareID` 恒返回 `same=true`，「地址不同，需新口令核对」分支不可达，地址不同的分享被显示成可连接 | `TestAcceptanceDiscoveryDoesNotTouchSavedNodes`（断言界面出现「地址不同」且不出现「已导入，待验证」） | 按 sid + endpoint 比较，只有完全一致才复用已保存节点 |
+| R1-3 [P2] | 规格 | 公开名称输入框的示例每帧用随机 ID 生成，占位文字闪动 | 代码核对 | 占位改为由当前分享 ID 派生（无 ID 时用固定示例） |
+| R1-4 [P3] | 规格 | 保存失败后「重试保存」把公开名称写空 | `TestAcceptanceRetryKeepsThePublicName` | 重试时带当前名称 |
+| R1-5 [P3] | 规格 | 空列表在首轮立刻显示「暂未发现分享」，与「5 秒内不判定没有分享」冲突 | `TestAcceptanceFirstSecondsReadAsSearching` | 增加时间窗（默认 5 秒）内的「正在查找局域网分享…」；协调器 2 秒兜底帧保证状态按时切换 |
+| R1-6 [nit] | 标准 | `lanDiscoveryUI.pinned/pinnedKey/loadedOnce` 为死字段；`browseInterfaces` 有恒真条件 | 代码核对 | 删除 |

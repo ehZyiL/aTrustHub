@@ -416,6 +416,38 @@ func parseIPv4Mask(t *testing.T, mask string) net.IPMask {
 	return net.IPMask(ip)
 }
 
+// S2: a program path with spaces and Chinese characters must survive validation,
+// the JSON operation file and the read-back comparison unchanged.
+func TestFirewallRuleAcceptsSpacesAndChinesePaths(t *testing.T) {
+	rule := firewallTestRule(23456)
+	rule.ProgramPath = `C:\Program Files\连接中心\connect-hub.exe`
+	if err := rule.Validate(); err != nil {
+		t.Fatalf("a quoted path with spaces and Chinese text was rejected: %v", err)
+	}
+	state := matchingState(rule)
+	if err := state.Matches(rule); err != nil {
+		t.Fatalf("the read-back of the same path failed to match: %v", err)
+	}
+	op := FirewallOperation{OperationID: "op", Op: FirewallOpApply, Rule: rule}
+	data, err := json.Marshal(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back FirewallOperation
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Rule.ProgramPath != rule.ProgramPath {
+		t.Fatalf("the path changed through the operation file: %q", back.Rule.ProgramPath)
+	}
+	// Case-insensitive comparison is what Windows does for program paths.
+	upper := state
+	upper.Program = strings.ToUpper(rule.ProgramPath)
+	if err := upper.Matches(rule); err != nil {
+		t.Fatalf("a differently cased path was rejected: %v", err)
+	}
+}
+
 func TestFirewallResultJSONRoundTrip(t *testing.T) {
 	// The helper and the desktop speak JSON; a field rename would break the
 	// boundary silently, so the wire shape is pinned.

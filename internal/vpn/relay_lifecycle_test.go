@@ -131,6 +131,12 @@ func TestReconnectResetsUpdateSequence(t *testing.T) {
 	// The new session keeps accepting increasing sequences and rejects repeats.
 	s2.updates <- SessionUpdate{Sequence: 3, Info: SessionInfo{Resources: first()}}
 	waitFor(t, "third snapshot applied", func() bool { return hasRule(m, "r1", "10.1.0.0") })
+	// A duplicate or out-of-order update on the same session is dropped.
+	s2.updates <- SessionUpdate{Sequence: 2, Info: SessionInfo{Resources: second()}}
+	time.Sleep(50 * time.Millisecond)
+	if hasRule(m, "r1", "10.2.0.0") {
+		t.Fatal("a repeated sequence number replaced the newer snapshot")
+	}
 }
 
 func hasRule(m *Manager, id, prefix string) bool {
@@ -214,5 +220,156 @@ func TestHistoryRetainsWithdrawnOwnershipAcrossRestart(t *testing.T) {
 	d := m.PreviewRoute(routing.Request{Network: "tcp", Address: "10.5.1.2:443", Entry: "统一代理"})
 	if d.Action == "direct" {
 		t.Fatalf("previously owned, then withdrawn resource falls back to direct after reload: %+v", d)
+	}
+}
+
+// R2: repairing one node must not unprotect the others, and the gate only lifts
+// once every relay node has verified attribution again.
+func TestSeedingARepairedNodeUnblocksOnlyThatNode(t *testing.T) {
+	cfg := testConfig(
+		model.AccessPoint{ID: "r1", Name: "分享一", Protocol: model.ProtocolLANRelay, Server: "192.168.1.50", Port: 1, InPool: true},
+		model.AccessPoint{ID: "r2", Name: "分享二", Protocol: model.ProtocolLANRelay, Server: "192.168.1.51", Port: 2, InPool: true},
+	)
+	m := newTestManager(t, (&fakeConnector{}).Connect, cfg)
+	m.BlockRelayAutoConnect("r1", true)
+	m.BlockRelayAutoConnect("r2", true)
+	if !m.RelayHistoryUnverified() {
+		t.Fatal("the gate must be on while both nodes are unverified")
+	}
+	m.SeedRelayKnown("r1", corpResources())
+	if m.RelayAutoConnectBlocked("r1") {
+		t.Fatal("the repaired node stayed out of the auto-connect set")
+	}
+	if !m.RelayAutoConnectBlocked("r2") || !m.RelayHistoryUnverified() {
+		t.Fatal("repairing one node unblocked the other or lifted the gate")
+	}
+	m.SeedRelayKnown("r2", corpResources())
+	if m.RelayHistoryUnverified() {
+		t.Fatal("the gate stayed on after every node was repaired")
+	}
+}
+
+// R1 (leak half): detaching a session cancels its monitor, so no goroutine waits
+// forever on a channel that will never close.
+func TestSessionMonitorStopsWhenTheSessionIsDetached(t *testing.T) {
+	point := model.AccessPoint{ID: "r1", Name: "relay", Protocol: model.ProtocolLANRelay, Server: "192.168.1.50", Port: 12345, InPool: true}
+	var mu sync.Mutex
+	var installed *updaterSession
+	m := newTestManager(t, func(context.Context, model.AccessPoint, Credentials) (Session, error) {
+		s := &updaterSession{fakeSession: newFakeSession("r1"), updates: make(chan SessionUpdate, 1)}
+		mu.Lock()
+		installed = s
+		mu.Unlock()
+		return s, nil
+	}, testConfig(point))
+	m.Connect("r1")
+	waitFor(t, "online", func() bool { v, _ := m.View("r1"); return v.State == StateOnline })
+	m.mu.RLock()
+	stop := m.points["r1"].sessStop
+	m.mu.RUnlock()
+	if stop == nil {
+		t.Fatal("no monitor lifetime was installed for the session")
+	}
+	m.Disconnect("r1")
+	m.mu.RLock()
+	stillInstalled := m.points["r1"].sessStop != nil
+	m.mu.RUnlock()
+	if stillInstalled {
+		t.Fatal("the monitor lifetime of a detached session was not cancelled")
+	}
+	// A late update from the detached session changes nothing.
+	mu.Lock()
+	s := installed
+	mu.Unlock()
+	s.updates <- SessionUpdate{Sequence: 1, Info: SessionInfo{Resources: corpResources()}}
+	if hasRule(m, "r1", "10.5.0.0") {
+		t.Fatal("a detached session still published resources")
+	}
+}
+
+// R1 + R6 on the real path: a revoked share token ends a live relay session with
+// a typed terminal error, and the manager must not schedule an automatic retry.
+func TestRealShareRevocationDoesNotAutoReconnect(t *testing.T) {
+	aSess := &echoStrictSession{fakeSession: newFakeSession("a1"), allow: "10.5."}
+	aSess.info.Resources = corpResources()
+	aMgr := newTestManager(t, func(context.Context, model.AccessPoint, Credentials) (Session, error) {
+		return aSess, nil
+	}, testConfig(model.AccessPoint{ID: "a1", Name: "公司 VPN", Protocol: model.ProtocolATrust, Server: "vpn.example.com", Port: 443, Username: "u", InPool: true}))
+	aMgr.Connect("a1")
+	waitFor(t, "A online", func() bool { online, _, _ := aMgr.Counts(); return online == 1 })
+	source, err := aMgr.AcquireRelayShareSource("a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := relay.GenerateIdentity("127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shareID, shareToken := randomB64(16), randomB64(32)
+	server, err := relay.StartServer(relay.ServerOptions{
+		Identity: identity, Source: source, Token: shareToken,
+		ShareID: shareID, ServerInstanceID: "a-instance", Port: 0, Lease: 15 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = server.Close(context.Background())
+		_ = source.Close()
+	}()
+	code := relay.ShareCode{Version: 1, Host: "127.0.0.1", Port: server.Port(), ShareID: shareID, Token: shareToken, Fingerprint: identity.Fingerprint}
+
+	point := model.AccessPoint{
+		ID: "b1", Name: "同事分享", Protocol: model.ProtocolLANRelay,
+		Server: code.Host, Port: code.Port, InPool: true, AutoConnect: false,
+		Relay: &model.RelayPointOptions{Version: 1, ShareID: shareID, CertificateSHA256: identity.Fingerprint},
+	}
+	cfg := testConfig(point)
+	cfg.Settings.AutoReconnect = true
+	var mu sync.Mutex
+	attempts := 0
+	connector := NewRelayConnector(RelayConnectorOptions{
+		Dial:         relay.DirectDialer,
+		SaveSnapshot: func(string, RelaySnapshotSource, *workeripc.ResourceSnapshot) error { return nil },
+	})
+	bMgr := NewManager(func(ctx context.Context, p model.AccessPoint, creds Credentials) (Session, error) {
+		mu.Lock()
+		attempts++
+		mu.Unlock()
+		return connector(ctx, p, creds)
+	}, func(string) (Credentials, error) { return Credentials{Login: code.Token}, nil }, NewLogBus(100), nil)
+	t.Cleanup(bMgr.Close)
+	bMgr.Apply(cfg)
+	bMgr.reconnectDelay = 20 * time.Millisecond
+	bMgr.Connect("b1")
+	waitFor(t, "B online", func() bool { v, _ := bMgr.View("b1"); return v.State == StateOnline })
+
+	// A terminal revocation: the share host drops the client lease.
+	server.RevokeAll()
+	// The heartbeat interval is 5s, so this has to outlast one beat.
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		view, _ := bMgr.View("b1")
+		if view.State != StateOnline {
+			t.Logf("B left Online with: %s", view.Error)
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a revoked share left B Online")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	view, _ := bMgr.View("b1")
+	if view.State != StateError {
+		t.Fatalf("state = %s, want Error", view.State)
+	}
+	// Give the bounded reconnect policy more than enough time to run if it were
+	// going to.
+	time.Sleep(400 * time.Millisecond)
+	mu.Lock()
+	got := attempts
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("a revoked share was retried %d times", got)
 	}
 }

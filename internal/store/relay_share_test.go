@@ -321,3 +321,56 @@ func TestRelayKnownRefusesStaleSource(t *testing.T) {
 		t.Fatalf("a deleted node got its cache back: %+v %v", known, err)
 	}
 }
+
+// R2: the 4 MiB bound is enforced, and a broken cache must not stop a verified
+// snapshot from being stored.
+func TestRelayKnownBoundsAndCorruptCacheBehavior(t *testing.T) {
+	st := relayTestStore(t)
+	point := relayTestPoint()
+	if _, err := st.Update(func(cfg *model.Config) error { cfg.Add(point); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Save(); err != nil {
+		t.Fatal(err)
+	}
+	source := RelaySource{ShareID: point.Relay.ShareID, Fingerprint: point.Relay.CertificateSHA256}
+
+	// A cache that no longer parses keeps its evidence but does not block a new
+	// verified snapshot: refusing would also lose the history we still have.
+	if err := os.MkdirAll(filepath.Dir(st.RelayKnownPath(point.ID)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(st.RelayKnownPath(point.ID), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.LoadRelayKnown(point.ID); !errors.Is(err, ErrRelayKnownCorrupt) {
+		t.Fatalf("a corrupt cache was not reported: %v", err)
+	}
+	small := &workeripc.ResourceSnapshot{
+		Tunnel:  "ipv4-l3",
+		IPRules: []workeripc.IPRule{{Min: "10.7.0.0", Max: "10.7.255.255", PortMin: 443, PortMax: 443, Protocol: "tcp"}},
+	}
+	if err := st.SaveRelayKnown(point.ID, source, small); err != nil {
+		t.Fatalf("a corrupt cache blocked a verified snapshot: %v", err)
+	}
+	known, err := st.LoadRelayKnown(point.ID)
+	if err != nil || known == nil || len(known.Resources.IPRules) != 1 {
+		t.Fatalf("the repaired cache did not round trip: %+v %v", known, err)
+	}
+
+	// An oversized merge is refused and leaves the stored file intact.
+	huge := &workeripc.ResourceSnapshot{Tunnel: "ipv4-l3"}
+	for i := 0; i < 40000; i++ {
+		huge.IPRules = append(huge.IPRules, workeripc.IPRule{
+			Min: fmt.Sprintf("10.%d.%d.0", i/256%256, i%256), Max: fmt.Sprintf("10.%d.%d.255", i/256%256, i%256),
+			PortMin: 443, PortMax: 443, Protocol: "tcp",
+		})
+	}
+	if err := st.SaveRelayKnown(point.ID, source, huge); err == nil {
+		t.Fatal("an oversized history was accepted")
+	}
+	known, err = st.LoadRelayKnown(point.ID)
+	if err != nil || known == nil || len(known.Resources.IPRules) != 1 {
+		t.Fatalf("a refused save damaged the existing cache: %+v %v", known, err)
+	}
+}

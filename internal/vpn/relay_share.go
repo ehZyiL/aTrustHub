@@ -342,6 +342,17 @@ func (m *Manager) SeedRelayKnown(pointID string, resources *workeripc.ResourceSn
 		return
 	}
 	ep.knownResources = rememberResources(ep.knownResources, resources)
+	// Verified attribution repairs this node: it may take part in automatic
+	// login again. The global gate only lifts when no node is left untrusted.
+	delete(m.autoConnectBlocked, pointID)
+	m.recomputeHistoryGateLocked()
+}
+
+// recomputeHistoryGateLocked keeps the unknown-target gate on while any relay
+// node's attribution is still unverified. Repairing one node must not silently
+// unprotect the others.
+func (m *Manager) recomputeHistoryGateLocked() {
+	m.relayHistoryUnverified = len(m.autoConnectBlocked) > 0
 }
 
 // BlockRelayAutoConnect keeps one relay node out of the automatic login set
@@ -357,6 +368,7 @@ func (m *Manager) BlockRelayAutoConnect(pointID string, blocked bool) {
 	} else {
 		delete(m.autoConnectBlocked, pointID)
 	}
+	m.recomputeHistoryGateLocked()
 	m.mu.Unlock()
 }
 

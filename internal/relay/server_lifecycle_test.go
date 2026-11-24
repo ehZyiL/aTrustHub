@@ -254,10 +254,21 @@ type blockingDialSource struct {
 	*fakeSource
 	started chan struct{}
 	once    sync.Once
+	// release, when set, lets a test complete the dial deliberately; otherwise
+	// the dial only ends when its context is cancelled.
+	release chan struct{}
 }
 
 func (s *blockingDialSource) DialVPN(ctx context.Context, revision, target string) (net.Conn, error) {
 	s.once.Do(func() { close(s.started) })
+	if s.release != nil {
+		select {
+		case <-s.release:
+			return s.fakeSource.DialVPN(ctx, revision, target)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
@@ -299,5 +310,218 @@ func TestRevokedLeaseCancelsAPendingDial(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("the pending dial was not cancelled by the lease revocation")
+	}
+}
+
+// R4: a client request that reads the new generation before the change watcher
+// does must perform the same revocation, not just return the new epoch.
+func TestClientRefreshCommitsTheGenerationAndRevokes(t *testing.T) {
+	fx := startShareFixture(t, "review-token")
+	client := fx.client(t)
+	ctx := context.Background()
+	state, token, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := client.Dial(ctx, token, state.Epoch, state.Revision, "10.1.2.3:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	expectOpen(t, conn)
+
+	// A new snapshot becomes visible to the source. The cache is stale, so the
+	// very next request is what discovers it — before the watcher runs.
+	fx.server.snapMu.Lock()
+	fx.server.snapAt = time.Now().Add(-time.Second)
+	fx.server.snapMu.Unlock()
+	fx.source.setSnapshot(nextGeneration())
+
+	status, err := client.Status(ctx, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Epoch != 2 {
+		t.Fatalf("status epoch = %d, want 2", status.Epoch)
+	}
+	expectClosed(t, conn, "after a client refresh committed the new generation")
+}
+
+// R4: while the cached generation is still fresh, no revocation happens (nothing
+// changed), and the request keeps answering from the committed snapshot.
+func TestFreshCacheKeepsTheCommittedGeneration(t *testing.T) {
+	fx := startShareFixture(t, "review-token")
+	client := fx.client(t)
+	ctx := context.Background()
+	state, token, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := client.Dial(ctx, token, state.Epoch, state.Revision, "10.1.2.3:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	status, err := client.Status(ctx, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Epoch != 1 || status.Revision != state.Revision {
+		t.Fatalf("a fresh cache changed the generation: %+v", status)
+	}
+	expectOpen(t, conn)
+}
+
+// R3: a dial that completes after its generation was retired must not become a
+// tunnel, and its slot must come back.
+func TestDialCompletingAfterAGenerationChangeIsDropped(t *testing.T) {
+	blocking := &blockingDialSource{started: make(chan struct{})}
+	release := make(chan struct{})
+	fx := startShareFixtureWith(t, "review-token", func(f *fakeSource) Source {
+		blocking.fakeSource = f
+		blocking.release = release
+		return blocking
+	})
+	client := fx.client(t)
+	ctx := context.Background()
+	state, token, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialErr := make(chan error, 1)
+	go func() {
+		_, err := client.Dial(ctx, token, state.Epoch, state.Revision, "10.1.2.3:443")
+		dialErr <- err
+	}()
+	<-blocking.started
+	fx.source.setSnapshot(nextGeneration())
+	waitRelay(t, "the server commits the new generation", func() bool { return fx.committedEpoch() == 2 })
+	close(release)
+	select {
+	case err := <-dialErr:
+		if err == nil {
+			t.Fatal("a dial under the retired generation succeeded")
+		}
+		var re *Error
+		if errors.As(err, &re) && re.Code != CodeStaleResources && re.Code != CodeShareClosed {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stale dial never returned")
+	}
+	waitRelay(t, "the connection slot is released", func() bool { return fx.server.conns.count() == 0 })
+}
+
+// R5: an expired lease must return its connection slots, not leak them.
+func TestExpiredLeaseReleasesConnectionSlots(t *testing.T) {
+	fx := startShareFixture(t, "review-token")
+	client := fx.client(t)
+	ctx := context.Background()
+	state, token, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := client.Dial(ctx, token, state.Epoch, state.Revision, "10.1.2.3:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fx.server.clients.mu.Lock()
+	fx.server.clients.byToken[token].expires = time.Now().Add(-time.Second)
+	fx.server.clients.mu.Unlock()
+	fx.server.ActiveClients()
+	expectClosed(t, conn, "after the lease expired")
+	waitRelay(t, "the slot is released", func() bool { return fx.server.conns.count() == 0 })
+}
+
+// R5: re-authenticating the same instance replaces the lease, and the old token's
+// tunnels die with it.
+func TestReauthenticationClosesTheOldTokenTunnels(t *testing.T) {
+	fx := startShareFixture(t, "review-token")
+	rc := fx.client(t)
+	ctx := context.Background()
+	state, token, err := rc.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := rc.Dial(ctx, token, state.Epoch, state.Revision, "10.1.2.3:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	expectOpen(t, conn)
+
+	fx.server.clients.mu.Lock()
+	id := fx.server.clients.byToken[token].id
+	fx.server.clients.mu.Unlock()
+	replaced := fx.server.clients.replace(id, "again", "new-token", time.Now())
+	fx.server.clients.revoke([]*client{replaced})
+	expectClosed(t, conn, "after the instance re-authenticated")
+	if fx.server.clients.lookup(token, time.Now()) != nil {
+		t.Fatal("the replaced token is still valid")
+	}
+}
+
+// R5: one client's expiry must not disturb another client's tunnel.
+func TestExpiringOneLeaseLeavesOtherClientsAlone(t *testing.T) {
+	fx := startShareFixture(t, "review-token")
+	ctx := context.Background()
+	first := fx.client(t)
+	second := fx.client(t)
+	stateA, tokenA, err := first.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateB, tokenB, err := second.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connA, err := first.Dial(ctx, tokenA, stateA.Epoch, stateA.Revision, "10.1.2.3:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connA.Close()
+	connB, err := second.Dial(ctx, tokenB, stateB.Epoch, stateB.Revision, "10.1.2.4:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connB.Close()
+	expectOpen(t, connA)
+	expectOpen(t, connB)
+
+	fx.server.clients.mu.Lock()
+	fx.server.clients.byToken[tokenA].expires = time.Now().Add(-time.Second)
+	fx.server.clients.mu.Unlock()
+	fx.server.ActiveClients()
+	expectClosed(t, connA, "after its lease expired")
+	expectOpen(t, connB)
+}
+
+// R5: a renewal that races an expiry must not bring a dead lease back.
+func TestTouchCannotReviveAnExpiredLease(t *testing.T) {
+	registry := newClientRegistry(4, time.Minute)
+	now := time.Now()
+	c, err := registry.create("id", "name", "token", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.touch(c, now); !ok {
+		t.Fatal("a live lease could not renew")
+	}
+	// The lease expires, then a late renewal arrives.
+	if _, ok := registry.touch(c, now.Add(2*time.Minute)); ok {
+		t.Fatal("an expired lease was revived by a renewal")
+	}
+	if registry.lookup("token", now.Add(2*time.Minute)) != nil {
+		t.Fatal("an expired lease stayed valid")
+	}
+	// A replaced lease cannot be renewed either.
+	c2, err := registry.create("id2", "name", "token2", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.replace("id2", "name", "token3", now)
+	if _, ok := registry.touch(c2, now); ok {
+		t.Fatal("a replaced lease renewed itself")
 	}
 }

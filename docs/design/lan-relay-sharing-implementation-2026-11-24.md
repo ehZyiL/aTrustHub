@@ -578,7 +578,11 @@ go test -race ./internal/vpn -run 'Relay|Headless|Seed'  通过
 - **剪贴板自动识别**：`RelayClipboardDetection` 字段与默认关闭语义已落在模型与 `Settings.Normalize` 中；读剪贴板的回调没有接线（默认关闭，未开启时不读取，因此没有「未选择却读取」的风险），提示 UI 也未实现。
 - **A 侧资源变化的保守策略**：资源变化会提升代次并关闭该分享的全部业务连接（首版如此），没有做「只断受影响连接」的优化。
 
-### 16.4 Windows 防火墙入口的实现状态
+### 16.4 Windows 防火墙入口的实现状态（已被 §17.1 的 S2/S3 取代）
+
+> 本节记录的是 `e888e47` 时的实现，复审指出它没有提权、也没有接退出/启动恢复清理。
+> 现在的实现见 §17.1 S2/S3：规则由已提权的 `connect-hub-capture.exe` 一次性执行，
+> journal 与清理集中在 `relay.Rules`。下面保留原文只作为缺陷记录。
 
 `lanshare_firewall_windows.go` 在分享运行时的面板里提供「允许局域网连接」：
 
@@ -607,3 +611,69 @@ go test -race ./internal/vpn -run 'Relay|Headless|Seed'  通过
 - **未认证连接**：见上（总数限流而非单独 32 个未认证槽位）。
 - **客户端会话 token 失效不就地重认证**：§7.5 允许「用分享 token 有界重认证一次」，实现选择结束该会话并由 `SessionWatcher` 传播失效，再由 Manager 的有界重连完成一次完整重认证。效果相同但多一拍；换来的是不需要在心跳里藏一条第二次认证路径。
 - **`10.9.9.9` 这类「分享完全不知道」的目标**：B 端按普通公网直连（符合「普通公网走自身网络」）；「A 不转发未知目标」由 A 的严格出口保证，二者并不矛盾。属于分享范围但未授权的端口会被拒绝而不是直连。
+
+## 17. 复审 10 项问题的修复（review / remediation 2026-11-24）
+
+审查基线 `e888e47`，修复后分支 `feat/lan-relay-sharing`。原始缺陷、复现命令与处理方案见
+[review 报告](../review/lan-relay-sharing-review-e888e47-2026-11-24.md) 与
+[remediation 方案](../review/lan-relay-sharing-remediation-e888e47-2026-11-24.md)。
+本节只记录**实际做了什么、用什么证据证明、还有什么没验证**。
+
+审查报告中的 8 个 `/tmp` overlay 复现已移入仓库作为永久回归；临时文件不再是交付依赖。
+
+### 17.1 逐项修复与证据
+
+| 编号 | 修复 | 回归证据（`e888e47` 上失败、现在通过） |
+| --- | --- | --- |
+| S1 | `saveRelaySnapshot` 不再调用 `setConfig`：只写 Store 并 `requestConfigReload()`；UI 线程在 `view()` 里 `applyPendingConfigReload()` 重新读 `Store.Config()` 后发布 | `TestRelaySnapshotNeverWritesUIConfig`（`-race`）、`TestPendingConfigReloadKeepsNewerEdits`；原审查复现在 `e888e47` 上给出 3 条 DATA RACE |
+| S2 | 规则改由已提权的 `connect-hub-capture.exe` 一次性模式执行：结构化 JSON 参数、校验调用方父进程身份、只接受本程序规则名前缀、读回完整属性才算成功 | `TestFirewallRuleStateVerifiesEveryAttribute`、`TestFirewallOperationIsAClosedSet`、`TestFirewallRuleAcceptsSpacesAndChinesePaths`、`TestFirewallResultJSONRoundTrip`；`GOOS=windows go build/vet/test -c` 通过 |
+| S3 | 规则与 journal 收敛到 `relay.Rules`，绑定 operation ID；关闭、退出、源断开/暂停、删除节点、启动恢复与迟到创建全部走同一条路径 | `TestRulesLateSuccessAfterCancelIsRevoked`、`TestRulesReconcileKeepsTheRunningRuleAndRemovesTheRest`、`TestRulesRecoverVerifiesBeforeReuse`、`TestRulesRemoveFailureKeepsTheRecord`、`TestDisableRemovesRecordedFirewallRules`、`TestQuitKeepsTheShareIntentButCleansRules`、`TestDeletedRelayNodeRemovesItsRule`、`TestFirewallCleanupFailureKeepsTheRecord`、`TestFirewallRefusesToGuessTheSubnet` |
+| R1 | `consumeUpdates` 与 `watch` 合并为一个 select（`Updates` / `Done` / 会话取消 / Manager 关闭）；`Updates` 关闭只停止消费，不跳过 `Done`；`fail` 与 `Close` 拆成「一次性终止」与「幂等清理」 | `TestDeadRelaySessionLeavesOnlineWithoutUpdates`、`TestFailedRelaySessionIsStillReaped`、`TestSessionMonitorStopsWhenTheSessionIsDetached`、`TestRealShareRevocationDoesNotAutoReconnect`（真实 connector + 真实服务端） |
+| R2 | `SaveRelayKnown` 改为「读旧历史 → 校验来源身份 → 并集合并 → 校验容量 → 原子写入」，同一 Store 内互斥；快照携带已认证的 share ID/指纹，节点被删除或改身份后拒绝写入；修复一个节点只解除该节点的自动连接阻断，仍有不可信节点时全局保护保持 | `TestRelayKnownKeepsWithdrawnHistory`、`TestRelayKnownConcurrentSavesKeepEveryRule`、`TestRelayKnownRefusesStaleSource`、`TestRelayKnownBoundsAndCorruptCacheBehavior`、`TestHistoryRetainsWithdrawnOwnershipAcrossRestart`、`TestSeedingARepairedNodeUnblocksOnlyThatNode` |
+| R3 | 连接登记记录所属资源代次；资源变化只淘汰旧代次，`stopped` 只由永久停止设置 | `TestResourceChangeKeepsServingTheNewGeneration`、`TestPermanentStopStillRefusesAfterAChange`、`TestDialCompletingAfterAGenerationChangeIsDropped` |
+| R4 | 以「最后一次已提交的快照」为比较基准；所有刷新（GET/Status/CONNECT/变更事件）走同一提交入口，切代时先撤销旧代次连接；刷新失败只关闭业务流、保留控制租约 | `TestResourceChangeClosesTunnelsWhenCacheExpired`、`TestClientRefreshCommitsTheGenerationAndRevokes`、`TestFreshCacheKeepsTheCommittedGeneration` |
+| R5 | 每个租约带可取消生命周期；过期、DELETE、重认证替换、关闭共享统一撤销并取消在途拨号/DNS；`connEntry.close` 不可逆；续租不能复活已过期或被替换的租约 | `TestExpiredLeaseClosesItsTunnels`、`TestRevokedLeaseCancelsAPendingDial`、`TestDeletedSessionClosesItsTunnels`、`TestExpiredLeaseReleasesConnectionSlots`、`TestReauthenticationClosesTheOldTokenTunnels`、`TestExpiringOneLeaseLeavesOtherClientsAlone`、`TestTouchCannotReviveAnExpiredLease` |
+| R6 | 显示文案改为带 `Unwrap()` 的包装，保留 `relay.Error` 的 Code 与重试属性 | `TestFriendlyRelayErrorKeepsTerminalClassification`、`TestRealShareRevocationDoesNotAutoReconnect`（终止错误经真实文案转换后仍不自动重连） |
+| R7 | 安装新会话时在同一临界区把 `updateSeq` 归零 | `TestReconnectResetsUpdateSequence`（含旧 generation 晚到 seq=100 被拒、同会话重复序号被丢） |
+
+### 17.2 复审后仍未实机验证（不得表述为已通过）
+
+1. **Windows 防火墙运行时行为**：提权接受/取消、中文与含空格路径、规则读回、崩溃后恢复，全部只有编译期与可注入执行器的单元测试证据。`connect-hub-capture.exe --firewall-op` 分支尚未在真实 Windows 上运行过。
+2. **跨机矩阵**：仍只有本机 headless 端到端与单元测试。
+3. **规模与 §13 数值**：未做 5–10 客户端压测。
+
+### 17.3 修复过程中的实现取舍
+
+- **R1 的监听上下文**：`supervise` 使用独立 context，由会话安装/卸载点取消；`Connect` 的登录 context 仍要等到监听结束才能释放（worker 会话依赖它），因此监听仍然同步阻塞在登录 goroutine 上，只是不再阻塞 `Done`。
+- **R3/R4 的同步边界**：代次提交与连接登记共用 `snapMu`/`connTable.mu` 两把锁，但顺序固定为「提交先撤销旧代次 → 新代次可见」，实际连接关闭放在锁外，避免 handler 反向等待。
+- **R5 的撤销时机**：`registry` 在锁内标记失效，锁外统一执行 `onEvict`（取消 ctx + 关闭连接），因此 `lookup/count/create/replace/remove/sweep` 任一路径都会产生同样的清理效果。
+- **R2 的失败策略**：缓存损坏时仍允许写入新的已验证快照（否则连当前历史也会丢），但损坏文件保留为证据，并继续让保护门生效。
+- **S2 的提权模型**：没有新增二进制，复用已在打包清单里的 `connect-hub-capture.exe`；新增的 `--firewall-op` 分支要求自身已提权、父进程身份匹配、参数通过 JSON 文件传递，PowerShell 只把值作为 cmdlet 参数使用。
+- **S3 的清理时机**：正常退出删除规则但保留 `Enabled`（下次启动恢复同一身份）；`关闭共享` 撤销身份并删除规则；两者都由同一 `Reconcile` 驱动。
+
+### 17.4 本次执行的验收命令与结果
+
+```text
+go test ./...                                   # 18 个包全绿
+go test -race ./internal/relay ./internal/store ./internal/vpn   # 全绿
+go test -race . -run 'Relay|LANShare|Config|Firewall'            # 全绿
+go build ./...；GOOS=windows go build ./...；GOOS=darwin go build ./...
+go vet ./...（含 GOOS=windows）
+GOOS=windows go test -c ./  ./internal/relay     # 交叉编译测试二进制通过
+git diff --check
+```
+
+用于证明「修复前确实失败」的证据：把仓库回到 `e888e47` / `49fb2e3` / `369b09b` 的
+worktree 上运行对应回归，得到与原审查一致的结果（stays Online、terminal 变成可重连、
+`Action: direct`、新代次 `share_closed`、旧流仍可读写、租约清零后隧道仍可用），
+修复后同一批用例通过。审查报告里 8 个 `/tmp` overlay 已转成仓库内测试，不再依赖临时文件。
+审查提供的 R3 复现脚本以 `conns.stopped == true` 作为「已处理」的等待条件，
+该条件本身编码了缺陷，修复后它不再成立；对应的行为断言由
+`TestResourceChangeKeepsServingTheNewGeneration` 覆盖。
+
+### 17.5 仍未覆盖的验收项（需实机）
+
+- **Windows**：UAC 接受/拒绝、中文与含空格安装路径、`Get-NetFirewallRule` 读回、
+  崩溃后 journal 恢复、`--firewall-op` 分支端到端。
+- **跨机**：Linux↔Linux / Linux↔Windows 的最小联调与 macOS。
+- **规模**：5–10 客户端压测与 §13 数值校准。

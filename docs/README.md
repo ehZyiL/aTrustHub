@@ -48,6 +48,8 @@ docs/
 | [design/lan-relay-sharing-plan-2026-11-24.md](design/lan-relay-sharing-plan-2026-11-24.md) | 局域网分享要做什么、UI/UX 怎么组织、哪些能力刻意不做 |
 | [design/lan-relay-sharing-implementation-2026-11-24.md](design/lan-relay-sharing-implementation-2026-11-24.md) | 分享协议 v1、严格出口边界、启停/恢复顺序，以及本次验证证据与未验证项 |
 | [review/errata.md](review/errata.md) | 旧文档哪些说法与代码不符、错在哪 |
+| [review/lan-relay-sharing-review-e888e47-2026-11-24.md](review/lan-relay-sharing-review-e888e47-2026-11-24.md) | 局域网分享合并前的 10 项审查发现（S1–S3、R1–R7）与复现方式 |
+| [review/lan-relay-sharing-remediation-e888e47-2026-11-24.md](review/lan-relay-sharing-remediation-e888e47-2026-11-24.md) | 上述 10 项的处理方案、约束与验收用例 |
 | [roadmap.md](roadmap.md) | 哪些"未完成"是代码可判定的、哪些只能等实机 |
 
 ## 平台能力矩阵（已核实）

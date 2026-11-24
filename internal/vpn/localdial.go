@@ -39,10 +39,18 @@ func (m *Manager) LocalAppDialer(id string) (dial func(context.Context, string, 
 	return c.Dial, c.Active, err
 }
 
+// ErrRelayNotCapturable says a LAN relay node cannot feed the transparent
+// capture path in v1.
+var ErrRelayNotCapturable = errors.New("局域网中继接入点首版不参与应用接管，请用本地入口或系统代理")
+
 func (m *Manager) LocalAppConnection(id string) (AppConnection, error) {
 	var connection AppConnection
 	m.mu.RLock()
 	ep := m.points[id]
+	if ep != nil && ep.cfg.Protocol == "lan_relay" {
+		m.mu.RUnlock()
+		return connection, ErrRelayNotCapturable
+	}
 	if ep == nil || ep.state != StateOnline || ep.sess == nil {
 		m.mu.RUnlock()
 		return connection, errors.New("请先登录所选 VPN 接入点")

@@ -27,7 +27,9 @@ docs/
 ├── design/              设计（已核实）—— 回答“具体怎么实现的”
 │   ├── architecture.md  进程模型、构建上下文、模块边界、运行时约定
 │   ├── networking.md    四种接管方式、路由与 DNS 归属、范围边界
-│   └── recovery.md      退出顺序、事务日志、生效时机、硬杀矩阵、已知缺口
+│   ├── recovery.md      退出顺序、事务日志、生效时机、硬杀矩阵、已知缺口
+│   ├── lan-relay-sharing-plan-2026-11-24.md          局域网分享：需求与 UI/UX（已实现）
+│   └── lan-relay-sharing-implementation-2026-11-24.md 局域网分享：协议/生命周期/验收（已实现）
 ├── review/
 │   └── errata.md        旧文档勘误 —— 回答“旧说法哪里不对”
 ├── roadmap.md           未完成事项 —— 回答“还差什么”（拆成代码可判定 / 待实机）
@@ -43,6 +45,8 @@ docs/
 | [design/architecture.md](design/architecture.md) | 进程怎么分、谁提权、内核源码有几个真源、模块边界、平台能力 |
 | [design/networking.md](design/networking.md) | 四种网络接管方式各自怎么实现、路由与 DNS 归属怎么判、范围边界到哪 |
 | [design/recovery.md](design/recovery.md) | 正常退出与硬杀分别会清理什么、事务日志在哪、还剩哪些洞 |
+| [design/lan-relay-sharing-plan-2026-11-24.md](design/lan-relay-sharing-plan-2026-11-24.md) | 局域网分享要做什么、UI/UX 怎么组织、哪些能力刻意不做 |
+| [design/lan-relay-sharing-implementation-2026-11-24.md](design/lan-relay-sharing-implementation-2026-11-24.md) | 分享协议 v1、严格出口边界、启停/恢复顺序，以及本次验证证据与未验证项 |
 | [review/errata.md](review/errata.md) | 旧文档哪些说法与代码不符、错在哪 |
 | [roadmap.md](roadmap.md) | 哪些"未完成"是代码可判定的、哪些只能等实机 |
 

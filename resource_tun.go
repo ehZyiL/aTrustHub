@@ -12,6 +12,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/ehzyil/connect-hub/internal/dnsmapping"
 	"github.com/ehzyil/connect-hub/internal/localapps"
+	"github.com/ehzyil/connect-hub/internal/model"
 	"github.com/ehzyil/connect-hub/internal/vpn"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
@@ -99,6 +100,14 @@ func (a *app) resourceCaptureConfigs() ([]localapps.CaptureConfig, error) {
 		}
 		point := cfg.Find(gateway.ID)
 		if point == nil {
+			continue
+		}
+		// A LAN relay node is excluded from transparent app capture in v1: it has
+		// no ipv4-l3 session identity, and pretending otherwise would silently
+		// break the capture path. It stays usable through the local entry and the
+		// system proxy.
+		if point.Protocol == model.ProtocolLANRelay {
+			skipped = append(skipped, point.Name+"：局域网中继首版不参与应用接管，请用本地入口或系统代理")
 			continue
 		}
 		var connection vpn.AppConnection

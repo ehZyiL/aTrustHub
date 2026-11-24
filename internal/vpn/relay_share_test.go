@@ -2,8 +2,10 @@ package vpn
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -268,4 +270,28 @@ func TestStrictCapabilityRejectsPlainSession(t *testing.T) {
 	if !strictCapable(newFakeSession("x")) {
 		t.Fatal("a StrictSession must be accepted")
 	}
+}
+
+// TestRelayPointIsExcludedFromAppCapture keeps the transparent capture path from
+// silently binding a session that has no ipv4-l3 identity.
+func TestRelayPointIsExcludedFromAppCapture(t *testing.T) {
+	point := model.AccessPoint{
+		ID: "r1", Name: "同事分享", Protocol: model.ProtocolLANRelay,
+		Server: "192.168.1.50", Port: 23456, InPool: true,
+		Relay: &model.RelayPointOptions{Version: 1, ShareID: base64Raw16(), CertificateSHA256: strings.Repeat("ab", 32)},
+	}
+	sess := newFakeSession("r1")
+	sess.info.Resources = shareTestResources()
+	m, _ := startShareTestPointWithSession(t, testConfig(point), sess)
+	if _, err := m.LocalAppConnection("r1"); !errors.Is(err, ErrRelayNotCapturable) {
+		t.Fatalf("relay node entered the capture path: %v", err)
+	}
+}
+
+func base64Raw16() string {
+	b := make([]byte, 16)
+	for i := range b {
+		b[i] = byte('a' + i%26)
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
 }

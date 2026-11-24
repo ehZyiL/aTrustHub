@@ -749,7 +749,14 @@ func (s *appTestSink) PointExists(id string) bool {
 
 func installLANShare(t *testing.T, a *app, sink relay.Sink) *relay.Controller {
 	t.Helper()
-	ctrl := relay.NewController(store.RelayShareStore{Store: a.store}, sink, emptyNets{}, nil, a.invalidate)
+	return installLANShareWith(t, a, sink, emptyNets{})
+}
+
+// installLANShareWith lets a test choose the network provider, e.g. to bind a
+// real interface instead of the loopback stand-in.
+func installLANShareWith(t *testing.T, a *app, sink relay.Sink, nets relay.NetworkProvider) *relay.Controller {
+	t.Helper()
+	ctrl := relay.NewController(store.RelayShareStore{Store: a.store}, sink, nets, nil, a.invalidate)
 	a.lanShare = ctrl
 	a.lanShareUI.results = make(chan lanShareResult, 4)
 	t.Cleanup(func() {

@@ -109,13 +109,40 @@ func (lanAddresses) LANCandidates() []relay.Interface {
 }
 
 func interfaceRank(name string) int {
-	lower := strings.ToLower(name)
-	for _, prefix := range []string{"docker", "veth", "br-", "virbr", "vmnet", "vboxnet", "utun", "tun", "tap", "lxc", "cni"} {
-		if strings.HasPrefix(lower, prefix) {
-			return 1
-		}
+	if virtualInterface(name) {
+		return 1
 	}
 	return 0
+}
+
+// virtualInterface reports whether an adapter is a container bridge, a VM switch
+// or a VPN tunnel rather than the LAN a colleague sits on.
+//
+// The names differ per platform and Windows uses localized friendly names
+// ("以太网", "WLAN"), so this list can only be a hint: it orders the picker and
+// labels the entries. Whether an address can actually host a share is decided by
+// name-independent facts (a LAN-sized subnet), never by this function alone.
+func virtualInterface(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, prefix := range []string{
+		// Containers, VM switches, host bridges (Linux / Windows / macOS).
+		"docker", "veth", "br-", "virbr", "vnet", "vethernet", "vmnet", "vboxnet",
+		"lxc", "cni", "podman", "incus", "mpqemu", "bridge", "tap",
+		// Windows: Hyper-V/WSL switches and VPN clients.
+		"loopback", "npcap", "hyper-v", "local area connection*",
+		// Tunnels and VPNs (Linux tun0/wg0/tailscale0, macOS utunN,
+		// Windows Wintun/WireGuard/OpenVPN adapters).
+		"tun", "utun", "wg", "wintun", "wireguard", "openvpn", "tailscale", "zerotier",
+		"nordlynx", "proton", "surfshark", "mullvad", "nebula", "hamachi", "n2n", "zt",
+		"isatap", "teredo", "6to4",
+		// macOS point-to-point / Apple wireless direct.
+		"awdl", "llw", "gif", "stf", "ipsec", "pdp_ip",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // setupLANShare wires the controller. It runs after the manager exists, and it
@@ -378,17 +405,116 @@ func (a *app) pointLabel(id string) string {
 	return ""
 }
 
-// relayInterfaceChoices returns the label -> address mapping the panel offers.
-func (a *app) relayInterfaceChoices() ([]string, map[string]relay.Interface) {
-	list := lanAddresses{}.LANCandidates()
-	labels := make([]string, 0, len(list))
-	byLabel := make(map[string]relay.Interface, len(list))
+// lanCandidate is one selectable address plus what the panel needs to explain it.
+type lanCandidate struct {
+	iface   relay.Interface
+	subnet  string
+	lanSize bool // the subnet has room for other hosts
+	virtual bool
+}
+
+// newLANCandidates annotates the enumerated addresses. subnetOf is injected so
+// the classification can be tested without depending on the host's interfaces.
+func newLANCandidates(list []relay.Interface, subnetOf func(string) (string, error)) []lanCandidate {
+	out := make([]lanCandidate, 0, len(list))
 	for _, cand := range list {
-		label := fmt.Sprintf("%s · %s", cand.Name, cand.IPv4)
+		subnet := ""
+		if subnetOf != nil {
+			if got, err := subnetOf(cand.IPv4); err == nil {
+				subnet = got
+			}
+		}
+		out = append(out, lanCandidate{
+			iface:   cand,
+			subnet:  subnet,
+			lanSize: lanSizedCIDR(subnet),
+			virtual: virtualInterface(cand.Name),
+		})
+	}
+	return out
+}
+
+// lanSizedCIDR reports whether a subnet can hold another host. A /31 or /32 is a
+// point-to-point link (a tunnel), not a LAN, whatever the adapter is called.
+func lanSizedCIDR(cidr string) bool {
+	_, network, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return false
+	}
+	ones, bits := network.Mask.Size()
+	return bits != 0 && ones <= bits-2
+}
+
+// recommendLAN returns the index to preselect, or -1 when no candidate is a real
+// LAN. It prefers the default route's address, but only when that address is a
+// LAN-sized non-virtual adapter: a VPN tunnel or a container bridge is very often
+// the default route, and recommending it would send the share to a network no
+// colleague can reach.
+func recommendLAN(cands []lanCandidate, outbound string) int {
+	for i, c := range cands {
+		if c.iface.IPv4 == outbound && !c.virtual && c.lanSize {
+			return i
+		}
+	}
+	for i, c := range cands {
+		if !c.virtual && c.lanSize {
+			return i
+		}
+	}
+	return -1
+}
+
+// lanChoiceLabel is what the picker shows for one candidate.
+func lanChoiceLabel(cand lanCandidate, recommended bool) string {
+	label := cand.iface.Name + " · " + cand.iface.IPv4
+	if cand.subnet != "" {
+		label += " · " + cand.subnet
+	}
+	switch {
+	case recommended:
+		label += "（推荐）"
+	case cand.virtual:
+		label += "（虚拟网卡，其他设备通常不可达）"
+	case cand.subnet != "" && !cand.lanSize:
+		// Unknown subnet must not be described as point-to-point; only a
+		// measured /31 or /32 is.
+		label += "（点对点地址，其他设备不可达）"
+	}
+	return label
+}
+
+// relayInterfaceChoices returns the label -> address mapping the panel offers.
+//
+// A colleague can only reach an address inside their own subnet, so each choice
+// shows the subnet and the most likely one is marked: the default route when it
+// is a real LAN, otherwise the first LAN-sized physical adapter.
+func (a *app) relayInterfaceChoices() ([]string, map[string]relay.Interface) {
+	cands := newLANCandidates(lanAddresses{}.LANCandidates(), relay.SubnetOfAddress)
+	pick := recommendLAN(cands, outboundIPv4())
+	labels := make([]string, 0, len(cands))
+	byLabel := make(map[string]relay.Interface, len(cands))
+	for i, cand := range cands {
+		label := lanChoiceLabel(cand, i == pick)
 		labels = append(labels, label)
-		byLabel[label] = cand
+		byLabel[label] = cand.iface
 	}
 	return labels, byLabel
+}
+
+// outboundIPv4 reports the local address of the default route. A connected UDP
+// socket performs the route lookup without sending a packet, so this costs
+// nothing and works on every platform.
+func outboundIPv4() string {
+	conn, err := net.Dial("udp4", "192.0.2.1:9") // TEST-NET-1, never contacted
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	addr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok || addr.IP == nil {
+		return ""
+	}
+	return addr.IP.To4().String()
 }
 
 func (a *app) lanShareView(c *ui.Context) {
@@ -526,7 +652,18 @@ func (a *app) lanShareEnableForm(c *ui.Context, d *lanShareDraft) {
 			}
 		}
 		if current == "" {
-			current = iaLabels[0]
+			// No remembered choice: start on the recommendation, if there is one.
+			cands := newLANCandidates(lanAddresses{}.LANCandidates(), relay.SubnetOfAddress)
+			if pick := recommendLAN(cands, outboundIPv4()); pick >= 0 {
+				for label, cand := range iaByLabel {
+					if cand.IPv4 == cands[pick].iface.IPv4 {
+						current = label
+					}
+				}
+			}
+			if current == "" {
+				current = iaLabels[0]
+			}
 			d.ipv4 = iaByLabel[current].IPv4
 			d.interfaceName = iaByLabel[current].Name
 		}
@@ -552,15 +689,26 @@ func (a *app) lanShareEnableForm(c *ui.Context, d *lanShareDraft) {
 
 func (a *app) lanShareManageBody(c *ui.Context, d *lanShareDraft, view relay.View) {
 	t := c.Theme()
+	subnet := ""
+	if view.Address != "" {
+		if got, err := relay.SubnetOfAddress(view.Address); err == nil {
+			subnet = got
+		}
+	}
 	rows := [][2]string{
 		{"共享接入点", orDash(view.PointName)},
 		{"监听地址", orDash(view.Address)},
+		{"所在网段", orDash(subnet)},
 		{"端口", fmt.Sprint(orZero(view.Port))},
 		{"运行状态", stateLabelOf(view.State)},
 		{"重启后恢复", "是（点击关闭共享后不再恢复）"},
 	}
 	if !view.CertExpiry.IsZero() {
 		rows = append(rows, [2]string{"证书有效期至", view.CertExpiry.Format("2006-01-02")})
+	}
+	if subnet != "" {
+		ui.Text(c, "同事需要和本机在同一网段（"+subnet+"）内，并且没有被 Wi-Fi 访客网络或 AP 隔离挡住。").
+			FontSize(11).TextColor(t.TextMuted).Wrap()
 	}
 	for _, row := range rows {
 		ui.Row(c).Gap(8).Children(func() {

@@ -738,3 +738,43 @@ bash scripts/package-linux.sh                   # bundle 产出成功
 
 仍**未**验证：N1 的 Windows 实机（PowerShell 5.1 真实 BOM 行为）、N3/N4 的实机 UAC 交互。
 这两项与 §17.5 列出的实机项目一起，必须在有 Windows 主机的环境里补做。
+
+## 19. 「使用网络」怎么选：跨平台判断
+
+分享只能绑定**一个**局域网地址，同事必须和这个地址在同一网段。面板因此不再只列 `名称 · IPv4`：
+
+| 信息 | 来源 | 作用 |
+| --- | --- | --- |
+| 子网（如 `192.168.31.0/24`） | `relay.SubnetOfAddress`（该网卡的真实掩码） | 让用户判断「和同事是否同网段」 |
+| `（推荐）` | 默认路由地址；仅当它是**非虚拟**且**网段≥/30** | 首次开启时的默认选中项 |
+| `（虚拟网卡，其他设备通常不可达）` | 名称命中容器/虚拟机/VPN 前缀 | 说明 docker、WSL、VPN 之类不能给同事用 |
+| `（点对点地址，其他设备不可达）` | 实测掩码为 /31 或 /32 | 隧道/点对点地址不能承载分享 |
+
+### 19.1 跨平台约束
+
+- 只用标准库，无 build tag：`net.Interfaces()`、`net.IPNet.Mask`、`net.Dial("udp4", …).LocalAddr()`
+  （UDP connect 只做路由查询、不发包，不需要任何权限）。linux/windows/darwin 均通过 `go build`/`go vet`。
+- **网卡名只用于排序与标注，不单独决定正确性**：Windows 是本地化友好名（`以太网`、`WLAN`、
+  `vEthernet (WSL)`），macOS 是 `utunN`/`bridgeN`，Linux 是 `tun0`/`wg0`/`tailscale0`/`docker0`。
+  名称列表覆盖了三端的常见虚拟适配器，但判断「能否承载分享」用的是与名称无关的掩码事实。
+- 默认路由常落在 VPN 上（本应用的使用场景就是连着 VPN），因此虚拟网卡**永不**成为推荐；
+  若没有可信候选，则不标推荐（宁可让用户自己看子网，也不给错误建议）。
+- macOS 的「本地网络」权限提示与 `net.Interfaces()` 无关；它只在真实收发局域网流量时出现，
+  本功能本来就要绑定局域网地址，属于既有行为。
+
+### 19.2 一键验证方式
+
+```text
+go test ./ -run 'TestLANChoiceLabel|TestVirtualInterface|TestRecommendLAN|TestLANSharePanelRecommends|TestRunningSharePanel'
+GOOS=linux/windows/darwin go build ./...；GOOS=windows go vet ./...
+```
+
+本轮在本机（默认路由走 `10.8.6.130/32` 隧道、另有 4 个 docker 网桥）实测输出：
+
+```text
+enp1s0 · 192.168.31.61 · 192.168.31.0/24（推荐）
+br-f431a304d38a · 172.22.0.1 · 172.22.0.0/16（虚拟网卡，其他设备通常不可达）
+docker0 · 172.17.0.1 · 172.17.0.0/16（虚拟网卡，其他设备通常不可达）
+```
+
+即：默认路由在隧道上时，推荐仍然落在真实局域网网卡，这正是之前会选错的那种环境。

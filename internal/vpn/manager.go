@@ -254,6 +254,10 @@ type endpoint struct {
 	proxy           *proxy.Server
 	gen             int
 	cancel          context.CancelFunc
+	// sessStop ends the monitor loop of the installed session. It is cancelled
+	// whenever the session is detached, so no monitor outlives its session even
+	// when the session itself never reports an end.
+	sessStop context.CancelFunc
 
 	active atomic.Int64
 	total  atomic.Int64
@@ -511,6 +515,11 @@ func (m *Manager) stopEndpointLocked(id string, closes *[]closeLater) {
 		ep.cancel()
 		ep.cancel = nil
 	}
+	if ep.sessStop != nil {
+		ep.sessStop()
+		ep.sessStop = nil
+	}
+	ep.updateSeq = 0
 	sess, p := ep.sess, ep.proxy
 	ep.sess, ep.proxy = nil, nil
 	if sess != nil || p != nil {
@@ -757,6 +766,15 @@ func (m *Manager) connect(id string, gen int) {
 	cur.sess = sess
 	cur.proxy = p
 	cur.cancel = nil
+	// A new session starts its own update sequence at 1. Keeping the previous
+	// session's cursor would drop the first snapshot of the new session and
+	// leave the manager on stale resources.
+	cur.updateSeq = 0
+	if cur.sessStop != nil {
+		cur.sessStop()
+	}
+	monCtx, monCancel := context.WithCancel(context.Background())
+	cur.sessStop = monCancel
 	cur.state = StateOnline
 	cur.errMsg = ""
 	cur.info = cloneSessionInfo(sess.Info())
@@ -783,69 +801,82 @@ func (m *Manager) connect(id string, gen int) {
 
 	m.logf("[%s] 已登录，用时 %s，隧道地址 %s", cfg.Name, time.Since(start).Round(time.Millisecond), sess.Info().ClientIP)
 	m.changed()
-	m.consumeUpdates(id, gen, sess)
-	m.watch(id, gen, sess)
+	m.supervise(monCtx, id, gen, sess)
 }
 
-// consumeUpdates applies session-published snapshots. Every message is checked
-// against the same endpoint, generation and session, and against an increasing
-// sequence, so a late update after a reconnect is dropped instead of replacing
-// the current rules.
-func (m *Manager) consumeUpdates(id string, gen int, sess Session) {
-	updater, ok := sess.(SessionUpdater)
-	if !ok {
-		return
+// supervise runs one session to its end. Resource updates and the end of the
+// session are consumed by the same loop: a session that dies without ever
+// publishing an update must still leave Online promptly, so the update channel
+// can never be the only thing being watched.
+//
+// ctx belongs to the session installation, not to the login attempt: the login
+// context is cancelled as soon as this function returns.
+func (m *Manager) supervise(ctx context.Context, id string, gen int, sess Session) {
+	var updates <-chan SessionUpdate
+	if u, ok := sess.(SessionUpdater); ok {
+		updates = u.Updates()
+	}
+	var done <-chan struct{}
+	if w, ok := sess.(SessionWatcher); ok {
+		done = w.Done()
 	}
 	for {
 		select {
-		case update, open := <-updater.Updates():
+		case <-ctx.Done():
+			return
+		case <-m.monitorStop:
+			// Manager shutdown closes every session anyway; just stop here.
+			return
+		case update, open := <-updates:
 			if !open {
-				return
-			}
-			m.mu.Lock()
-			cur := m.points[id]
-			if cur == nil || cur.gen != gen || cur.sess != sess || cur.state != StateOnline {
-				m.mu.Unlock()
-				return
-			}
-			if update.Sequence <= cur.updateSeq {
-				m.mu.Unlock()
+				// The sender owns the stream and closed it after its last
+				// send. Stop consuming it, but keep watching for the end.
+				updates = nil
 				continue
 			}
-			cur.updateSeq = update.Sequence
-			info := cloneSessionInfo(update.Info)
-			if cur.cfg.HealthTarget != "" {
-				info.HealthTarget = cur.cfg.HealthTarget
-			}
-			cur.info = info
-			cur.rawResources = info.Resources
-			cur.publishResourcesLocked()
-			cur.knownResources = rememberResources(cur.knownResources, info.Resources)
-			m.mu.Unlock()
-			m.logf("[%s] 分享资源已更新", id)
-			m.changed()
-		case <-time.After(30 * time.Second):
-			// Wake up occasionally so a closed session cannot leak this
-			// goroutine; the sequence/identity checks keep it harmless.
-			m.mu.RLock()
-			cur := m.points[id]
-			alive := cur != nil && cur.gen == gen && cur.sess == sess && cur.state == StateOnline
-			m.mu.RUnlock()
-			if !alive {
+			if !m.applyUpdate(id, gen, sess, update) {
 				return
 			}
+		case <-done:
+			m.sessionEnded(id, gen, sess)
+			return
 		}
 	}
 }
 
-// watch notices a tunnel that ends by itself, as when the server signs the
-// session out, and logs the point back in when the settings allow it.
-func (m *Manager) watch(id string, gen int, sess Session) {
-	w, ok := sess.(SessionWatcher)
-	if !ok {
-		return
+// applyUpdate installs one session snapshot. Every message is checked against
+// the same endpoint, generation and session, and against an increasing
+// sequence, so a late update after a reconnect is dropped instead of replacing
+// the current rules. It reports whether the session is still the installed one.
+func (m *Manager) applyUpdate(id string, gen int, sess Session, update SessionUpdate) bool {
+	m.mu.Lock()
+	cur := m.points[id]
+	if cur == nil || cur.gen != gen || cur.sess != sess || cur.state != StateOnline {
+		m.mu.Unlock()
+		return false
 	}
-	<-w.Done()
+	if update.Sequence <= cur.updateSeq {
+		m.mu.Unlock()
+		return true
+	}
+	cur.updateSeq = update.Sequence
+	info := cloneSessionInfo(update.Info)
+	if cur.cfg.HealthTarget != "" {
+		info.HealthTarget = cur.cfg.HealthTarget
+	}
+	cur.info = info
+	cur.rawResources = info.Resources
+	cur.publishResourcesLocked()
+	cur.knownResources = rememberResources(cur.knownResources, info.Resources)
+	m.mu.Unlock()
+	m.logf("[%s] 分享资源已更新", id)
+	m.changed()
+	return true
+}
+
+// sessionEnded notices a tunnel that ends by itself, as when the server signs
+// the session out, and logs the point back in when the settings allow it.
+func (m *Manager) sessionEnded(id string, gen int, sess Session) {
 	m.mu.Lock()
 	cur := m.points[id]
 	if cur == nil || cur.gen != gen || cur.state != StateOnline || cur.sess != sess {
@@ -855,12 +886,16 @@ func (m *Manager) watch(id string, gen int, sess Session) {
 	auto := m.settings.AutoReconnect
 	name := cur.cfg.Name
 	msg := "连接已被服务器断开"
-	if err := w.Err(); err != nil {
-		msg = err.Error()
+	var endErr error
+	if w, ok := sess.(SessionWatcher); ok {
+		endErr = w.Err()
+	}
+	if endErr != nil {
+		msg = endErr.Error()
 		// A terminal share failure (revoked token, closed share, incompatible
 		// protocol) is not something a 5-second retry can fix: retrying forever
 		// would only spam the log and burn the host's auth budget.
-		if !RelayReconnectable(err) {
+		if !RelayReconnectable(endErr) {
 			auto = false
 		}
 	}
@@ -869,6 +904,11 @@ func (m *Manager) watch(id string, gen int, sess Session) {
 	p := cur.proxy
 	cur.proxy = nil
 	cur.sess = nil
+	if cur.sessStop != nil {
+		cur.sessStop()
+		cur.sessStop = nil
+	}
+	cur.updateSeq = 0
 	cur.shareEpoch++
 	m.closeShareSourcesLocked(id)
 	m.mappings.Retire(fmt.Sprintf("%p/%d", cur, cur.gen))
@@ -1601,6 +1641,11 @@ func (m *Manager) SetTunServed(ids []string) {
 				id: id, name: ep.cfg.Name, proxy: ep.proxy,
 				sess: ep.sess, direct: true,
 			})
+			if ep.sessStop != nil {
+				ep.sessStop()
+				ep.sessStop = nil
+			}
+			ep.updateSeq = 0
 			ep.sess = nil
 			ep.tunServed = true
 			ep.aliveState = "由 TUN 接管"

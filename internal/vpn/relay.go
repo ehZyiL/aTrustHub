@@ -105,6 +105,24 @@ func connectRelay(ctx context.Context, opts RelayConnectorOptions, point model.A
 	return s, nil
 }
 
+// displayError replaces the wording of an error without hiding it. The wrapped
+// error keeps its code and retry classification: the presentation text must
+// never turn a terminal failure into something the reconnect policy retries.
+type displayError struct {
+	msg   string
+	cause error
+}
+
+func (e *displayError) Error() string { return e.msg }
+func (e *displayError) Unwrap() error { return e.cause }
+
+func display(err error, msg string) error {
+	if err == nil {
+		return nil
+	}
+	return &displayError{msg: msg, cause: err}
+}
+
 // friendlyRelayError maps protocol failures to the words the card shows. It never
 // says "VPN 密码错误": a share token is a different credential.
 func friendlyRelayError(err error) error {
@@ -112,17 +130,17 @@ func friendlyRelayError(err error) error {
 	if errors.As(err, &re) {
 		switch re.Code {
 		case relay.CodeInvalidCredentials:
-			return errors.New("分享口令无效或已被撤销，请向分享主机获取新口令")
+			return display(err, "分享口令无效或已被撤销，请向分享主机获取新口令")
 		case relay.CodeProtocolUnsupported:
-			return errors.New("分享主机协议版本不兼容，请升级客户端")
+			return display(err, "分享主机协议版本不兼容，请升级客户端")
 		case relay.CodeShareClosed:
-			return errors.New("分享已关闭")
+			return display(err, "分享已关闭")
 		case relay.CodeSessionExpired:
-			return errors.New("分享会话已过期，请重新连接")
+			return display(err, "分享会话已过期，请重新连接")
 		case relay.CodeBusy:
-			return errors.New("分享主机繁忙，请稍后重试")
+			return display(err, "分享主机繁忙，请稍后重试")
 		}
-		return errors.New(re.Message)
+		return display(err, re.Message)
 	}
 	return err
 }
@@ -159,6 +177,7 @@ type relaySession struct {
 	done   chan struct{}
 	once   sync.Once
 	closed atomic.Bool
+	failed atomic.Bool
 
 	seq         atomic.Uint64
 	updates     chan SessionUpdate
@@ -227,16 +246,20 @@ func (s *relaySession) Err() error {
 // Updates streams resource snapshots after the first one.
 func (s *relaySession) Updates() <-chan SessionUpdate { return s.updates }
 
-// Close ends the session, its heartbeat and its client lease.
+// Close ends the session, its heartbeat and its client lease. It is idempotent
+// and still completes cleanup after fail: terminating and reaping are separate
+// steps, so the Manager's later Close never returns early on a dead session.
 func (s *relaySession) Close() error {
-	if s.closed.Swap(true) {
-		return nil
+	first := !s.closed.Swap(true)
+	if first && !s.failed.Load() {
+		// Best effort: a bounded revoke must not hold the UI's shutdown. A
+		// session that already ended (revoked token, closed share) has nothing
+		// to revoke.
+		ctx, cancel := context.WithTimeout(context.Background(), relay.ControlTimeout)
+		_ = s.client.Revoke(ctx, s.token)
+		cancel()
 	}
 	s.cancel()
-	// Best effort: a bounded revoke must not hold the UI's shutdown.
-	ctx, cancel := context.WithTimeout(context.Background(), relay.ControlTimeout)
-	_ = s.client.Revoke(ctx, s.token)
-	cancel()
 	s.client.Close()
 	// Stop the heartbeat before closing the update stream: a send racing with
 	// close() would panic. Closing after the wait means there is no sender left.
@@ -381,14 +404,21 @@ func (s *relaySession) refresh(status *relay.StatusResponse) error {
 	return nil
 }
 
-// fail ends the session with a reason.
+// fail ends the session with a reason. The terminal reason is published once and
+// immediately; the cleanup that has to wait for the heartbeat cannot run on the
+// heartbeat's own goroutine, so it is handed to a short-lived reaper.
 func (s *relaySession) fail(err error) {
+	s.failed.Store(true)
 	s.finish(err)
-	if s.closed.Swap(true) {
-		return
+	if !s.closed.Swap(true) {
+		s.cancel()
+		s.client.Close()
 	}
-	s.cancel()
-	s.client.Close()
+	go func() {
+		// The sender closes the update stream only after its last send.
+		s.wg.Wait()
+		s.closeUpdates()
+	}()
 }
 
 // closeUpdates closes the update stream exactly once, whoever gets there first.

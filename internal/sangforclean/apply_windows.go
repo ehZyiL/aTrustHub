@@ -331,6 +331,12 @@ func executeDeleteRegistry(f Finding) (ReportStatus, string) {
 	}
 
 	fullKey := hive + `\` + key
+
+	// 1. 先检查该注册表项是否仍然存在，若已经不存在（例如被同一根键的另一视图或先前步骤已删除），直接判定清理成功
+	if !isRegistryKeyPresent(hive, key, view) {
+		return StatusOk, "注册表项已不存在: " + fullKey
+	}
+
 	args := []string{"delete", fullKey, "/f"}
 	if view == "32" {
 		args = append(args, "/reg:32")
@@ -340,11 +346,49 @@ func executeDeleteRegistry(f Finding) (ReportStatus, string) {
 
 	cmd := exec.Command("reg.exe", args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	if err := cmd.Run(); err != nil {
-		return StatusFailed, fmt.Sprintf("删除注册表失败: %v", err)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		outStr := strings.TrimSpace(string(out))
+		// 若提示找不到指定的注册表项，说明目标已被清除，返回成功
+		if strings.Contains(strings.ToLower(outStr), "unable to find") || strings.Contains(outStr, "找不到") {
+			return StatusOk, "注册表项已不存在: " + fullKey
+		}
+		// 再次检查键是否存在，如果确实已不存在，判定成功
+		if !isRegistryKeyPresent(hive, key, view) {
+			return StatusOk, "已删除注册表项: " + fullKey
+		}
+		return StatusFailed, fmt.Sprintf("删除注册表失败: %s (%v)", outStr, err)
 	}
 
 	return StatusOk, "已删除注册表项: " + fullKey
+}
+
+func isRegistryKeyPresent(hive, key, view string) bool {
+	var rootKey registry.Key
+	switch hive {
+	case "HKLM":
+		rootKey = registry.LOCAL_MACHINE
+	case "HKCU":
+		rootKey = registry.CURRENT_USER
+	case "HKCR":
+		rootKey = registry.CLASSES_ROOT
+	default:
+		return false
+	}
+
+	var access uint32 = registry.READ
+	if view == "32" {
+		access |= registry.WOW64_32KEY
+	} else if view == "64" {
+		access |= registry.WOW64_64KEY
+	}
+
+	k, err := registry.OpenKey(rootKey, key, access)
+	if err != nil {
+		return false
+	}
+	k.Close()
+	return true
 }
 
 func executeDeleteCert(f Finding) (ReportStatus, string) {

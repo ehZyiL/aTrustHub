@@ -277,20 +277,41 @@ func (a *app) readFinalReport(reportPath string, exitCode int, err error) {
 	if exitCode == 0 {
 		a.cleanup.status = cleanupStatusDone
 		a.cleanup.message = "清理已成功完成！"
+		a.cleanup.err = ""
 	} else if exitCode == 3 {
 		a.cleanup.status = cleanupStatusDone
 		a.cleanup.message = "清理完成，部分驱动/文件需重启生效"
+		a.cleanup.err = ""
 	} else if exitCode == 4 {
 		a.cleanup.status = cleanupStatusReady
 		a.cleanup.err = "用户取消了管理员 UAC 授权"
 	} else {
 		a.cleanup.status = cleanupStatusFailed
-		a.cleanup.err = fmt.Sprintf("执行出现错误 (退出码: %d, 错误: %v)", exitCode, err)
+		if err != nil {
+			a.cleanup.err = fmt.Sprintf("执行出现错误 (退出码: %d, %v)", exitCode, err)
+		} else {
+			a.cleanup.err = fmt.Sprintf("部分项目未能成功清除 (退出码: %d)", exitCode)
+		}
 	}
 
 	a.cleanup.backups, _ = sangforclean.ListBackups("")
 	a.cleanup.mu.Unlock()
 	a.invalidate()
+
+	// 自动异步重新扫描系统真实状态，即时刷新界面上的残留项列表，无需用户手动重启客户端
+	go func() {
+		freshPlan, freshErr := sangforclean.Scan(sangforclean.ScanOptions{})
+		if freshErr == nil && freshPlan != nil {
+			a.cleanup.mu.Lock()
+			a.cleanup.plan = freshPlan
+			a.cleanup.selectedMap = make(map[string]bool)
+			for _, f := range freshPlan.Findings {
+				a.cleanup.selectedMap[f.ID] = f.Selected
+			}
+			a.cleanup.mu.Unlock()
+			a.invalidate()
+		}
+	}()
 }
 
 func (a *app) launchOfficialUninstaller(uninstStr string) {

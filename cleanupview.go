@@ -134,9 +134,13 @@ func (a *app) maintenanceSection(c *ui.Context) {
 				ui.Text(c, "错误: "+errMsg).FontSize(12).TextColor(t.Danger)
 			}
 
-			if st == cleanupStatusDone {
-				summary := fmt.Sprintf("✅ 统计: 成功 %d 项, 重启生效 %d 项, 失败 %d 项", okCount, rebootCount, failedCount)
-				ui.Text(c, summary).Bold().FontSize(13).TextColor(t.Success)
+			if st == cleanupStatusDone || (st == cleanupStatusFailed && (okCount > 0 || rebootCount > 0)) {
+				summary := fmt.Sprintf("统计: 成功 %d 项, 重启生效 %d 项, 失败 %d 项", okCount, rebootCount, failedCount)
+				color := t.Success
+				if failedCount > 0 {
+					color = t.Warning
+				}
+				ui.Text(c, summary).Bold().FontSize(13).TextColor(color)
 				if rebootCount > 0 {
 					ui.Text(c, "部分虚拟网卡驱动或被占用的文件已登记在系统重启后删除，建议重启电脑。").
 						FontSize(12).TextColor(t.Warning)
@@ -146,6 +150,9 @@ func (a *app) maintenanceSection(c *ui.Context) {
 			// 滚动日志条目
 			ui.Column(c).MaxHeight(150).Gap(3).Children(func() {
 				for _, ev := range events {
+					if strings.TrimSpace(ev.Message) == "" {
+						continue // 过滤无文字信息的内部控制事件
+					}
 					prefix := "• "
 					switch ev.Status {
 					case sangforclean.StatusOk:

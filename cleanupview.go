@@ -95,23 +95,25 @@ func (a *app) maintenanceSection(c *ui.Context) {
 		ui.Text(c, "勾选需要清理的组件（建议项已默认勾选，深度项涉及第三方网络工具或网卡需谨慎勾选）：").
 			FontSize(12).TextColor(t.TextMuted)
 
-		// 清单列表
-		ui.Column(c).Gap(6).Children(func() {
-			for _, f := range plan.Findings {
-				id := f.ID
-				val := selectedSnapshot[id]
+		// 清单列表（支持多项时滚动查看）
+		ui.Scroll(c).MaxHeight(260).Children(func() {
+			ui.Column(c).Gap(6).Children(func() {
+				for _, f := range plan.Findings {
+					id := f.ID
+					val := selectedSnapshot[id]
 
-				label := fmt.Sprintf("[%s] %s - %s", f.Group, f.Title, f.Detail)
-				if f.Risk == sangforclean.RiskDeep {
-					label = "⚠️ (深度) " + label
-				}
+					label := fmt.Sprintf("[%s] %s - %s", f.Group, f.Title, f.Detail)
+					if f.Risk == sangforclean.RiskDeep {
+						label = "⚠️ (深度) " + label
+					}
 
-				if ui.Checkbox(c, &val, label).Changed() {
-					a.cleanup.mu.Lock()
-					a.cleanup.selectedMap[id] = val
-					a.cleanup.mu.Unlock()
+					if ui.Checkbox(c, &val, label).Changed() {
+						a.cleanup.mu.Lock()
+						a.cleanup.selectedMap[id] = val
+						a.cleanup.mu.Unlock()
+					}
 				}
-			}
+			})
 		})
 
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
@@ -147,23 +149,25 @@ func (a *app) maintenanceSection(c *ui.Context) {
 				}
 			}
 
-			// 滚动日志条目
-			ui.Column(c).MaxHeight(150).Gap(3).Children(func() {
-				for _, ev := range events {
-					if strings.TrimSpace(ev.Message) == "" {
-						continue // 过滤无文字信息的内部控制事件
+			// 滚动日志条目（支持垂直滚动与长路径自动换行）
+			ui.Scroll(c).MaxHeight(180).Children(func() {
+				ui.Column(c).Gap(4).Children(func() {
+					for _, ev := range events {
+						if strings.TrimSpace(ev.Message) == "" {
+							continue // 过滤无文字信息的内部控制事件
+						}
+						prefix := "• "
+						switch ev.Status {
+						case sangforclean.StatusOk:
+							prefix = "✓ "
+						case sangforclean.StatusFailed:
+							prefix = "✗ "
+						case sangforclean.StatusReboot:
+							prefix = "⏳ "
+						}
+						ui.Text(c, prefix+ev.Message).FontSize(11).TextColor(t.TextMuted).Wrap()
 					}
-					prefix := "• "
-					switch ev.Status {
-					case sangforclean.StatusOk:
-						prefix = "✓ "
-					case sangforclean.StatusFailed:
-						prefix = "✗ "
-					case sangforclean.StatusReboot:
-						prefix = "⏳ "
-					}
-					ui.Text(c, prefix+ev.Message).FontSize(11).TextColor(t.TextMuted)
-				}
+				})
 			})
 		})
 	}

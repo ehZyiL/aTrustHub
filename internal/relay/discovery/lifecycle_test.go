@@ -419,6 +419,10 @@ func TestPublisherDropsALateRegistration(t *testing.T) {
 	backend := newHubBackend(hub)
 	gate := make(chan struct{})
 	backend.gate = gate
+	// The first attempt is cancelled while it is in flight, but the platform call
+	// behind it cannot be interrupted: it still returns a registration, which the
+	// publisher has to withdraw instead of leaking the socket.
+	backend.uncancellable = true
 	pub := NewPublisher(PublisherOptions{Backend: backend})
 	defer pub.Close(context.Background())
 

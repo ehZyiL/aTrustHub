@@ -237,6 +237,16 @@ func (c *cache) transitions(key string) []Event {
 			stale = append(stale, k)
 		}
 	}
+	if ok {
+		if _, already := c.emitted[cand.Key()]; !already && len(c.emitted)-len(stale) >= c.max {
+			// The candidate list is full of entries the user may already be
+			// looking at. Withdrawing this instance's old endpoint and then
+			// failing to add the new one would make the instance vanish, so it is
+			// held exactly as it is; the expiry tick revisits every instance and
+			// picks up a slot as soon as one frees up.
+			return nil
+		}
+	}
 	var events []Event
 	for _, k := range stale {
 		events = append(events, Event{Kind: EventRemoved, Candidate: c.emitted[k]})
@@ -250,11 +260,6 @@ func (c *cache) transitions(key string) []Event {
 	}
 	prev, existed := c.emitted[cand.Key()]
 	if !existed {
-		if len(c.emitted) >= c.max {
-			// The candidate list is full. Completing one more instance must not
-			// push out an entry the user may already be looking at.
-			return events
-		}
 		events = append(events, Event{Kind: EventAdded, Candidate: cand})
 	} else if !sameCandidate(prev, cand) {
 		events = append(events, Event{Kind: EventUpdated, Candidate: cand})

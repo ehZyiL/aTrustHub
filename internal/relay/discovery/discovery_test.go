@@ -128,6 +128,11 @@ type hubBackend struct {
 	// blocker makes Advertise wait until it is closed, without touching the
 	// context, which lets a test supersede an attempt that is already running.
 	blocker chan struct{}
+	// uncancellable makes an attempt complete with a real registration even after
+	// it was cancelled, the way a platform call that cannot be interrupted does.
+	// The late-registration test needs exactly that: the publisher must withdraw
+	// a handle that arrives after the state it was made for is already gone.
+	uncancellable bool
 	// failures makes the next N registrations fail, for the retry tests.
 	failures  int
 	attempted int
@@ -153,10 +158,14 @@ func (b *hubBackend) Advertise(ctx context.Context, a Announcement) (Registratio
 		return nil, ctx.Err()
 	}
 	if b.gate != nil {
-		select {
-		case <-b.gate:
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		if b.uncancellable {
+			<-b.gate
+		} else {
+			select {
+			case <-b.gate:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
 	}
 	if b.blocker != nil {
@@ -176,9 +185,13 @@ func (b *hubBackend) Advertise(ctx context.Context, a Announcement) (Registratio
 	if failing {
 		return nil, errors.New("模拟注册失败")
 	}
-	reg, err := b.base.Advertise(ctx, a)
-	if err != nil {
-		return nil, err
+	var reg Registration = nopReg{}
+	if !b.uncancellable {
+		got, err := b.base.Advertise(ctx, a)
+		if err != nil {
+			return nil, err
+		}
+		reg = got
 	}
 	b.mu.Lock()
 	b.created = append(b.created, a)
@@ -385,6 +398,7 @@ func TestAnnouncementRejectsUnusableValues(t *testing.T) {
 		{"坏名称", func(a *Announcement) { a.Name = "带\n换行" }},
 		{"端口 0", func(a *Announcement) { a.Port = 0 }},
 		{"端口 5353", func(a *Announcement) { a.Port = 5353 }},
+		{"没有地址", func(a *Announcement) { a.Address = "" }},
 		{"地址与网卡不一致", func(a *Announcement) { a.Address = "192.168.31.99" }},
 		{"公网网卡地址", func(a *Announcement) {
 			a.Interface.IPv4 = "8.8.8.8"
@@ -402,5 +416,51 @@ func TestAnnouncementRejectsUnusableValues(t *testing.T) {
 	}
 	if err := base.Validate(); err != nil {
 		t.Fatalf("合法公告被拒绝：%v", err)
+	}
+}
+
+// One adapter that refuses a multicast socket must not cost the user every other
+// adapter on the machine: a Windows box routinely carries a disconnected VPN or
+// a Hyper-V remnant next to the office LAN that works fine.
+func TestBrowseSkipsAnInterfaceItCannotOpen(t *testing.T) {
+	hub := newHub()
+	backend := newHubBackend(hub)
+	good := testInterface("en0")
+	bad := Interface{Name: "tun9", IPv4: "10.9.9.9", Subnet: "10.9.9.0/24"}
+	open := backend.base.open
+	backend.base.open = func(ifi Interface) (link, error) {
+		if ifi.Name == bad.Name {
+			return nil, errors.New("模拟套接字失败")
+		}
+		return open(ifi)
+	}
+	var logged []string
+	session, err := backend.base.Browse(context.Background(), BrowseOptions{
+		Interfaces: []Interface{bad, good},
+		OnRecords:  func([]Record) {},
+		Logf: func(format string, args ...any) {
+			logged = append(logged, format)
+		},
+	})
+	if err != nil {
+		t.Fatalf("一张网卡失败不该让整次浏览失败：%v", err)
+	}
+	live := session.(*browseSession).links
+	if len(live) != 1 || live[0].ifi.Name != good.Name {
+		t.Fatalf("仍在浏览的网卡不对：%+v", live)
+	}
+	if len(logged) == 0 {
+		t.Fatal("被跳过的网卡没有留下日志")
+	}
+	_ = session.Close()
+
+	// A set where nothing could be opened is still an error, and it names the
+	// adapters that refused so the panel can say why.
+	backend.base.open = func(Interface) (link, error) { return nil, errors.New("模拟套接字失败") }
+	if _, err := backend.base.Browse(context.Background(), BrowseOptions{
+		Interfaces: []Interface{bad},
+		OnRecords:  func([]Record) {},
+	}); err == nil || !strings.Contains(err.Error(), "监听发现请求") {
+		t.Fatalf("全部失败时应当报告原因，得到 %v", err)
 	}
 }

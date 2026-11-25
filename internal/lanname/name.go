@@ -40,6 +40,14 @@ func Valid(name string) error {
 			return errors.New("公开名称不能包含控制字符")
 		}
 	}
+	if strings.ContainsRune(name, '\\') {
+		// The name travels inside a DNS-SD TXT value, which is a DNS
+		// character-string: a backslash introduces an escape (\DDD or \X) when
+		// it is packed. A name containing one would reach the colleague as a
+		// different string, so it is refused at the same boundaries as the
+		// other unwritable characters instead of being silently rewritten.
+		return errors.New("公开名称不能包含反斜杠")
+	}
 	if strings.TrimSpace(name) != name {
 		return errors.New("公开名称首尾不能有空白")
 	}

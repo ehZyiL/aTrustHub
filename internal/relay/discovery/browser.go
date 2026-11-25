@@ -68,10 +68,15 @@ func (b *Browser) Start(ifaces []Interface) error {
 	b.closed = false
 	old := b.session
 	oldCancel := b.cancel
+	// The expiry loop belongs to the generation that is being torn down, not to
+	// the browser: it must stop here, on the success path and on both failure
+	// paths, or it would keep expiring a cache that no longer belongs to it.
+	oldStop := b.stopTicker
 	b.gen++
 	gen := b.gen
 	b.session = nil
 	b.cancel = nil
+	b.stopTicker = nil
 	b.err = ""
 	b.cache.reset()
 	b.ifaces = append([]Interface(nil), ifaces...)
@@ -80,6 +85,9 @@ func (b *Browser) Start(ifaces []Interface) error {
 
 	if oldCancel != nil {
 		oldCancel()
+	}
+	if oldStop != nil {
+		close(oldStop)
 	}
 	if old != nil {
 		_ = old.Close()
@@ -113,7 +121,9 @@ func (b *Browser) Start(ifaces []Interface) error {
 
 	b.mu.Lock()
 	if b.closed || b.gen != gen {
-		// Closed or superseded while the backend was starting.
+		// Closed or superseded while the backend was starting. Close already
+		// cleared started/err, and a newer generation owns every field, so this
+		// attempt has nothing to write: it only releases what it opened.
 		b.mu.Unlock()
 		cancel()
 		_ = session.Close()
@@ -121,9 +131,9 @@ func (b *Browser) Start(ifaces []Interface) error {
 	}
 	b.session = session
 	b.cancel = cancel
+	b.startTickerLocked()
 	b.mu.Unlock()
 
-	b.startTicker()
 	b.publish()
 	return nil
 }
@@ -222,31 +232,39 @@ func (b *Browser) apply(gen uint64, records []Record) {
 	}
 }
 
-// startTicker expires records on a timer so a lost goodbye still removes the
-// entry at its real TTL. It is a single ticker per generation, never one per
-// candidate.
-func (b *Browser) startTicker() {
+// startTickerLocked installs the expiry timer for the current generation. The
+// caller holds b.mu: installing it inside the same critical section that stores
+// b.session is what stops a Close that races with a Start from leaving a ticker
+// running with nobody left to stop it.
+func (b *Browser) startTickerLocked() {
+	if b.closed {
+		return
+	}
 	stop := make(chan struct{})
-	b.mu.Lock()
 	if b.stopTicker != nil {
+		// A concurrent Start installed one for a generation that is already
+		// gone; closing it here keeps the only handle to it from leaking.
 		close(b.stopTicker)
 	}
 	b.stopTicker = stop
-	b.mu.Unlock()
-	go func() {
-		t := time.NewTicker(time.Second)
-		defer t.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-t.C:
-				if events := b.cache.expire(); len(events) > 0 {
-					b.publish()
-				}
+	go b.expireLoop(stop)
+}
+
+// expireLoop is the single expiry timer of one generation: not one timer per
+// candidate, and never a paint request of its own (publish is event-driven).
+func (b *Browser) expireLoop(stop <-chan struct{}) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			if events := b.cache.expire(); len(events) > 0 {
+				b.publish()
 			}
 		}
-	}()
+	}
 }
 
 func (b *Browser) publish() {

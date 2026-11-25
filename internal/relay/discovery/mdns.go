@@ -61,8 +61,16 @@ type registration struct {
 
 // Advertise registers one announcement. Only the running share calls this: the
 // announcement carries the address and port that actually bound.
+//
+// The context is honoured before the socket is opened. Opening it is a handful
+// of syscalls that no platform can interrupt, so the caller must not rely on
+// cancellation to cut a slow registration short; the Publisher bounds that wait
+// itself.
 func (b *mdnsBackend) Advertise(ctx context.Context, a Announcement) (Registration, error) {
 	if err := a.Validate(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	l, err := b.open(a.Interface)
@@ -214,6 +222,10 @@ type browseSession struct {
 
 // Browse starts one browsing session. An empty interface list is an error: the
 // feature never browses a scope the user did not choose.
+//
+// One adapter that refuses a multicast socket does not take the others down with
+// it: the interfaces that did open keep browsing and the failure is logged. Only
+// a set where nothing at all could be opened is an error.
 func (b *mdnsBackend) Browse(ctx context.Context, opts BrowseOptions) (Session, error) {
 	if len(opts.Interfaces) == 0 {
 		return nil, errors.New("没有可用的局域网网卡")
@@ -221,10 +233,14 @@ func (b *mdnsBackend) Browse(ctx context.Context, opts BrowseOptions) (Session, 
 	if opts.OnRecords == nil {
 		return nil, errors.New("缺少结果回调")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if opts.Logf == nil {
 		opts.Logf = func(string, ...any) {}
 	}
 	links := make([]browsedLink, 0, len(opts.Interfaces))
+	var refused []string
 	for _, ifi := range opts.Interfaces {
 		if !ifi.Valid() {
 			for _, l := range links {
@@ -234,12 +250,17 @@ func (b *mdnsBackend) Browse(ctx context.Context, opts BrowseOptions) (Session, 
 		}
 		l, err := b.open(ifi)
 		if err != nil {
-			for _, done := range links {
-				_ = done.link.Close()
-			}
-			return nil, fmt.Errorf("无法在 %s 上监听发现请求：%w", ifi, err)
+			// A disconnected VPN, a Hyper-V remnant or a tunnel adapter can
+			// refuse a multicast socket while the office LAN next to it is
+			// perfectly usable. Keep what opened.
+			opts.Logf("跳过网卡 %s：%v", ifi, err)
+			refused = append(refused, fmt.Sprintf("%s（%v）", ifi, err))
+			continue
 		}
 		links = append(links, browsedLink{link: l, ifi: ifi})
+	}
+	if len(links) == 0 {
+		return nil, fmt.Errorf("无法在任何所选网卡上监听发现请求：%s", strings.Join(refused, "；"))
 	}
 	s := &browseSession{
 		links: links, opts: opts, logf: opts.Logf, now: b.now,
@@ -379,6 +400,10 @@ func (s *browseSession) Close() error {
 
 const mdnsGroupIP = "224.0.0.251"
 
+// mdnsTTL is the hop limit RFC 6762 section 11 asks for. A packet that crossed a
+// router never carries it, which is what lets a receiver trust the source.
+const mdnsTTL = 255
+
 // openMulticast opens one multicast DNS socket bound to the given interface.
 //
 // net.ListenMulticastUDP already sets IP_MULTICAST_IF from the interface and
@@ -402,6 +427,12 @@ func openMulticast(ifi Interface) (link, error) {
 	// Missing it is not fatal: it only narrows same-host visibility.
 	if err := setMulticastLoopback(conn, true); err != nil {
 		// Best effort: a platform that refuses the option still multicasts.
+		_ = err
+	}
+	// TTL 255 is what RFC 6762 section 11 asks for; the default is 1. Same
+	// reasoning as above: a stack that refuses the option still multicasts, it
+	// just looks like traffic that crossed a router.
+	if err := setMulticastTTL(conn, mdnsTTL); err != nil {
 		_ = err
 	}
 	return &socketLink{conn: conn, dst: group}, nil

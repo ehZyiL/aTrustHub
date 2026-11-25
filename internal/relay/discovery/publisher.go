@@ -18,6 +18,45 @@ var DefaultRetry = []time.Duration{
 	30 * time.Second,
 }
 
+// registrationResult is the backend's answer to one Advertise call.
+type registrationResult struct {
+	reg Registration
+	err error
+}
+
+// abandonBudget bounds how long the worker waits for a registration it has
+// already cancelled. The multicast backend opens its socket with a handful of
+// syscalls, and no platform can interrupt those; without a budget a backend that
+// never answers would block the coordinator forever and Close could only give up
+// on it.
+var abandonBudget = 2 * time.Second
+
+// awaitAbandoned collects a registration that is no longer wanted. The channel
+// is buffered, so a backend that answers after the budget is drained in the
+// background and its registration is withdrawn instead of leaking a socket.
+func awaitAbandoned(resCh <-chan registrationResult) registrationResult {
+	select {
+	case res := <-resCh:
+		return res
+	case <-time.After(abandonBudget):
+		go drainAbandoned(resCh)
+		return registrationResult{err: errors.New("发现后端未在预算内响应")}
+	}
+}
+
+// drainAbandoned withdraws a registration that arrived after the worker gave up
+// on it. It is bounded as well: a backend that never answers at all must not
+// leave one goroutine behind per retry.
+func drainAbandoned(resCh <-chan registrationResult) {
+	select {
+	case res := <-resCh:
+		if res.reg != nil {
+			_ = res.reg.Close()
+		}
+	case <-time.After(abandonBudget):
+	}
+}
+
 // Publisher keeps one announcement alive and follows the share. It is driven by
 // state notifications, never by the render loop: a page that was never opened
 // cannot make the lifecycle wrong.
@@ -56,11 +95,6 @@ type Publisher struct {
 	cancel context.CancelFunc
 	kick   chan struct{}
 	done   chan struct{}
-	wg     sync.WaitGroup
-
-	// attempt is the generation currently being registered. It only exists so
-	// tests can observe a registration in flight.
-	inflight bool
 }
 
 // PublisherOptions wires the publisher to a backend and to the panel.
@@ -96,7 +130,6 @@ func NewPublisher(opts PublisherOptions) *Publisher {
 		kick:     make(chan struct{}, 1),
 		done:     make(chan struct{}),
 	}
-	p.wg.Add(1)
 	go p.loop()
 	return p
 }
@@ -188,7 +221,6 @@ func (p *Publisher) setStatus(s Status) {
 }
 
 func (p *Publisher) loop() {
-	defer p.wg.Done()
 	defer close(p.done)
 	// The worker owns this context so a Close can cut a slow registration.
 	workCtx, workCancel := context.WithCancel(p.ctx)
@@ -267,21 +299,14 @@ func (p *Publisher) loop() {
 		p.setStatus(Status{State: StatusPending, Generation: want.Generation})
 
 		ann := *want
-		type result struct {
-			reg Registration
-			err error
-		}
-		resCh := make(chan result, 1)
-		p.mu.Lock()
-		p.inflight = true
-		p.mu.Unlock()
+		resCh := make(chan registrationResult, 1)
 		attemptCtx, attemptCancel := context.WithCancel(workCtx)
 		go func() {
 			reg, err := p.backend.Advertise(attemptCtx, ann)
-			resCh <- result{reg: reg, err: err}
+			resCh <- registrationResult{reg: reg, err: err}
 		}()
 
-		var res result
+		var res registrationResult
 		superseded := false
 	wait:
 		for {
@@ -293,19 +318,16 @@ func (p *Publisher) loop() {
 				// attempt instead of publishing a stale generation.
 				superseded = true
 				attemptCancel()
-				res = <-resCh
+				res = awaitAbandoned(resCh)
 				break wait
 			case <-workCtx.Done():
 				superseded = true
 				attemptCancel()
-				res = <-resCh
+				res = awaitAbandoned(resCh)
 				break wait
 			}
 		}
 		attemptCancel()
-		p.mu.Lock()
-		p.inflight = false
-		p.mu.Unlock()
 
 		if superseded || p.changedSince(seq) {
 			if res.reg != nil {

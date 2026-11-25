@@ -33,11 +33,9 @@ type Record struct {
 // Gone reports whether the record is a goodbye.
 func (r Record) Gone() bool { return r.TTL == 0 }
 
-// mdnsAddr is the reserved multicast group and port of multicast DNS.
-const (
-	mdnsGroup = "224.0.0.251:5353"
-	mdnsPort  = 5353
-)
+// mdnsPort is the reserved multicast DNS port. The group address itself lives in
+// mdns.go, next to the socket that uses it.
+const mdnsPort = 5353
 
 // cacheFlush marks a unique record so receivers replace instead of gathering
 // duplicates (RFC 6762 section 10.2).

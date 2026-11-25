@@ -30,7 +30,9 @@ const DraftVersion = 1
 const (
 	// MaxCandidates bounds the browser cache.
 	MaxCandidates = 128
-	// MaxAddressesPerInstance bounds how many IPv4 records one instance may add.
+	// MaxAddressesPerInstance bounds how many IPv4 records one SRV target host
+	// may carry on one interface. An instance resolves to one such host, so this
+	// is also the ceiling on the addresses one instance can be reached at.
 	MaxAddressesPerInstance = 8
 	// MaxTXTBytes and MaxTXTFields bound one TXT record. DNS-SD asks for a TXT
 	// record small enough to travel in a single packet; 1024 leaves room for
@@ -132,7 +134,12 @@ func (a Announcement) Validate() error {
 	if !a.Interface.Valid() {
 		return fmt.Errorf("发现网卡不合法：%s", a.Interface)
 	}
-	if a.Address != "" && a.Address != a.Interface.IPv4 {
+	if a.Address == "" {
+		// The A record is built from this field; an empty value would pack as a
+		// zero-length address and the receiver would drop the whole packet.
+		return errors.New("缺少分享地址")
+	}
+	if a.Address != a.Interface.IPv4 {
 		// The advertised address must be the one on the interface we listen
 		// on; anything else could point colleagues at a different network.
 		return errors.New("分享地址与所选网卡不一致")

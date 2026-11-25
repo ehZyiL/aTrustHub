@@ -20,8 +20,8 @@
 | 项 | 决定 | 理由 |
 |---|---|---|
 | 编解码 | `github.com/miekg/dns`（已在依赖内） | 纯 Go、无 CGO，完整支持 TXT/SRV/PTR/A、名称压缩、大小写规则 |
-| 传输 | 自建 socket：每网卡一个 `224.0.0.251:5353` 组播套接字（`golang.org/x/net/ipv4`） | 需要逐网卡收发、TTL 控制、goodbye、接收接口归属；这些是库最容易缺失的部分 |
-| 新依赖 | 无 | `go.mod` 未新增任何模块 |
+| 传输 | 自建 socket：每网卡一个 `224.0.0.251:5353` 组播套接字（`net.ListenMulticastUDP`，套接字选项经 `golang.org/x/sys`） | 需要逐网卡收发、TTL 255、回环、goodbye、接收接口归属；`x/net/ipv4` 的控制消息在 Windows 上未实现（§17 W1），改用标准库 socket |
+| 新依赖 | 无新增模块；`golang.org/x/sys` 由间接依赖转为直接依赖（逐平台 `IP_MULTICAST_LOOP` / `IP_MULTICAST_TTL`） | 不引入第二个组播库，也不把协议实现改为依赖系统 responder |
 | 兼容 | 与系统 responder 共存：`net.ListenMulticastUDP` 带 `SO_REUSEADDR`，逐套接字 `IP_MULTICAST_IF` | Avahi/Bonjour 占用 5353 时仍能收发 |
 | 删除语义 | 自己实现 goodbye（TTL 0，连发两次）+ 真实 TTL 过期 | 不依赖第三方库是否把 TTL=0 事件转给应用 |
 
@@ -199,9 +199,9 @@ AP 隔离，按 §9 待实机。
 
 | 项 | 现状 | 需要的证据 |
 |---|---|---|
-| Windows/macOS 实机发现 | 只做了交叉编译与单元测试 | 两台真机、实际发布包、系统防火墙默认配置下的收发 |
+| Windows/macOS 实机发现 | Windows/Linux 都已实机跑过**同机回环**组播（发布→发现→goodbye→移除）；macOS 未测；**跨机**未测 | 两台真机、实际发布包、系统防火墙默认配置下的收发 |
 | macOS 15 本地网络权限 | 已在 `scripts/package-mac.sh` 写入 `NSLocalNetworkUsageDescription` + `NSBonjourServices` | 允许/拒绝/恢复，拒绝后业务 TCP 的表现 |
-| Windows 纯 Go 后端入站 5353 | 未实测；若默认防火墙拦截入站，需要评估改用 `windns` | 普通用户、无放行规则下的收发记录 |
+| Windows 纯 Go 后端入站 5353 | 未实测。已确认：程序只创建 **TCP** 入站规则（`internal/relay/firewall_script.go` 的 `Protocol = 'TCP'`），5353/UDP 没有任何放行；提权 helper 的安全不变式是「本程序 + 专用配置文件 + RFC1918 对端 + 单端口 TCP」（`ValidateHelperOperation`），因此**加一条 UDP 规则不是加一行代码**，要同时改 `FirewallRule` 结构、脚本与校验策略。界面已给出可诊断的提示（§19 R9-1）。同机回环组播（`IP_MULTICAST_LOOP=1`）不经过接口入站过滤，**不能**用来证明放行 | 普通用户、无放行规则下的收发记录；专用/公用配置文件 × 网络发现开/关 |
 | 与系统 responder 共存 | 代码使用复用地址 + 逐网卡组播接口 | Avahi/Bonjour 同时运行时仍能收发的实测 |
 | 规模 | 缓存与 goroutine 有上限并有测试 | 同网段 10 主机 ×10 浏览端，30 分钟流量/内存记录 |
 | 跨 VLAN / AP 隔离 | 不支持，界面已如实说明 | — |
@@ -406,3 +406,118 @@ Windows 默认防火墙是否允许本程序收到入站 UDP 5353（发布方向
 回归：`TestDropUnusableDomainsKeepsTheValidOnes`（严格校验仍拒绝未清理的快照，清理后通过且合法域名还在）、
 `TestSharePublishesDespiteIPLikeDomainRules`（端到端：带 IP 域名的会话发布后客户端 `Open` 成功）、
 `TestServerReportsAnUnservableSnapshotOnce`（撤掉记录：0 行；保留：1 行，恢复再 1 行）。
+
+> R7-1 的修正只覆盖了 `DomainRules` 与 `InternalDomains`，**漏了 `StaticDNS[].Name`**：
+> 静态 DNS 里只要有一位以 IP 字面量当名字，快照仍会被拒，同事看到的还是同一句错误。
+> 现场复现与修复见 §19 R9-19。
+
+## 19. 第十轮：Windows 环境复审（传输、生命周期、误拒）
+
+本轮只看 Windows 上会真的出错、或只能靠实机才能发现的路径，并顺带清理前几轮留下的死字段。
+
+| 编号 | 轴 | 问题 | 根因 | 修复 |
+| --- | --- | --- | --- | --- |
+| R9-1 [P1] | 规格 | Windows 上发现可能“静默为空”：`browser.Start` 成功、页面无错误，5 秒后显示「暂未发现分享」，用户无法区分「没人分享」与「被防火墙拦下」 | 发现是**双向**的：查询出站、应答入站，而程序只建了 TCP 入站规则（§9）。发布成功也不等于同事收得到 | 发现页空列表与宿主面板各加一行可诊断提示（专用网络 + 开启「网络发现」+ 允许 5353/UDP）。**不改 helper**：加 UDP 规则要改安全不变式，必须先有实机结论 |
+| R9-2 [P2] | 标准 | mDNS 报文退回默认 TTL=1，RFC 6762 §11 要求 255；严格实现的接收端会丢弃 | `92a0029` 去掉 `x/net/ipv4` 时把 `SetMulticastTTL(255)` 一并删了 | `openMulticast` 重新设 TTL，走 `x/sys` 逐平台（`mdns_loop_*.go`）。宽度不统一：Linux 读 int、BSD 读单字节，非 Windows 实现先试 int 再退 byte |
+| R9-3 [P2] | 标准 | 一张网卡开不了组播套接字就让**整次浏览失败**，面板直接报错；Windows 上断开的 VPN、Hyper-V 残留都很常见 | `mdnsBackend.Browse` 遇到第一个 `open` 失败就把已开的全关掉并返回错误 | 改为跳过失败网卡 + 记一行日志，至少一个成功即可；全部失败才报错，并列出拒绝了哪些网卡 |
+| R9-4 [P2] | 标准 | `Start` 与 `Close` 竞态会泄漏一个 ticker goroutine（每秒 `cache.expire` 一次，进程内无人回收） | `startTicker` 在锁外安装，`Close` 可能已经先把 `stopTicker` 置 nil 并关闭 | 安装移到与 `b.session` 同一个临界区（`startTickerLocked`），并在其中再查 `closed` |
+| R9-5 [P2] | 标准 | 放弃一次注册时 `res = <-resCh` 无上限等待：生产后端的 `Advertise` 不看 ctx，协调器可能被卡住，`Close` 只能靠 200ms 兜底 | `Backend` 接口承诺了 ctx，但 `net.ListenMulticastUDP` 无法中断 | `awaitAbandoned` 加 `abandonBudget`；超时后由有界的 `drainAbandoned` 接管迟到句柄并撤销；`Advertise/Browse` 入口先查 `ctx.Err()` |
+| R9-6 [P3] | 安全 | `Announcement.Validate` 允许空 `Address`，打包时 `packDataA` 对 len==0 写 0 字节，对端整个报文 Unpack 失败 | 校验只比较了「非空时必须一致」 | 改为必填，并补一条表驱动用例 |
+| R9-7 [P3] | 规格 | 公开名称里的反斜杠无法往返：TXT 是 DNS character-string，`\` 是转义引导符，同事端会看到另一个名字 | `lanname.Valid` 允许 `\`，`packTxtString` 把 `\DDD` 解成字节 | 在 `lanname.Valid` 拒绝反斜杠（与已有「不能有控制字符」同一位置），新增 `internal/lanname/name_test.go` 固定正反两面 |
+| R9-8 [P3] | 标准 | 重新开始浏览后，上一代 parked snapshot 可能被当成新网络的列表应用 | `drainLANDiscovery` 的 `d.ui.snap.Generation == 0` 逃逸条件 | 在 `startLANDiscoveryBrowsing` / `closeLANDiscovery` 里清 `pending` 并重置 `snap`，去掉逃逸条件；同代 `>=` 保留（刷新不换代） |
+| R9-9 [P3] | 规格 | 发现侧只用名字前缀判虚拟网卡，没有分享侧已有的 `/31`、`/32` 点对点判据；且同一网卡多个地址会开多个相同套接字 | 两处各自实现 | 两边共用 `newLANCandidates` 的分类 + 新增 `browsableAdapter`；浏览集合改为**每网卡一个套接字**；带子网的分类结果与地址列表同时缓存（避免每帧 syscall） |
+| R9-10 [nit] | 标准 | 死代码：`lanDiscoveryUI.tab/busy/notice`、`Publisher.wg/inflight`、`wire.go` 的 `mdnsGroup`、`next == "自动选择"` 恒真分支 | 前几轮重构残留 | 删除（无测试引用） |
+| R9-11 [P2] | 标准 | `Start` 只关旧 session，**不关旧的 `expireLoop`**：无网卡或后端报错两条失败路径下，旧 ticker 继续对新（空的）缓存 expire + publish，并活到下一次成功 Start 或 Close | 本轮复审第一轮 | 旧 ticker 与旧 session 一起在同一个临界区里摘除；`startTickerLocked` 只负责安装，并保留并发 Start 时的防泄灵关闭 |
+| R9-12 [P2] | 标准 | `localLANBrowseCandidates` 用「长度相等」判断缓存一致性：长度相同、内容不同的两个列表会错配注解 | 本轮复审第二轮 | 缓存只由一个函数拥有，两个副本在同一把锁里写入；`localLANCandidates` 改为从注解列表派生，不再有第二条读路径 |
+| R9-13 [P3] | 标准 | `virtualInterface` 不认识本程序自己的网卡（`ECH-<id>`、`aTrustHubN`、`ZJU Connect`），分类只靠「198.19/16 非 RFC1918」这层地址过滤兜住 | 本轮复审第二轮 | 前缀表补上三个名字；`TestVirtualInterfaceCoversEveryPlatform` 同时锁住正反两面 |
+| R9-14 [P3] | 证据 | 同一 instance 同时存在两个存活 A 记录时，装配层只保留**一个**端点，选哪个由地址字典序决定（`cache.address` 取最小）。`TestAcceptanceOwnShareIsFilteredByAddress` 依赖这个顺序：作者机器 `192.168.31.61` 大于 `.240` 所以远端胜出，换成 `192.168.201.135` 就变成本机地址胜出、被正确过滤，用例失败 | Windows 实机跑 `go test .` 发现 | 用例改为先发旧地址的 goodbye（响应方换地址的真实行为）再发新地址，不再依赖地址顺序；**限制记入文档**：两个存活地址不能同时可见，要同时列出需要改成按地址分端点（本轮不做） |
+| R9-15 [P3] | 证据 | `TestRelayPointOffersExplicitSystemProxy` 只在 Linux 通过：它把 `supportsSystemProxy()` 当唯一分支条件，但面板实际是三态（未就绪 / 已开启 / 可开启），Windows 上统一入口没起时只能显示「当前不可开启」 | Windows 实机跑 `go test .` 发现 | 断言改为「必须给出开启入口或说明原因」，并额外禁止不支持平台出现开启入口（比原来更严），不再用平台能力代替面板状态 |
+| R9-16 [P1] | 安全/功能 | **重启后分享监听在 `0.0.0.0`（所有网卡），而不是用户选定的那张局域网卡**；同时 `c.identity.Address != address` 的「地址已变化」保护在重启后永远不会触发 | Windows 实机跑 `go test ./...` 时 `TestRestoreBindConflictIsBlocked` 变 running：Windows 允许 `0.0.0.0:P` 与已存在的 `127.0.0.1:P` 共存（两个方向都成功，已实测），Linux 会 `EADDRINUSE` 所以旧用例在 Linux 上「碰巧」通过 | 根因：`identityRecord` 只存 cert/key，`DecodeIdentity` 重建时丢掉 `Address`，于是 `StartServer` 回退到 `0.0.0.0`。改为从证书唯一的 IPv4 SAN 恢复 `Address`；`TestIdentityGenerateAndDecode` 加断言，`TestRestoreBindConflictIsBlocked` 成为回归 |
+| R9-17 [P3] | 证据 | 两个只在 Windows 失败的用例假设：`TestFirewallRuleValidation` 用 POSIX 路径 `/opt/app/…` 当「绝对路径」（Windows 上 `IsAbs` 为假）；`TestRelayKnownCacheRoundTripAndCorruption` 断言 `0600/0700` 权限位（Windows 不报告 POSIX 位，建文件报 0666） | Windows 实机跑 `go test ./...` 发现 | 前者改用 `filepath.Join(t.TempDir(), …)` 生成平台绝对路径；后者把权限断言限定到非 Windows（round-trip 与损坏检测仍全平台跑） |
+| R9-18 [P2] | 安全 | R9-16 的修复本身在「证书 SAN 不是恰好一个 IPv4」时返回**空地址**，而空地址不是安全默认值，它是 `0.0.0.0` 通配绑定——注释写的是「失败关闭」，实现是**失败开放** | 本轮自复审（三轮回读） | 改为拒绝解码：没有唯一 IPv4 SAN 的身份直接报错，控制器因此进入 `blocked("identity", …)` 而不是全世界监听；新增 `TestDecodeIdentityRequiresOneBoundAddress`（单地址可解、零个/两个/仅 IPv6 均拒绝） |
+| R9-19 [P1] | 功能 | **同事仍然登录失败「资源域名不能是 IP 地址」**，即使装了带 §18 修复的版本：`Validate` 对 `DomainRules`、`InternalDomains`、**`StaticDNS[].Name`** 三处调 `validateDomain`，而 `DropUnusableDomains` 只清了前两个 | 现场日志（同事端 0.2.0）：`正在登录 192.168.201.135:58501` → `登录失败：资源域名不能是 IP 地址`；回读 `resources.go` 确认第三个字段无人清理 | `DropUnusableDomains` 补上 `StaticDNS`（名字不能当域名的记录丢掉；这类记录本来也无法按名字被解析），`TestDropUnusableDomainsKeepsTheValidOnes` 加入静态 DNS 用例并校验清理后 `Validate()` 通过 |
+| R9-20 [P1] | 功能/文档 | 同一现场的第二条失败：`登录失败：连接分享主机超时`。**防火墙规则存在且正确，但网络类别是「公用」**：规则限定 `Profile=Private`，Windows 在 Public 网络上不应用它，于是 SYN 被丢（超时而不是拒绝） | 宿主实机取证：`ConnectHub-LANShare-58501-… :: TCP/58501 Profile=Private remote=192.168.200.0/23 Enabled=True`；`Get-NetConnectionProfile` 为 `WLAN( Searun 2 ) = Public`；而 Linux→宿主 的同机连接 1ms 成功（回环不过入站过滤），两相对比定位 | 代码侧已把网络类别写进 §9 与本节；**面板仍会显示「已放行端口」而实际不生效**，建议后续加一次非提权 `Get-NetConnectionProfile` 检查（每会话一次、约 600ms、后台 goroutine）并在「公用」时改为警告；当下处置：把该网络设为「专用」（或换到专用网络） |
+| R9-21 [P2] | 标准 | `authenticateClient` 的注释写「校验并续租」，实际只有 `/v1/status` 心跳会续租：**任何只轮询资源 / 开隧道、不发心跳的客户端会在第 15 秒被静默踢掉**，错误是「客户端会话已过期，请重新认证」，把真正原因藏起来 | 现场实测两次：Linux 探针登录后每秒发 `/v1/resources`，均在 `ClientLease=15s` 后报 `session_expired`、既有隧道 EOF；回读 `clients.go` 确认只有 `touch()` 续租、而 `touch` 仅在 `handleStatus` 调用 | 认证即续租：`authenticateClient` 在 `lookup` 成功后 `touch`，失败才返回 `session_expired`；`TestAnyAuthenticatedRequestRenewsTheLease`（80ms 租约、每 1/3 租约发一次请求、随后静默必须过期）与 `TestShareTokenIsNotASessionToken` 锁定正反两面 |
+| R9-22 [P2] | 标准 | 条件刷新从来没有条件过：服务端把 ETag 当 `"<revision>"`（RFC 7232），客户端却把裸 revision 当 `If-None-Match` 发出去，`304` 分支是死代码，每次「刷新」都重传整份快照 | 探针按 `notModified` 判定代次变化时立刻误报，回读 `server.go`/`client.go` 发现两边格式不一致 | `quoteEntityTag` 在客户端补引号；服务端比较时容忍带引号与不带引号；304 同时回写 `ETag`；`TestResourcesConditionalRefreshReturnsNotModified` 覆盖裸/带引号/空/过期四种 |
+| R9-23 [P2] | 规格 | 宿主关闭共享后，同事看到的是裸传输错误：`无法连接分享主机：Post "https://…/v1/sessions": dial tcp …: connect: connection refused` —— 混着 HTTP 动词、URL 和系统措辞，既不说明「共享已关闭」，也不区分「同网段不可达」与「被防火墙丢」 | 现场实测：关闭共享后客户端复现该原文；同时确认宿主侧 58501 已停止监听、`ConnectHub-*` 规则已清理（0 条）、外部拨号返回 `Connection refused` | `describeHostDialFailure` 归一为四种可行动结论（拒绝/不可达/被重置/超时），覆盖 Unix `connection refused` 与 Windows `actively refused` 两种措辞；`TestDescribeHostDialFailure` 断言结论里不得残留 `dial tcp`/`Post `/`https://`/`connectex`，`TestClosedShareReportsAHostRefusal` 用占用后释放的端口做端到端验证 |
+
+关于缓存上界的复查结论（原报告列为缺陷，**本轮核实后不成立**）：`transitions` 里
+`len(c.emitted) >= c.max` 在原代码中只可能在 `stale` 为空时命中（`emitted` 从来不超过 `max`），
+所以“先发 removed 再加不进去”的路径不可达。仍然改成先判定后修改，把“不删而不加”写成不变式，
+行为不变。
+
+本轮新增/扩充的用例：`TestBrowseSkipsAnInterfaceItCannotOpen`（一张坏网卡不影响其余；全失败时
+报错并点名）、`TestValidRefusesABackslash` / `TestValidKeepsAcceptingOrdinaryNames` /
+`TestDefaultIsAlwaysValid`、`TestAnnouncementRejectsUnusableValues` 新增「没有地址」、
+`TestVirtualInterfaceCoversEveryPlatform` 新增本程序网卡名（R9-13）。
+
+本节先由一轮环境复审成稿（R9-1…R9-10），随后又做了三轮自复审：第一轮查生命周期
+（得 R9-11），第二轮查平台与缓存读取（得 R9-12、R9-13），第三轮核对测试影响面与
+文档一致性（修正 §2 选型表中已失效的 `x/net/ipv4` 与「新依赖：无」、统一 R 编号）。
+
+仍未验证（需实机，代码审查替代不了）：§9 的入站 5353 结论、TTL 255 在 macOS/Windows 上的
+实际生效值、Bonjour/Avahi 共存、跨机发现。
+
+Windows 实机首次跑根包测试（`go test .`）暴露了两个**既有**的、只在 Windows 上失败的用例
+（R9-14、R9-15），均已按「不依赖机器地址顺序 / 不依赖平台能力代替面板状态」修正；
+随后跑全仓（`go test ./...`）又暴露一个**产品缺陷**（R9-16：重启后绑 0.0.0.0）与两个
+Windows 语义假设（R9-17），均已修复。
+
+最后在 WSL Debian 上做了 Linux 侧验证，包含 `-race`、真实组播用例与 TTL 读回（见 §19.1）；
+本轮自复审又发现 R9-18（R9-16 的修复在异常证书上会退化成通配绑定，已改为拒绝解码）。
+
+### 19.1 验证记录（Windows 11 实机 + WSL Debian + 真实分享链路）
+
+**自动化门禁**
+
+```text
+# Windows 11（go 1.27.3 windows/amd64）
+$ go test . -count=1          → ok  github.com/ehzyil/connect-hub
+$ go test ./... -count=1      → ok  17 个可测包全部通过
+
+# WSL Debian（go 1.27.3 linux/amd64，gcc 14.2，16 核，镜像网络 eth7=192.168.201.135/23）
+$ go build ./...                                    → exit 0
+$ go vet ./internal/relay/discovery/ ./internal/relay/ ./internal/lanname/ ./internal/store/
+                                                    → exit 0
+$ go test ./... -count=1                            → 19 个可测包全绿（比 Windows 多出只在 Linux
+                                                    编译的 capture/resolved；root 15.846s，
+                                                    relay 5.943s，discovery 2.359s，store 0.705s，
+                                                    vpn 39.292s）
+$ go test -race ./internal/relay/discovery/ -count=1 → ok（无 DATA RACE）
+$ go test -race -run "Discovery|LANShare|OwnShare|Shutdown|Idle" . -count=1 → ok
+$ go test ./internal/relay/discovery/ -run TestLive -v -count=1
+    --- PASS: TestLiveDiscoveryLatency  (20 轮，接口 eth7，min=1.25ms median=1.76ms p95=2.45ms)
+    --- PASS: TestLiveMulticastRoundTrip
+```
+
+**真实分享链路实测**（Linux 客户端 → Windows 宿主 → 宿主 VPN → 内网；临时探针用仓库自己的
+`relay.Client`/`Diagnose`，跑完删除）
+
+| 场景 | 结果 |
+|---|---|
+| 登录 + TLS 钉扎 | 指纹与口令一致；错指纹被挡在握手前，并把收到的指纹打出来；错口令 → `invalid_credentials` |
+| 内网资源授权 | 公网 `36.99.195.118:8443` → `resource_denied`（按设计）；`192.168.61.38:8080` 在放行范围内 |
+| 内网 HTTP 往返 | `GET /login?from=%2F` → `200 OK`，`Server: Jetty(12.0.18)`、`X-Jenkins: 2.504`、正文为 `Sign in - Jenkins`；同一地址**直连**是 `no route to host` |
+| 并发 | 8 条隧道同时开 → 8/8 成功，98ms |
+| 目标侧故障 | `connection refused` / `host unreachable` 被归类为可行动原因（R9-19、R9-23） |
+| 会话吊销 | `DELETE /v1/sessions/current` 后立即拨号 → `session_expired` |
+| 宿主自身入口 | `127.0.0.1:1080` 从 WSL 可用：内网 200/144ms、公网 200/745ms（系统代理分流生效） |
+| 共享口令时序 | 重启应用 + 重登 VPN 后口令**完全一致**（sid/token/证书/端口均持久化）；**关闭共享**则删身份与口令，旧口令作废 |
+| 关闭共享后 | 宿主：监听消失、`ConnectHub-*` 规则清空（0 条）；客户端：`分享主机拒绝了连接：共享可能已关闭，或宿主已退出` |
+
+`dnsServer` 为空（该网关不提供 DNS）时，诊断现在会明确说「本次分享不提供 DNS」，避免把
+「宿主没给 DNS」误判成「解析坏了」。
+
+TTL 255 的生效值：Linux 上用与 `mdns_loop_other.go` 相同的 int 形式设置后读回
+`ttl=255, loop=1`（临时探针，已删除），说明内核接受 4 字节形式，byte 回退在 Linux 上不会
+被用到。
+
+仍属未验证（不得当作已支持）：
+
+| 项 | 现状 | 能补上的方式 |
+|---|---|---|
+| 入站 5353 是否被 Windows 防火墙拦（§9、R9-1） | 未测；同机回环组播绕不过接口入站过滤，不能用来证明 | 两台真机 + 默认防火墙配置 |
+| 跨机发现 / 跨 AP / AP 隔离 | 未测；所有实测都是同一主机内的回环组播 | 两台真机 |
+| 与 Avahi/Bonjour 共存 | 未测；WSL 内无 responder 运行 | 装有 Avahi 或 Bonjour 的主机 |
+| macOS 分支的 TTL/回环与本地网络权限 | 未测；本轮只有 Windows 与 Linux 两个平台 | macOS 实机 + `scripts/package-mac.sh` 产物 |
+| 规模（10 主机 ×10 浏览端） | 未测 | 同网段压测 |

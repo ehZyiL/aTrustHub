@@ -181,7 +181,7 @@ Windows 防火墙的运行时行为（提权接受/取消、中文/空格路径�
 |---|---|
 | Windows↔Windows / macOS↔macOS / Windows↔macOS 发现与加入 | 实际发布包双机，含系统防火墙默认配置 |
 | macOS 15 本地网络权限 | 允许/拒绝/恢复到系统设置，拒绝后业务 TCP 的表现 |
-| Windows 纯 Go 后端入站 5353 | 普通用户、无放行规则下的收发；不行则评估 `windns` 原生 API |
+| Windows 纯 Go 后端入站 5353 | 普通用户、无放行规则下的收发；不行则评估 `windns` 原生 API。当前只建了 TCP 入站规则，5353/UDP 无任何放行，界面已给出提示（见设计文档 §9、§19 R9-1） |
 | 与 Avahi/Bonjour 共存 | 同机已有 responder 时仍能收发 |
 | 规模 | 同网段 10 主机 ×10 浏览端 30 分钟的流量/内存/CPU |
 | 首屏时延 | 正常组播网络下 20 次测量的分布 |
@@ -202,6 +202,18 @@ Windows 防火墙的运行时行为（提权接受/取消、中文/空格路径�
 | `tests/e2e`（含 `-race`） | 全绿 |
 | `scripts/test-helper-setup-linux.sh` | 10 项隔离用例全 PASS（含"旧候选协议在停旧服务前被拒绝"）；宿主 systemd 服务保持未安装 |
 | 两个打包脚本 `bash -n` | 通过 |
+
+局域网发现（第十轮复审后）在同一环境重跑：
+
+| 门禁 | 结果 |
+|---|---|
+| `go build ./...` | exit 0（首次真正编译 `mdns_loop_other.go` 的 socket 选项分支） |
+| `go test ./... -count=1` | 19 个可测包全绿（root 15.846s，`internal/relay` 5.943s，discovery 2.359s，store 0.705s，vpn 39.292s） |
+| `go test -race ./internal/relay/discovery/ -count=1` | ok，无 DATA RACE |
+| `go test -race -run "Discovery\|LANShare\|OwnShare\|Shutdown\|Idle" . -count=1` | ok |
+| `go test -run TestLive -v`（真实组播） | PASS：`TestLiveMulticastRoundTrip`；`TestLiveDiscoveryLatency` median 1.76ms（20 轮，eth7） |
+| TTL 读回探针（与 `mdns_loop_other.go` 同样的 int 形式） | `ttl=255 loop=1`，内核接受 4 字节形式 |
+| 真实分享链路（Linux 客户端 → Windows 宿主） | 登录/钉扎/资源授权/内网 Jenkins 200/并发 8/吊销/关闭共享后的错误文案，详见设计文档 §19.1 |
 
 Linux 侧顺带修掉一个真实缺陷：`resource_proxy_linux.go` / `resource_proxy_stub.go` 的 `recoverResourceProxy`
 仍是旧的 2 参数签名，导致 **Linux（和 darwin）根本无法编译**——Windows 侧因为文件带 `!windows` 构建标签从未暴露。

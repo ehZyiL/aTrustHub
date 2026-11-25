@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -1081,4 +1082,99 @@ func TestBrowserDropsOffLinkRecords(t *testing.T) {
 	records[3].IPv4 = "192.168.31.62"
 	inject(records)
 	waitFor(t, "on-link candidate", func() bool { return len(b.Snapshot().Candidates) == 1 })
+}
+
+// Windows report: the coordinator re-asserts the same announcement every two
+// seconds, which bumped the wanted sequence and restarted the backoff, so a
+// permanently failing backend was retried (and logged) every two seconds
+// forever. Re-asserting an unchanged announcement must be a no-op.
+func TestPublisherDoesNotReArmTheBackoffForTheSameAnnouncement(t *testing.T) {
+	hub := newHub()
+	backend := newHubBackend(hub)
+	backend.failures = 1 << 30 // every attempt fails
+	pub := NewPublisher(PublisherOptions{
+		Backend: backend,
+		Retry:   []time.Duration{time.Hour},
+	})
+	defer pub.Close(context.Background())
+
+	ann := testAnnouncement(1, "共享")
+	pub.Set(ann)
+	waitFor(t, "first failure", func() bool { return pub.Status().State == StatusFailed })
+	first := backend.attempts()
+	for i := 0; i < 50; i++ {
+		pub.Set(ann)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if got := backend.attempts(); got != first {
+		t.Fatalf("相同公告重复触发注册：%d -> %d", first, got)
+	}
+	// A real change still retries immediately instead of waiting out the hour.
+	changed := ann
+	changed.Name = "新名字"
+	pub.Set(changed)
+	waitFor(t, "retry after change", func() bool { return backend.attempts() > first })
+}
+
+// A permanently failing backend must not repeat the same log line on every
+// retry: the panel and the log would fill up with one identical message.
+func TestPublisherLogsOneLinePerDistinctFailure(t *testing.T) {
+	hub := newHub()
+	backend := newHubBackend(hub)
+	backend.failures = 1 << 30
+	var mu sync.Mutex
+	lines := 0
+	pub := NewPublisher(PublisherOptions{
+		Backend: backend,
+		Retry:   []time.Duration{time.Millisecond},
+		Logf: func(string, ...any) {
+			mu.Lock()
+			lines++
+			mu.Unlock()
+		},
+	})
+	defer pub.Close(context.Background())
+	pub.Set(testAnnouncement(1, "共享"))
+	time.Sleep(80 * time.Millisecond)
+	mu.Lock()
+	got := lines
+	mu.Unlock()
+	if got > 1 {
+		t.Fatalf("同一个失败被记录了 %d 次", got)
+	}
+	if backend.attempts() < 2 {
+		t.Fatalf("前置条件：应当仍在重试，实际尝试 %d 次", backend.attempts())
+	}
+}
+
+// The app wraps this package's logger with "局域网发现：", so the package must not
+// add the same prefix again - the Windows log showed "局域网发现：局域网发现：…".
+func TestPackageLogLinesCarryNoFeaturePrefix(t *testing.T) {
+	hub := newHub()
+	backend := newHubBackend(hub)
+	backend.failures = 1 << 30
+	var mu sync.Mutex
+	var lines []string
+	pub := NewPublisher(PublisherOptions{
+		Backend: backend,
+		Retry:   []time.Duration{time.Millisecond},
+		Logf: func(format string, args ...any) {
+			mu.Lock()
+			lines = append(lines, fmt.Sprintf(format, args...))
+			mu.Unlock()
+		},
+	})
+	defer pub.Close(context.Background())
+	pub.Set(testAnnouncement(1, "共享"))
+	time.Sleep(40 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(lines) == 0 {
+		t.Fatal("前置条件：应当记录一次失败")
+	}
+	for _, line := range lines {
+		if strings.Contains(line, "局域网发现") {
+			t.Fatalf("包内日志自带前缀，应用会重复一次：%q", line)
+		}
+	}
 }

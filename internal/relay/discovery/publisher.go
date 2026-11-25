@@ -49,6 +49,8 @@ type Publisher struct {
 	// instead of sleeping.
 	retryPending bool
 	retrySeq     uint64
+	// lastFailure suppresses repeating the same error line on every retry.
+	lastFailure string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -99,10 +101,17 @@ func NewPublisher(opts PublisherOptions) *Publisher {
 	return p
 }
 
-// Set asks for one announcement. Only the newest one is ever published.
+// Set asks for one announcement. Only the newest one is ever published, and
+// re-asserting the announcement that is already wanted is a no-op: otherwise the
+// periodic state notification would restart the retry backoff on every tick and
+// turn a permanent failure into a request every two seconds.
 func (p *Publisher) Set(a Announcement) {
 	p.mu.Lock()
 	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	if p.want != nil && sameAnnouncement(*p.want, a) {
 		p.mu.Unlock()
 		return
 	}
@@ -115,7 +124,7 @@ func (p *Publisher) Set(a Announcement) {
 // Clear withdraws the announcement. Business sharing is untouched.
 func (p *Publisher) Clear() {
 	p.mu.Lock()
-	if p.closed {
+	if p.closed || p.want == nil {
 		p.mu.Unlock()
 		return
 	}
@@ -326,7 +335,13 @@ func (p *Publisher) loop() {
 				RetryAt:    p.now().Add(wait),
 				Generation: ann.Generation,
 			})
-			p.logf("局域网发现：发布失败：%v", res.err)
+			p.mu.Lock()
+			repeated := p.lastFailure == res.err.Error()
+			p.lastFailure = res.err.Error()
+			p.mu.Unlock()
+			if !repeated {
+				p.logf("发布失败：%v", res.err)
+			}
 			continue
 		}
 		if res.reg == nil {
@@ -351,6 +366,7 @@ func (p *Publisher) loop() {
 		failures = 0
 		stopTimer()
 		p.mu.Lock()
+		p.lastFailure = ""
 		p.reg = res.reg
 		p.pubGen = ann.Generation
 		p.published = &ann
@@ -369,7 +385,7 @@ func (p *Publisher) dropRegistration() {
 	p.mu.Unlock()
 	if reg != nil {
 		if err := reg.Close(); err != nil {
-			p.logf("局域网发现：撤销公告失败：%v", err)
+			p.logf("撤销公告失败：%v", err)
 		}
 	}
 }

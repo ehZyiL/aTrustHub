@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"golang.org/x/net/ipv4"
 )
 
 // errTimeout means "no packet arrived before the deadline", which every read
@@ -122,7 +121,7 @@ func (r *registration) loop() {
 				return
 			default:
 			}
-			r.logf("局域网发现：接收失败：%v", err)
+			r.logf("接收失败：%v", err)
 			return
 		}
 		r.answer(buf[:n])
@@ -378,9 +377,16 @@ func (s *browseSession) Close() error {
 
 // ---- production socket ---------------------------------------------------
 
+const mdnsGroupIP = "224.0.0.251"
+
 // openMulticast opens one multicast DNS socket bound to the given interface.
-// The socket joins 224.0.0.251 and sends from the same interface, so a machine
-// with several networks never leaks an announcement to the wrong one.
+//
+// net.ListenMulticastUDP already sets IP_MULTICAST_IF from the interface and
+// joins 224.0.0.251 there, so the socket only ever sends and receives on the
+// network the user picked. That is the whole reason this backend uses one plain
+// UDP socket per interface: golang.org/x/net/ipv4 does not implement control
+// messages on Windows ("not implemented on windows/amd64"), which is exactly
+// what an earlier version of this file tripped over.
 func openMulticast(ifi Interface) (link, error) {
 	nif, err := net.InterfaceByName(ifi.Name)
 	if err != nil {
@@ -391,40 +397,29 @@ func openMulticast(ifi Interface) (link, error) {
 	if err != nil {
 		return nil, err
 	}
-	pc := ipv4.NewPacketConn(conn)
-	if err := pc.SetControlMessage(ipv4.FlagInterface|ipv4.FlagDst, true); err != nil {
-		_ = pc.Close()
-		return nil, err
+	// Loopback lets two instances on one machine see each other, which is how
+	// the developer's own two-app check and the package's live test work.
+	// Missing it is not fatal: it only narrows same-host visibility.
+	if err := setMulticastLoopback(conn, true); err != nil {
+		// Best effort: a platform that refuses the option still multicasts.
+		_ = err
 	}
-	// Outgoing multicast must leave through this interface only.
-	if err := pc.SetMulticastInterface(nif); err != nil {
-		_ = pc.Close()
-		return nil, err
-	}
-	if err := pc.SetMulticastTTL(255); err != nil {
-		_ = pc.Close()
-		return nil, err
-	}
-	// Loopback lets two instances on one machine see each other, which is what
-	// the developer's own two-app test relies on.
-	_ = pc.SetMulticastLoopback(true)
-	return &socketLink{pc: pc, dst: group}, nil
+	return &socketLink{conn: conn, dst: group}, nil
 }
 
-const mdnsGroupIP = "224.0.0.251"
-
+// socketLink is the production transport: one UDP socket per interface.
 type socketLink struct {
-	pc  *ipv4.PacketConn
-	dst *net.UDPAddr
+	conn *net.UDPConn
+	dst  *net.UDPAddr
 }
 
 func (s *socketLink) Send(b []byte) error {
-	_, err := s.pc.WriteTo(b, nil, s.dst)
+	_, err := s.conn.WriteToUDP(b, s.dst)
 	return err
 }
 
 func (s *socketLink) Receive(b []byte) (int, error) {
-	n, _, _, err := s.pc.ReadFrom(b)
+	n, _, err := s.conn.ReadFromUDP(b)
 	if err != nil {
 		var ne net.Error
 		if errors.As(err, &ne) && ne.Timeout() {
@@ -435,6 +430,6 @@ func (s *socketLink) Receive(b []byte) (int, error) {
 	return n, nil
 }
 
-func (s *socketLink) SetReadDeadline(t time.Time) error { return s.pc.SetReadDeadline(t) }
+func (s *socketLink) SetReadDeadline(t time.Time) error { return s.conn.SetReadDeadline(t) }
 
-func (s *socketLink) Close() error { return s.pc.Close() }
+func (s *socketLink) Close() error { return s.conn.Close() }

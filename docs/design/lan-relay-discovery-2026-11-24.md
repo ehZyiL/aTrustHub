@@ -360,3 +360,27 @@ R5-1 的判定规则是"抑制属于某一次决定，不属于之后的所有�
 
 这一轮把「界面层」也纳入审查对象：前几轮集中在生命周期与协议，UI 只做了存在性断言，
 没有检查重复/缺失文案。用例改成同时断言「必须出现」与「只能出现一次」。
+
+## 17. 第八轮：Windows 实机日志（`not implemented on windows/amd64`）
+
+用户在 Windows 上开启共享后，日志每 2 秒出现一次：
+
+```text
+[局域网发现] 发布失败：not implemented on windows/amd64
+```
+
+三个独立缺陷：
+
+| 编号 | 轴 | 问题 | 根因 | 修复 |
+| --- | --- | --- | --- | --- |
+| W1 [P1] | 功能 | Windows 上**发现功能完全不可用** | 传输层用了 `golang.org/x/net/ipv4` 的 `SetControlMessage`，该包在 Windows 上直接返回 `errNotImplemented`（`ipv4/control_windows.go`），`openMulticast` 因此每次都失败 | 去掉对 `x/net/ipv4` 的依赖：`net.ListenMulticastUDP` 本身就会设置 `IP_MULTICAST_IF`、`SO_REUSEADDR` 并加入组播组，发送改用 `WriteToUDP`、接收用 `ReadFromUDP`。回环（同机两个实例互相可见）改用 `x/sys` 逐平台设置 `IP_MULTICAST_LOOP`（`mdns_loop_{other,windows}.go`） |
+| W2 [P2] | 规格 | 失败后**每 2 秒重试一次**，退避完全失效，日志被刷屏 | 协调器每 2 秒把同一份公告再 `Set` 一次，`wantSeq++` 让 `retryPending` 判定失效，于是立刻重试 | `Set` 对**完全相同**的公告变成 no-op（`Clear` 同理）；真实变化（改名/换端口）仍然立即重试 |
+| W3 [P3] | 标准 | 日志前缀重复：`局域网发现：局域网发现：发布失败` | 包内日志自带前缀，应用包装层又加了一次 | 包内不再带功能前缀，只由应用层添加；同一错误只记录一次 |
+
+回归：`TestPublisherDoesNotReArmTheBackoffForTheSameAnnouncement`（撤掉修复：1 次 → 3 次）、
+`TestPublisherLogsOneLinePerDistinctFailure`（撤掉修复：80ms 内记录 75 行）、
+`TestPackageLogLinesCarryNoFeaturePrefix`。真实组播用例在本机仍通过（median 495µs）。
+
+修复后 Windows 上应看到一次「正在发布」，而不是每 2 秒一条失败。**仍未实机验证**：
+Windows 默认防火墙是否允许本程序收到入站 UDP 5353（发布方向是出站，不受影响）；
+若同事端收不到公告，需要按 §9 的记录改用 `windns` 的 DNS-SD API。

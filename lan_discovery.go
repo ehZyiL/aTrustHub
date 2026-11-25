@@ -48,6 +48,10 @@ type lanDiscovery struct {
 	// localAddrs caches this machine's LAN addresses. Enumerating interfaces is
 	// a syscall per address, and the page renders per frame.
 	localAddrs []relay.Interface
+	// localCands is localAddrs annotated the way the share panel annotates its
+	// own picker (subnet, LAN-sized, virtual), cached on the same clock so the
+	// discovery page never re-enumerates interfaces per frame.
+	localCands []lanCandidate
 	localAt    time.Time
 	pending    *discovery.Snapshot
 	lastErr    string
@@ -59,15 +63,11 @@ type lanDiscovery struct {
 // lanDiscoveryUI is the 发现局域网分享 page state. It holds no credential: a
 // candidate is an address and a name, never an authorization.
 type lanDiscoveryUI struct {
-	open bool
-	// tab is 0 for discovery and 1 for pasting a share code.
-	tab       int
+	open      bool
 	ifaceName string
-	busy      bool
 	err       string
 	snap      discovery.Snapshot
 	cands     []discovery.Candidate
-	notice    string
 	// searching is true during the first seconds of a browse: an empty list
 	// then means "still looking", not "there is nothing".
 	searching bool
@@ -296,32 +296,35 @@ func (a *app) retryLANDiscoveryPreference() error {
 // ---- browsing ------------------------------------------------------------
 
 // browseInterfaces returns the exact interfaces to browse on. Virtual adapters
-// and point-to-point links are not browsing targets by default: they are what
-// makes "I found my own VPN" a bug report.
+// and point-to-point links are not browsing targets: they are what makes "I
+// found my own VPN" a bug report. The classification is the share panel's own
+// (newLANCandidates), so the two pickers cannot disagree about which adapter is
+// a LAN.
 func (a *app) browseInterfaces(choice string) []discovery.Interface {
 	// Browsing must work on a machine that never shared anything: the address
 	// list comes from the machine, not from the share controller.
-	source := a.localLANCandidates()
+	source := a.localLANBrowseCandidates()
 	seen := make(map[string]bool)
 	var out []discovery.Interface
 	for _, cand := range source {
-		if cand.IPv4 == "" || seen[cand.Name+"|"+cand.IPv4] {
+		if cand.iface.IPv4 == "" || seen[cand.iface.Name] {
 			continue
 		}
-		if virtualInterface(cand.Name) {
+		if !browsableAdapter(cand) {
 			continue
 		}
-		if choice != "" && cand.Name != choice {
+		if choice != "" && cand.iface.Name != choice {
 			continue
 		}
-		seen[cand.Name+"|"+cand.IPv4] = true
-		iface := discovery.Interface{Name: cand.Name, IPv4: cand.IPv4}
+		// One socket per adapter: the transport opens its multicast group per
+		// interface, not per address, so a second address of the same adapter
+		// would only duplicate every packet.
+		seen[cand.iface.Name] = true
 		// The subnet is what later rejects an announcement reflected from
 		// another network.
-		if subnet, err := relay.SubnetOfAddress(cand.IPv4); err == nil {
-			iface.Subnet = subnet
-		}
-		out = append(out, iface)
+		out = append(out, discovery.Interface{
+			Name: cand.iface.Name, IPv4: cand.iface.IPv4, Subnet: cand.subnet,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Name != out[j].Name {
@@ -337,45 +340,79 @@ func (a *app) browseInterfaces(choice string) []discovery.Interface {
 	return out
 }
 
+// browsableAdapter reports whether one enumerated address is a LAN another
+// device could answer on. The share panel refuses the same two cases when it
+// recommends an address, so a user cannot be told an adapter is a LAN in one
+// place and not in the other.
+func browsableAdapter(cand lanCandidate) bool {
+	if cand.virtual {
+		return false
+	}
+	// A /31 or /32 is a point-to-point link: a tunnel, whatever the adapter is
+	// called. Browsing it opens a socket that can only ever see itself.
+	return cand.lanSize
+}
+
 // maxBrowsedInterfaces bounds how many adapters browse at once.
 const maxBrowsedInterfaces = 8
 
-// allLANInterfaces is the uncapped list behind the network picker.
+// allLANInterfaces is the uncapped list behind the network picker. It applies
+// the same filter as browseInterfaces, so every choice it offers is one the
+// browser can actually open.
 func (a *app) allLANInterfaces() []discovery.Interface {
 	var out []discovery.Interface
 	seen := map[string]bool{}
-	for _, cand := range a.localLANCandidates() {
-		if cand.IPv4 == "" || virtualInterface(cand.Name) || seen[cand.Name] {
+	for _, cand := range a.localLANBrowseCandidates() {
+		if cand.iface.IPv4 == "" || seen[cand.iface.Name] || !browsableAdapter(cand) {
 			continue
 		}
-		seen[cand.Name] = true
-		out = append(out, discovery.Interface{Name: cand.Name, IPv4: cand.IPv4})
+		seen[cand.iface.Name] = true
+		out = append(out, discovery.Interface{
+			Name: cand.iface.Name, IPv4: cand.iface.IPv4, Subnet: cand.subnet,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
-// localLANCandidates returns the machine's LAN addresses, refreshed at most once
-// per second. The discovery page asks for them on every frame.
-func (a *app) localLANCandidates() []relay.Interface {
+// localLANBrowseCandidates returns the machine's LAN addresses annotated the way
+// the share panel annotates its own picker (subnet, LAN-sized, virtual), and it
+// owns that cache: enumerating interfaces is a syscall per address, a subnet
+// lookup is a full enumeration, and the discovery page renders per frame.
+func (a *app) localLANBrowseCandidates() []lanCandidate {
 	now := time.Now()
 	if a.lanDisc != nil {
 		a.lanDisc.mu.Lock()
-		if len(a.lanDisc.localAddrs) > 0 && now.Sub(a.lanDisc.localAt) < time.Second {
-			cached := append([]relay.Interface(nil), a.lanDisc.localAddrs...)
+		if len(a.lanDisc.localCands) > 0 && now.Sub(a.lanDisc.localAt) < time.Second {
+			cached := append([]lanCandidate(nil), a.lanDisc.localCands...)
 			a.lanDisc.mu.Unlock()
 			return cached
 		}
 		a.lanDisc.mu.Unlock()
 	}
 	list := lanAddresses{}.LANCandidates()
+	cands := newLANCandidates(list, relay.SubnetOfAddress)
 	if a.lanDisc != nil {
+		// Both copies come from this one list, written under one lock: a reader
+		// can never observe an annotation set that belongs to another list.
 		a.lanDisc.mu.Lock()
 		a.lanDisc.localAddrs = append([]relay.Interface(nil), list...)
+		a.lanDisc.localCands = append([]lanCandidate(nil), cands...)
 		a.lanDisc.localAt = now
 		a.lanDisc.mu.Unlock()
 	}
-	return list
+	return cands
+}
+
+// localLANCandidates is the plain address list, for callers that only need to
+// recognise this machine's own addresses.
+func (a *app) localLANCandidates() []relay.Interface {
+	cands := a.localLANBrowseCandidates()
+	out := make([]relay.Interface, 0, len(cands))
+	for _, cand := range cands {
+		out = append(out, cand.iface)
+	}
+	return out
 }
 
 // openLANDiscovery is called by the UI when the discovery tab becomes visible.
@@ -400,6 +437,9 @@ func (a *app) closeLANDiscovery() {
 	d.ui.cands = nil
 	d.mu.Lock()
 	d.frameWanted = false
+	// A snapshot parked by the closing generation must not survive into the
+	// next one; the page that reopens starts from an empty list.
+	d.pending = nil
 	d.mu.Unlock()
 	_ = d.browser.Close()
 }
@@ -410,20 +450,21 @@ func (a *app) startLANDiscoveryBrowsing() {
 		return
 	}
 	ifaces := a.browseInterfaces(d.ui.ifaceName)
-	d.ui.busy = true
 	d.ui.err = ""
-	d.ui.notice = ""
 	d.ui.cands = nil
 	d.ui.snap = discovery.Snapshot{}
 	d.ui.searching = true
 	d.ui.startedAt = time.Now()
 	d.mu.Lock()
 	d.frameWanted = true
+	// Clear before starting: the new generation's first snapshot must be the
+	// only one this page can apply, otherwise a snapshot parked by the previous
+	// generation could be shown as if it belonged to the new network.
+	d.pending = nil
 	d.mu.Unlock()
 	if err := d.browser.Start(ifaces); err != nil {
 		d.ui.err = err.Error()
 	}
-	d.ui.busy = false
 	a.invalidate()
 }
 
@@ -464,8 +505,11 @@ func (a *app) drainLANDiscovery() {
 	snap := d.pending
 	d.pending = nil
 	d.mu.Unlock()
-	if snap != nil && (d.ui.snap.Generation == 0 || snap.Generation >= d.ui.snap.Generation) {
-		// A snapshot from an older generation must not overwrite a newer list.
+	if snap != nil && snap.Generation >= d.ui.snap.Generation {
+		// A snapshot from an older generation must not overwrite a newer list. An
+		// equal one may: a refresh re-queries without starting a new generation.
+		// startLANDiscoveryBrowsing clears the parked slot, so the comparison is
+		// never asked to repair a snapshot from the previous network.
 		d.ui.snap = *snap
 		d.ui.cands = a.withoutOwnShare(snap.Candidates)
 	}
@@ -534,6 +578,9 @@ func (a *app) lanShareDiscoveryView(c *ui.Context, view relay.View) {
 			}
 		})
 		ui.Text(c, "同一网络的其他设备可以看到该名称和连接地址；加入仍需分享口令。发现不会开启共享、VPN 或系统代理。").
+			FontSize(11).TextColor(t.TextMuted).Wrap()
+		ui.Text(c, "同事收不到时：确认双方在同一网段，且系统防火墙允许本程序接收 5353/UDP 组播"+
+			"（Windows：专用网络并开启「网络发现」）。").
 			FontSize(11).TextColor(t.TextMuted).Wrap()
 		if d.discoverySavePending {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -647,9 +694,6 @@ func (a *app) relayDiscoveryBody(c *ui.Context, d *relayImportDraft) {
 			}
 		}
 		next := current
-		if next == "自动选择" {
-			next = "自动选择"
-		}
 		all := append([]string{"自动选择"}, labels...)
 		if ui.Select(c, &next, all).Width(220).Changed() {
 			a.setLANDiscoveryInterface(byLabel[next])
@@ -676,6 +720,13 @@ func (a *app) relayDiscoveryBody(c *ui.Context, d *relayImportDraft) {
 			ui.Text(c, "正在查找局域网分享…").FontSize(12).TextColor(t.TextMuted)
 		} else {
 			ui.Text(c, "暂未发现分享。请确认主机已开启共享并允许被发现；也可以粘贴分享口令。").
+				FontSize(11).TextColor(t.TextMuted).Wrap()
+			// Discovery is bidirectional: the query goes out and the answer has
+			// to come back in, so an inbound block looks exactly like an empty
+			// network. Naming the check is the only way the user can tell them
+			// apart without a packet capture.
+			ui.Text(c, "若一直为空：确认双方在同一网段，且系统防火墙允许本程序接收 5353/UDP 组播"+
+				"（Windows：专用网络并开启「网络发现」）。").
 				FontSize(11).TextColor(t.TextMuted).Wrap()
 		}
 		return

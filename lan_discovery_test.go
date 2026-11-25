@@ -678,7 +678,14 @@ func TestAcceptanceOwnShareIsFilteredByAddress(t *testing.T) {
 	if got := len(a.lanDisc.ui.cands); got != 0 {
 		t.Fatalf("本机自己的分享没有被过滤：%d", got)
 	}
-	// Same share ID from a remote address: a real colleague, shown.
+	// Same share ID from a remote address: a real colleague, shown. The local
+	// address is withdrawn first, because that is what a responder does when its
+	// address changes: with both addresses live at once the assembler keeps one
+	// endpoint per instance (cache-flush semantics), and which one it keeps would
+	// decide this assertion instead of the filter being tested.
+	backend.feed([]discovery.Record{
+		{Kind: discovery.KindA, Host: discovery.HostLabel(own.ShareID), IPv4: iface.IPv4, TTL: 0, Interface: "en0"},
+	})
 	backend.feed(mk("192.168.31.240"))
 	a.drainLANDiscovery()
 	if got := len(a.lanDisc.ui.cands); got != 1 {

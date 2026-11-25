@@ -147,6 +147,11 @@ func virtualInterface(name string) bool {
 		"lxc", "cni", "podman", "incus", "mpqemu", "bridge", "tap",
 		// Windows: Hyper-V/WSL switches and VPN clients.
 		"loopback", "npcap", "hyper-v", "local area connection*",
+		// This program's own adapters: the Windows capture device (ECH-<id>, which
+		// is normally on 198.19.0.0/16 and so already fails the RFC1918 test) and
+		// the upstream Wintun names (aTrustHubN, ZJU Connect). Naming them here
+		// means the classification does not rest on the address pool alone.
+		"ech-", "atrusthub", "zju connect",
 		// Tunnels and VPNs (Linux tun0/wg0/tailscale0, macOS utunN,
 		// Windows Wintun/WireGuard/OpenVPN adapters).
 		"tun", "utun", "wg", "wintun", "wireguard", "openvpn", "tailscale", "zerotier",

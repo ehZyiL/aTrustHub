@@ -55,6 +55,8 @@ func TestVirtualInterfaceCoversEveryPlatform(t *testing.T) {
 		// Windows (friendly names, incl. Hyper-V/WSL and VPN clients)
 		"vEthernet (WSL)", "vEthernet (Default Switch)", "Local Area Connection* 2",
 		"WireGuard Tunnel", "OpenVPN Wintun", "Tailscale", "NordLynx", "Hyper-V Virtual Ethernet Adapter",
+		// This program's own adapters must never be offered as a LAN.
+		"ECH-6f1a2b3c4d5e", "aTrustHub1", "ZJU Connect",
 	}
 	for _, name := range virtual {
 		if !virtualInterface(name) {

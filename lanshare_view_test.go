@@ -651,12 +651,18 @@ func TestRelayPointOffersExplicitSystemProxy(t *testing.T) {
 	}
 	a.openRelayPoint(point.ID)
 	texts := strings.Join(ui.NewTester(a.view, 1120, 800).Texts(), "|")
-	if supportsSystemProxy() {
-		if !strings.Contains(texts, "开启系统代理") && !strings.Contains(texts, "系统代理已开启") {
-			t.Fatalf("panel lacks the explicit system proxy step; texts = %s", texts)
-		}
-	} else if !strings.Contains(texts, "系统代理当前不可开启") {
-		t.Fatalf("panel does not explain the missing platform support; texts = %s", texts)
+	// The panel must offer the system-proxy step, or say exactly why it cannot be
+	// offered right now. This test does not start the unified entry, so on a
+	// platform that supports the proxy the honest text is the precondition
+	// (captureBlocker) rather than the toggle; asserting only the toggle made this
+	// case pass on Linux (no support) and fail on Windows/macOS.
+	offered := strings.Contains(texts, "开启系统代理") || strings.Contains(texts, "系统代理已开启")
+	explained := strings.Contains(texts, "系统代理当前不可开启")
+	if !offered && !explained {
+		t.Fatalf("panel lacks the explicit system proxy step; texts = %s", texts)
+	}
+	if !supportsSystemProxy() && offered {
+		t.Fatalf("不支持系统代理的平台却给出了开启入口；texts = %s", texts)
 	}
 	if a.sysProxyOn.Load() {
 		t.Fatal("opening the panel changed the system proxy")

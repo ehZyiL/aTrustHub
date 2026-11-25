@@ -79,3 +79,17 @@
    `connect-hub-capture@<uid>.service`、运行时目录 `/run/connect-hub-capture-<uid>` 全部统一，
    助手协议随之升到 v11；安装脚本会把改名前的 `easyconnect-hub-capture` 单元与二进制先停掉并移除。
 2. Windows/Linux 两处 `COMPONENTS.txt` 里的主程序名仍写 `easyconnect-hub(.exe)`，已改为实际的 `connect-hub(.exe)`。
+
+## F. 局域网分享/发现：旧说法与本轮（第十轮复审）修复的交叉点
+
+本节只列**引用后会误导**的旧说法。详细现象、根因与回归用例见
+`design/lan-relay-discovery-2026-11-24.md` §19 的 R9-14…R9-23。
+
+| 出处 | 文档说法 | 现状 |
+|---|---|---|
+| `lan-relay-sharing-implementation` 端点表 `GET /v1/status` | "续租本客户端控制会话"（暗示只有心跳续租） | 现在**任何认证请求**都续租（`authenticateClient` 内 `touch`）。旧实现只有心跳续租，导致只轮询资源/开隧道的客户端在 `ClientLease=15s` 后被静默踢掉（R9-21） |
+| 同表 `GET /v1/resources` | "支持 ETag/304" | 当时**并不生效**：服务端 ETag 是 `"<revision>"`，客户端发裸 revision，永不匹配，每次刷新都重传整份快照；现已两端对齐（R9-22） |
+| `lan-relay-discovery` §18 / §19 对 `DropUnusableDomains` 的描述 | 清掉"不能当名称使用的域名规则与内部域名" | 漏了 `StaticDNS[].Name`，而 `Validate` 对它跑同一套校验 → 静态 DNS 里只要有一条用 IP 当名字，整份快照仍被拒，同事继续看到「资源域名不能是 IP 地址」（R9-19） |
+| 分享身份"绑定一个地址"（`impl`/`plan` 多处） | 身份与监听地址一一对应，地址变化必须给出新口令 | 语义没变，但当时 `DecodeIdentity` 不恢复 `Address`：**重启后监听退化成 `0.0.0.0`（所有网卡）**，且"地址已变化"守卫永不触发；现已从证书唯一 IPv4 SAN 恢复，异常证书拒绝解码（R9-16、R9-18） |
+| 客户端错误文案（`impl` 的失败矩阵） | "无法连接分享主机：<原始错误>" | 现在归一为可行动结论（拒绝/不可达/被重置/超时），不再把 `Post` 动词、URL、`dial tcp`、宿主内部 `127.0.0.1:<port>` 与 `unknown error` 送到同事面前（R9-23） |
+| `lan-relay-discovery` §9.1.5 / R2-5 | "同 sid 的远端仍显示" | 只在一个 endpoint 可见的前提下成立：同一 instance 同时存在两个存活 A 记录时，装配层只保留一个端点，选哪个由地址字典序决定，本机地址更小时远端会被自己的地址盖住（R9-14，已在设计文档记为已知限制） |

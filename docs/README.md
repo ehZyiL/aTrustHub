@@ -14,10 +14,17 @@
 | Worker IPC | **v7** | `internal/workeripc/protocol.go` `Version = 7` |
 | Windows 提权助手 | **v7** | `internal/wincapture/protocol.go` `ProtocolVersion = 7` |
 | Linux 提权助手 | **v11** | `internal/capture/protocol_linux.go` `ProtocolVersion = 11` |
+| 局域网分享协议 | **v1** | `internal/relay/protocol.go` `ProtocolVersion = 1` |
+| 局域网发现草案 | **v1** | `internal/relay/discovery/types.go` `DraftVersion = 1` |
 | Hub 模块 | `GO 1.27.3` | `aTrustHub/go.mod` |
-| 应用构建标识 | `0.1.0-dev-multigateway-tun.11` | `app.go` `appBuild` |
+| 应用构建标识 | `0.2.0` | `app.go` `version` / `appBuild` |
 
 任何给出不同协议号的文档（v3/v4/v5/v8/v9 等）都已过期，不要据此排障。
+
+**最近一次实机验证**（含分享链路、闭共享、口令时序）：
+[design/lan-relay-discovery-2026-11-24.md §19.1](design/lan-relay-discovery-2026-11-24.md)。
+该节同时列出了**仍未验证**的项（跨机发现、Windows 入站 5353、macOS 分支、规模），
+引用之前先看那张表。
 
 ## 目录结构
 
@@ -47,8 +54,8 @@ docs/
 | [design/networking.md](design/networking.md) | 四种网络接管方式各自怎么实现、路由与 DNS 归属怎么判、范围边界到哪 |
 | [design/recovery.md](design/recovery.md) | 正常退出与硬杀分别会清理什么、事务日志在哪、还剩哪些洞 |
 | [design/lan-relay-sharing-plan-2026-11-24.md](design/lan-relay-sharing-plan-2026-11-24.md) | 局域网分享要做什么、UI/UX 怎么组织、哪些能力刻意不做 |
-| [design/lan-relay-sharing-implementation-2026-11-24.md](design/lan-relay-sharing-implementation-2026-11-24.md) | 分享协议 v1、严格出口边界、启停/恢复顺序，以及本次验证证据与未验证项 |
-| [design/lan-relay-discovery-2026-11-24.md](design/lan-relay-discovery-2026-11-24.md) | 自动发现的后端选型、DNS-SD 协议 v1、缓存上限、发布/浏览生命周期与验收用例 |
+| [design/lan-relay-sharing-implementation-2026-11-24.md](design/lan-relay-sharing-implementation-2026-11-24.md) | 分享协议 v1、严格出口边界、启停/恢复顺序，以及当时的验证证据与未验证项（端点表关于租约续期与 ETag 的描述已被后续修复超越，见 [review/errata.md](review/errata.md) F 节） |
+| [design/lan-relay-discovery-2026-11-24.md](design/lan-relay-discovery-2026-11-24.md) | 自动发现的后端选型、DNS-SD 协议 v1、缓存上限、发布/浏览生命周期与验收用例；**§19.1 是当前最新的实机验证记录** |
 | [review/errata.md](review/errata.md) | 旧文档哪些说法与代码不符、错在哪 |
 | [review/lan-relay-sharing-review-e888e47-2026-11-24.md](review/lan-relay-sharing-review-e888e47-2026-11-24.md) | 局域网分享合并前的 10 项审查发现（S1–S3、R1–R7）与复现方式 |
 | [review/lan-relay-sharing-remediation-e888e47-2026-11-24.md](review/lan-relay-sharing-remediation-e888e47-2026-11-24.md) | 上述 10 项的处理方案、约束与验收用例 |
@@ -67,6 +74,8 @@ docs/
 | 全局 TUN（旧，仅 aTrust 会话） | ✅ | ❌ `supportsElevatedTUN=false` | ✅ |
 | 应用接管（新，worker 驱动的资源 TUN） | ✅ | ✅ | ❌ `supportsResourceTUN=false` |
 | 启动后自动恢复应用接管（开关） | ❌（启动助手每次要过 UAC，`supportsAutoRestoreAppCapture=false`） | ✅（systemd 常驻助手） | ❌（无应用接管） |
+| 局域网分享（宿主侧） | ✅ 需 UAC 建防火墙规则；**网络类别为「公用」时规则不生效**，得先把该网络设为「专用」 | ✅ 端口需自行放行（程序不改防火墙） | 未实机验证（打包脚本已声明 `NSLocalNetworkUsageDescription` / `NSBonjourServices`） |
+| 局域网分享自动发现（DNS-SD 发布/浏览） | ✅ 同机回环实测；跨机待验证（入站 UDP 5353 是否被系统防火墙拦未知） | ✅ 同机回环实测（WSL 镜像网络，median 1.76ms）；跨机待验证 | 未测（共享 5353 的权限与 responder 共存未验证） |
 
 两个容易搞错的点：
 

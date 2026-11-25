@@ -8,13 +8,25 @@
 stopPainting()                    // 停止排队重绘
 resourceTUN.Close()               // 停系统捕获：撤销路由/DNS/网卡
 closeCaptureSetup()
+shutdownLANShare()                // 局域网分享：先撤销公告 → 关监听 → 删防火墙规则
 teardownTUNOnExit()               // 停旧 TUN helper，强制时兜底重置 DNS
 disableSystemProxyOnExit()        // 关系统代理（失败重试 2 次）
 local.Close()                     // 关本机软件/浏览器
 mgr.Close()                       // 关全部会话 + 统一入口监听
 ```
 
-顺序是**故意**的：系统代理先于监听关闭，因此不存在"代理指着一个已死端口"的窗口。
+顺序是**故意**的：系统代理先于监听关闭，因此不存在"代理指着一个已死端口"的窗口；
+分享必须在 `teardownTUNOnExit` / `disableSystemProxyOnExit` / `mgr.Close()` **之前** 停：
+分享靠 `AcquireSource` 借用某个接入点的 VPN 会话，会话一关就无从监听，晚到的注册/隧道
+会活过它依赖的会话。
+
+分享的退出三段（每段都有预算，不阻塞退出）：
+
+1. **撤销 mDNS 公告**（早于监听关闭）：同事不能拨一个正在消失的分享；
+2. **关闭监听**：`Controller.Shutdown` 保留启用意图，下次启动自动恢复；
+3. **删防火墙规则**：先 `cancelPendingFirewallOps`，再 reconcile，最多等
+   `FirewallShutdownBudget`；没做完就保留 `lan-share-firewall.json` 里的待处理记录，
+   下次启动再收尾。
 
 ## 2. 事务日志与恢复点（已核实存在）
 
@@ -26,6 +38,7 @@ mgr.Close()                       // 关全部会话 + 统一入口监听
 | Windows NRPT / 路由 | `recovery_windows.go`、`routes_windows.go` | helper | 看门狗 `RunWatchdog` **等 GUI 进程句柄**，GUI 一死（含被 kill）立即 `RecoverOrphanedDNS` |
 | 旧 TUN 的 DNS 劫持 | `tun.stop`/`tun.pid` + `gui.alive` 心跳 | GUI / helper | GUI 启动 `cleanupStaleHelper`；helper 见心跳过期自退 |
 | 系统代理归属 | 注册表现值比对 | — | `releaseLostSystemProxy`（运行期）、`guardSystemProxy`（每 3 s 探活） |
+| 局域网分享防火墙规则 | `<数据目录>/lan-share-firewall.json`（待确认/已确认的规则 id 与形状） | GUI（提权前先写 journal，崩溃/拒绝也能收回） | 启动 `reconcileLanShareFirewall`；退出 `shutdownLANShare` 的有界等待 |
 
 关键设计：`restoreOwnedProxy` 是三态判断——当前值等于 After 才写回 Before；等于 Before 只删日志；被第三方改过则**保留现状并保留日志**。因此"崩溃在写日志与写注册表之间"是幂等安全的。
 

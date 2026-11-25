@@ -24,6 +24,7 @@
 - **证书指纹核验**：针对自签名或格式异常的网关证书，提供安全的 SHA-256 指纹核验与信任绑定。
 - **自愈与资源保障**：周期保活（Keepalive）、失效自动重连、健康度探测与退出完全清理，杜绝网络垃圾残留。
 - **内存深度优化**：支持后台闲置工作集修剪（Working Set Trimming），显著降低空闲常驻内存占用。
+- **局域网分享与自动发现**：把本机已登录的网关资源分享给同一网段的同事——口令里带 256 位分享令牌与证书指纹，加入仍需该口令（广播里的信息不构成授权）；可选开启 DNS-SD 自动发现，让同事在列表里看到分享名称与地址。分享只转发网关授权的资源，公网仍走同事自己的网络。**测试状态**：Windows/Linux 已完成同机回环与真实内网访问验证；跨机发现、Windows 防火墙入站 5353 仍待实机确认（见 [design/lan-relay-discovery-2026-11-24.md](docs/design/lan-relay-discovery-2026-11-24.md) §9、§19.1）。
 
 > [!WARNING] 协议支持与测试状态说明
 > 本项目代码库继承并保留了上游原版对 **深信服 aTrust 零信任网关** 的完整支持代码。但自当前分支从上游 Fork 以来，所有功能迭代与实机验证均集中在 **EasyConnect 网关**、软件抓包接管与全系统 TUN 模式上，**aTrust 协议在当前分支未做实机回归测试**。使用 aTrust 时若遇到问题，欢迎提交反馈。
@@ -56,6 +57,9 @@
 - Windows 快速入门手册：[WINDOWS-QUICKSTART.md](WINDOWS-QUICKSTART.md)
 - Linux 快速入门手册：[LINUX-QUICKSTART.md](LINUX-QUICKSTART.md)
 - Windows 底层技术实现白皮书：[WINDOWS-IMPLEMENTATION.md](WINDOWS-IMPLEMENTATION.md)
+- 局域网分享（协议、生命周期、严格出口边界）：[docs/design/lan-relay-sharing-implementation-2026-11-24.md](docs/design/lan-relay-sharing-implementation-2026-11-24.md)
+- 局域网分享自动发现（DNS-SD、缓存上限、复审与实测记录）：[docs/design/lan-relay-discovery-2026-11-24.md](docs/design/lan-relay-discovery-2026-11-24.md)
+- 旧文档勘误（哪些旧说法已与代码不符）：[docs/review/errata.md](docs/review/errata.md)
 - 历史设计稿与架构演进记录：[docs/greenfield-architecture-2026-11-20.md](../docs/greenfield-architecture-2026-11-20.md)
 
 ---

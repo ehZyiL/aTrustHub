@@ -57,6 +57,9 @@ worker 必须用 `GOWORK=off` 从 `zju-connect/` 构建，否则会解析到 Hub
 | `internal/vpn` | 多接入点会话编排、聚合入口、路由决策接入、健康与会话探测、DNS 别名 |
 | `internal/proxy` | SOCKS5 / SOCKS4 / HTTP 混合监听（TCP），私有 UDP 数据报通道 |
 | `internal/routing` | 纯函数归属/授权/策略决策，不做 DNS、不拨号 |
+| `internal/relay` | 局域网分享：协议 v1 服务端/客户端（严格出口、指纹钉扎、租约、防火墙规则簿记） |
+| `internal/relay/discovery` | DNS-SD 发布/浏览、候选装配与缓存上限（不读凭据，平台边界是 `Backend`） |
+| `internal/lanname` | 公开名称规则的唯一实现（保存/发布/接收共用） |
 | `internal/workeripc` | 与 worker 的 v7 协议类型与流结果校验 |
 | `internal/splitdns` | 本地回环 DNS 入口（UDP/TCP）+ 缓存 |
 | `internal/dnsmapping` | 会话级 DNS 映射池（合成地址）与别名生命周期 |
@@ -70,8 +73,8 @@ worker 必须用 `GOWORK=off` 从 `zju-connect/` 构建，否则会解析到 Hub
 | `cmd/app-helper` | 提权助手入口（Windows/Linux 共用一个 main，平台文件分离） |
 | `cmd/easyconnect-check` | 无 GUI 的 worker 连通性自检工具 |
 
-根 `main` 包是 UI 与胶水层，**不在**上表内：非测试源码 83 个文件 / 14.2k 行 / 471 KB，
-其中 32 个带 `_{windows,linux,darwin}.go` 平台后缀，`view.go` 单文件近 100 KB。
+根 `main` 包是 UI 与胶水层，**不在**上表内：非测试源码 94 个文件 / ≈18.4k 行，
+其中 36 个带 `_{windows,linux,darwin}.go` 平台后缀，`view.go` 单文件近 100 KB。
 
 ## 4. 运行时约定
 

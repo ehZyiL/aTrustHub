@@ -82,6 +82,17 @@ func (s *ResourceSnapshot) EntryCount() int {
 // Empty reports whether the snapshot authorizes and attributes nothing.
 func (s *ResourceSnapshot) Empty() bool { return s.EntryCount() == 0 }
 
+// dnsNote describes the DNS side of one snapshot for the diagnostic report. A
+// share without a DNS server is not a failure, but a colleague who then cannot
+// resolve an intranet name must be able to tell "no DNS offered" from "DNS
+// broken".
+func dnsNote(s *ResourceSnapshot) string {
+	if s == nil || s.DNSServer == "" {
+		return "；本次分享不提供 DNS，内网域名需由本机解析"
+	}
+	return "；DNS 经分享主机 " + s.DNSServer
+}
+
 // Normalize lowercases and sorts in a fixed order, so two equal scopes always
 // produce the same revision regardless of the order the VPN reported them.
 func (s *ResourceSnapshot) Normalize() {
@@ -322,14 +333,18 @@ func validProtocol(p string) bool { return p == "tcp" || p == "udp" || p == "all
 // whole share.
 func DomainUsable(name string) bool { return validateDomain(name) == nil }
 
-// DropUnusableDomains removes domain rules and internal-domain entries that
-// cannot be expressed as names. It returns how many were dropped so the caller
-// can log once.
+// DropUnusableDomains removes domain rules, internal-domain entries and static
+// DNS names that cannot be expressed as names. It returns how many were dropped
+// so the caller can log once.
 //
 // Dropping a name only ever narrows what is proxied (the address itself, if it
 // matters, belongs in an IP rule), so this is safe on both the publishing and
 // the receiving side. Everything else in a snapshot - ranges, ports, size -
 // stays strict.
+//
+// Static DNS is included on purpose: Validate runs the same name check on
+// StaticDNS[].Name, so leaving that field alone kept "资源域名不能是 IP 地址"
+// reachable for every colleague even after the domain rules were cleaned.
 func (s *ResourceSnapshot) DropUnusableDomains() int {
 	if s == nil {
 		return 0
@@ -353,6 +368,15 @@ func (s *ResourceSnapshot) DropUnusableDomains() int {
 		domains = append(domains, d)
 	}
 	s.InternalDomains = domains
+	records := s.StaticDNS[:0]
+	for _, r := range s.StaticDNS {
+		if !DomainUsable(r.Name) {
+			dropped++
+			continue
+		}
+		records = append(records, r)
+	}
+	s.StaticDNS = records
 	return dropped
 }
 

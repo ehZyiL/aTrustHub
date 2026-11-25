@@ -221,6 +221,14 @@ func (s *Server) authenticateClient(w http.ResponseWriter, r *http.Request) (*cl
 	if c == nil {
 		return nil, NewError(CodeSessionExpired, "客户端会话已过期，请重新认证")
 	}
+	// Any authenticated request proves the client is still there, so the lease is
+	// renewed here rather than only on /v1/status: a client that polls resources
+	// or opens tunnels every second must not be dropped after one lease period
+	// for the lack of a heartbeat, and the error it would get ("请重新认证")
+	// hides the real cause.
+	if _, ok := s.clients.touch(c, time.Now()); !ok {
+		return nil, NewError(CodeSessionExpired, "客户端会话已过期，请重新认证")
+	}
 	return c, nil
 }
 
@@ -346,7 +354,11 @@ func (s *Server) handleResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	etag := `"` + snap.Revision + `"`
-	if r.Header.Get(HeaderIfNoneMatch) == etag {
+	// Compare tolerantly: a client may send the bare revision or the quoted entity
+	// tag. Refusing to match on the bare form made every conditional refresh a
+	// full snapshot download.
+	if strings.Trim(r.Header.Get(HeaderIfNoneMatch), `"`) == snap.Revision {
+		w.Header().Set(HeaderETag, etag)
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}

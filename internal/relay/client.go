@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -195,7 +196,7 @@ func (c *Client) controlWithToken(ctx context.Context, method, path string, body
 		if errors.As(err, &nerr) && nerr.Timeout() {
 			return nil, NewError(CodeDialTimeout, "连接分享主机超时")
 		}
-		return nil, NewError(CodeTargetUnreachable, "无法连接分享主机：%v", err)
+		return nil, NewError(CodeTargetUnreachable, "%s", describeHostDialFailure(err))
 	}
 	defer resp.Body.Close()
 	data, err := readBounded(resp.Body, MaxSnapshotBytes+MaxErrorBody)
@@ -226,6 +227,39 @@ func (c *Client) Status(ctx context.Context, token string) (*StatusResponse, err
 	return &resp, nil
 }
 
+// describeHostDialFailure turns a transport-level failure to reach the share host
+// into a sentence the colleague can act on. The raw error text mixes the HTTP
+// verb, the URL and the operating system's wording ("connection refused" on
+// Unix, "actively refused" on Windows); none of that says whether the host
+// stopped sharing, is on another network, or is being filtered.
+func describeHostDialFailure(err error) string {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "connection refused"), strings.Contains(msg, "actively refused"):
+		return "分享主机拒绝了连接：共享可能已关闭，或宿主已退出"
+	case strings.Contains(msg, "no route to host"), strings.Contains(msg, "network is unreachable"),
+		strings.Contains(msg, "host is down"):
+		return "分享主机不可达：双方不在同一网段，或宿主的网络被系统归为「公用」/防火墙未放行"
+	case strings.Contains(msg, "connection reset"), strings.Contains(msg, "forcibly closed"):
+		return "分享主机重置了连接"
+	case strings.Contains(msg, "i/o timeout"), strings.Contains(msg, "deadline exceeded"):
+		return "连接分享主机超时"
+	default:
+		return "无法连接分享主机"
+	}
+}
+
+// quoteEntityTag renders a revision as an If-None-Match entity tag. The server
+// compares against the quoted form (RFC 7232), so a caller passing the bare
+// revision would otherwise never match and would always receive the full
+// snapshot - a conditional refresh that silently never was conditional.
+func quoteEntityTag(v string) string {
+	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
+		return v
+	}
+	return `"` + v + `"`
+}
+
 // Resources fetches a complete snapshot. etag may be empty.
 func (c *Client) Resources(ctx context.Context, token, etag string) (*ResourcesResponse, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/v1/resources", nil)
@@ -235,11 +269,11 @@ func (c *Client) Resources(ctx context.Context, token, etag string) (*ResourcesR
 	c.setHeaders(req)
 	req.Header.Set(HeaderAuthorization, "Bearer "+token)
 	if etag != "" {
-		req.Header.Set(HeaderIfNoneMatch, etag)
+		req.Header.Set(HeaderIfNoneMatch, quoteEntityTag(etag))
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, false, NewError(CodeTargetUnreachable, "无法连接分享主机：%v", err)
+		return nil, false, NewError(CodeTargetUnreachable, "%s", describeHostDialFailure(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotModified {
@@ -285,7 +319,7 @@ func (c *Client) ExchangeDNS(ctx context.Context, token string, epoch uint64, re
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, NewError(CodeTargetUnreachable, "无法连接分享主机：%v", err)
+		return nil, NewError(CodeTargetUnreachable, "%s", describeHostDialFailure(err))
 	}
 	defer resp.Body.Close()
 	answer, err := readBounded(resp.Body, MaxDNSBody+MaxErrorBody)
@@ -310,7 +344,7 @@ func (c *Client) Revoke(ctx context.Context, token string) error {
 func (c *Client) Dial(ctx context.Context, token string, epoch uint64, revision, target string) (net.Conn, error) {
 	conn, err := c.dial(ctx, "tcp", c.code.Address())
 	if err != nil {
-		return nil, NewError(CodeTargetUnreachable, "无法连接分享主机：%v", err)
+		return nil, NewError(CodeTargetUnreachable, "%s", describeHostDialFailure(err))
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)

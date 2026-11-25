@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"net"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -73,8 +74,10 @@ func TestDiagnoseDeniedTargetIsDefinite(t *testing.T) {
 }
 
 func TestFirewallRuleValidation(t *testing.T) {
+	// The program path must be absolute for the platform under test: a POSIX path
+	// is not absolute on Windows, so hardcoding one made this case fail there.
 	rule := FirewallRule{
-		ID: "ConnectHub-LANShare-1234-1", ProgramPath: "/opt/app/connect-hub",
+		ID: "ConnectHub-LANShare-1234-1", ProgramPath: filepath.Join(t.TempDir(), "connect-hub"),
 		Port: 23456, Profile: "private", RemoteIP: "192.168.1.0/24",
 	}
 	if err := rule.Validate(); err != nil {

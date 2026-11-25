@@ -138,6 +138,27 @@ func DecodeIdentity(stored string) (*Identity, error) {
 		return nil, err
 	}
 	sum := sha256.Sum256(leaf.Raw)
+	// The certificate is the only place the bound address survives a restart: the
+	// stored record holds just cert and key. Recovering it here keeps a restored
+	// share listening on that one address instead of the 0.0.0.0 fallback in
+	// StartServer, and it keeps the controller's "address changed" guard alive
+	// across restarts.
+	//
+	// An identity that does not carry exactly one IPv4 address is refused instead
+	// of decoded with an empty one: an empty address is not a safe default, it is
+	// the wildcard bind, and this record is the only thing that says which network
+	// the share belongs to. Only GenerateIdentity writes these records and it
+	// always puts exactly one IPv4 SAN in, so a record that fails this check was
+	// not produced by this program.
+	address := ""
+	if len(leaf.IPAddresses) == 1 {
+		if v4 := leaf.IPAddresses[0].To4(); v4 != nil {
+			address = v4.String()
+		}
+	}
+	if address == "" {
+		return nil, errors.New("分享身份没有唯一绑定地址")
+	}
 	return &Identity{
 		CertPEM:     []byte(record.Cert),
 		KeyPEM:      []byte(record.Key),
@@ -145,6 +166,7 @@ func DecodeIdentity(stored string) (*Identity, error) {
 		Fingerprint: hex.EncodeToString(sum[:]),
 		NotBefore:   leaf.NotBefore,
 		NotAfter:    leaf.NotAfter,
+		Address:     address,
 	}, nil
 }
 

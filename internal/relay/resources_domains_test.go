@@ -16,14 +16,20 @@ func TestDropUnusableDomainsKeepsTheValidOnes(t *testing.T) {
 			{Domain: "bad name", PortMin: 443, PortMax: 443, Protocol: "tcp"},
 		},
 		InternalDomains: []string{"corp.test", "192.168.31.1", "also.corp.test"},
+		// Static DNS names go through the same validator, so an address here
+		// failed the whole snapshot just like a domain rule did.
+		StaticDNS: []DNSRecord{
+			{Name: "vpn.corp.test", Addresses: []string{"10.0.0.2"}},
+			{Name: "10.0.0.1", Addresses: []string{"10.0.0.3"}},
+		},
 	}
 	// The boundary stays strict for whatever still reaches it.
 	if err := s.Validate(); err == nil {
 		t.Fatal("未清理的快照不应通过校验")
 	}
 	dropped := s.DropUnusableDomains()
-	if dropped != 5 {
-		t.Fatalf("丢弃了 %d 条，want 5", dropped)
+	if dropped != 6 {
+		t.Fatalf("丢弃了 %d 条，want 6", dropped)
 	}
 	if err := s.Validate(); err != nil {
 		t.Fatalf("清理后仍不合法：%v", err)
@@ -37,6 +43,9 @@ func TestDropUnusableDomainsKeepsTheValidOnes(t *testing.T) {
 	}
 	if len(s.InternalDomains) != 2 || s.InternalDomains[0] != "corp.test" {
 		t.Fatalf("保留的内部域名不对：%v", s.InternalDomains)
+	}
+	if len(s.StaticDNS) != 1 || s.StaticDNS[0].Name != "vpn.corp.test" {
+		t.Fatalf("保留的静态 DNS 不对：%+v", s.StaticDNS)
 	}
 	// Idempotent: a second pass finds nothing to drop.
 	if again := s.DropUnusableDomains(); again != 0 {

@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"math/big"
 	"net"
@@ -60,6 +61,72 @@ func probeKey(t *testing.T, key *ecdsa.PrivateKey) []byte {
 	return pemEncode("EC PRIVATE KEY", der)
 }
 
+// storedIdentityWithSANs builds a stored identity record whose certificate
+// carries exactly the given IP SANs, so the decode boundary can be exercised
+// with records this program would never generate itself.
+func storedIdentityWithSANs(t *testing.T, ips []net.IP) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(7),
+		Subject:               pkix.Name{CommonName: "test"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IPAddresses:           ips,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(identityRecord{
+		Cert: string(pemEncode("CERTIFICATE", der)),
+		Key:  string(pemEncode("EC PRIVATE KEY", keyDER)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(payload)
+}
+
+// The identity record is the only thing that says which network a restored share
+// belongs to. Decoding it without exactly one IPv4 address would leave Address
+// empty, and StartServer turns an empty address into a 0.0.0.0 bind: the share
+// would listen on every adapter instead of the chosen one. Refusing the record is
+// the only fail-closed answer.
+func TestDecodeIdentityRequiresOneBoundAddress(t *testing.T) {
+	decoded, err := DecodeIdentity(storedIdentityWithSANs(t, []net.IP{net.ParseIP("192.168.1.5")}))
+	if err != nil {
+		t.Fatalf("单一地址的身份应当可解码：%v", err)
+	}
+	if decoded.Address != "192.168.1.5" {
+		t.Fatalf("address = %q, want 192.168.1.5", decoded.Address)
+	}
+	for _, tc := range []struct {
+		name string
+		ips  []net.IP
+	}{
+		{"没有地址", nil},
+		{"两个地址", []net.IP{net.ParseIP("192.168.1.5"), net.ParseIP("192.168.1.6")}},
+		{"只有 IPv6", []net.IP{net.ParseIP("fd00::1")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := DecodeIdentity(storedIdentityWithSANs(t, tc.ips)); err == nil {
+				t.Fatal("没有唯一 IPv4 地址的身份应当被拒绝，否则会退化成 0.0.0.0 监听")
+			}
+		})
+	}
+}
+
 func TestIdentityGenerateAndDecode(t *testing.T) {
 	id, err := GenerateIdentity("192.168.1.50")
 	if err != nil {
@@ -85,6 +152,12 @@ func TestIdentityGenerateAndDecode(t *testing.T) {
 	}
 	if decoded.Fingerprint != id.Fingerprint {
 		t.Fatalf("fingerprint drift: %s != %s", decoded.Fingerprint, id.Fingerprint)
+	}
+	// The stored record holds only cert and key, so the address has to come back
+	// from the certificate. Without it a restored share binds 0.0.0.0 (all
+	// interfaces) and the controller's address-change guard can never fire.
+	if decoded.Address != "192.168.1.50" {
+		t.Fatalf("decoded address = %q, want 192.168.1.50", decoded.Address)
 	}
 	if err := VerifyIdentityRecord(decoded, "192.168.1.50"); err != nil {
 		t.Fatalf("VerifyIdentityRecord: %v", err)

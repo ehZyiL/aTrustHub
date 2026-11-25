@@ -141,7 +141,11 @@ func Diagnose(ctx context.Context, code ShareCode, opts DiagnoseOptions) Report 
 		report.Conclusion = "分享主机返回的资源快照无法校验"
 		return report
 	}
-	add(Step{Stage: StageResources, OK: true, Detail: fmt.Sprintf("已同步 %d 条资源规则（代次 %d）", state.Resources.EntryCount(), state.Epoch)})
+	// Say whether DNS comes with the share. A snapshot without a DNS server is
+	// not a failure, but a colleague who then cannot resolve an intranet name has
+	// no way to tell "no DNS offered" from "DNS broken" unless this line says it.
+	add(Step{Stage: StageResources, OK: true, Detail: fmt.Sprintf("已同步 %d 条资源规则（代次 %d）%s",
+		state.Resources.EntryCount(), state.Epoch, dnsNote(state.Resources))})
 
 	if strings.TrimSpace(opts.Target) != "" {
 		dialCtx, dialCancel := context.WithTimeout(ctx, timeout)

@@ -713,3 +713,29 @@ func TestClientTransportIsDirectAndPinned(t *testing.T) {
 		t.Fatalf("MinVersion = %x", transport.TLSClientConfig.MinVersion)
 	}
 }
+
+// A conditional refresh must actually be conditional. The server wraps the
+// revision in quotes (RFC 7232) while callers hold the bare revision, so the two
+// sides disagreed and every "refresh" downloaded the whole snapshot again.
+func TestResourcesConditionalRefreshReturnsNotModified(t *testing.T) {
+	fx := startShareFixture(t, "share-token-123456")
+	c := fx.client(t)
+	ctx := context.Background()
+	state, token, err := c.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, notModified, err := c.Resources(ctx, token, state.Revision); err != nil || !notModified {
+		t.Fatalf("裸 revision 的条件刷新应当返回未变化：err=%v notModified=%v", err, notModified)
+	}
+	if _, notModified, err := c.Resources(ctx, token, `"`+state.Revision+`"`); err != nil || !notModified {
+		t.Fatalf("带引号的 ETag 也应当返回未变化：err=%v notModified=%v", err, notModified)
+	}
+	resp, notModified, err := c.Resources(ctx, token, "")
+	if err != nil || notModified || resp == nil {
+		t.Fatalf("无条件拉取应当返回快照：err=%v notModified=%v", err, notModified)
+	}
+	if _, notModified, err := c.Resources(ctx, token, "deadbeef"); err != nil || notModified {
+		t.Fatalf("过期 ETag 不应被当作未变化：err=%v notModified=%v", err, notModified)
+	}
+}

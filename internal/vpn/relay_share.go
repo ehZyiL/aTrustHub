@@ -220,7 +220,8 @@ func (s *RelayShareSource) DialVPN(ctx context.Context, revision, target string)
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, relay.NewError(relay.CodeDialTimeout, "分享主机连接目标超时")
 		}
-		return nil, relay.NewError(relay.CodeTargetUnreachable, "分享主机无法连接目标：%v", err)
+		return nil, relay.NewError(relay.CodeTargetUnreachable, "分享主机无法连接目标 %s（%s）",
+			decision.Target, dialFailureReason(err))
 	}
 	// Re-check after the dial: revocation or a source change must not let a
 	// just-established connection slip through.
@@ -234,6 +235,30 @@ func (s *RelayShareSource) DialVPN(ctx context.Context, revision, target string)
 		return nil, relay.NewError(relay.CodeShareClosed, "分享已撤销")
 	}
 	return conn, nil
+}
+
+// dialFailureReason turns the worker's transport error into one short reason the
+// colleague can act on. The raw text is a socks error that names the host's own
+// loopback entry (127.0.0.1:<port>) and prefixes everything with a generic
+// "unknown error"; neither helps the client and both describe the host's
+// internals, so only the classified reason travels.
+func dialFailureReason(err error) string {
+	if err == nil {
+		return "目标不可达"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "connection refused"):
+		return "连接被拒绝，目标主机上没有服务监听该端口"
+	case strings.Contains(msg, "unreachable"), strings.Contains(msg, "no route to host"):
+		return "目标不可达，主机不在线或没有可用路由"
+	case strings.Contains(msg, "timeout"), strings.Contains(msg, "deadline exceeded"):
+		return "连接超时"
+	case strings.Contains(msg, "reset by peer"):
+		return "连接被目标重置"
+	default:
+		return "目标不可达"
+	}
 }
 
 // ExchangeDNS resolves inside the bound session for the exact revision. A late

@@ -603,3 +603,31 @@ func TestLateDNSAnswerAfterRevocationIsRefused(t *testing.T) {
 		t.Fatal("the late DNS answer was never rejected")
 	}
 }
+
+// The reason a colleague sees must not carry the host's internals: the worker's
+// socks error names 127.0.0.1:<port> and prefixes everything with "unknown
+// error", which says nothing about what to do next. These are the exact strings
+// seen in the field.
+func TestDialFailureReasonClassifiesSocksErrors(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want string
+	}{
+		{"socks connect tcp 127.0.0.1:51710->192.168.61.38:8443: unknown error connection refused", "连接被拒绝，目标主机上没有服务监听该端口"},
+		{"socks connect tcp 127.0.0.1:51710->192.168.21.21:443: unknown error host unreachable", "目标不可达，主机不在线或没有可用路由"},
+		{"socks connect tcp 127.0.0.1:51710->10.0.0.9:443: unknown error i/o timeout", "连接超时"},
+		{"socks connect tcp 127.0.0.1:51710->10.0.0.9:443: unknown error connection reset by peer", "连接被目标重置"},
+		{"something else entirely", "目标不可达"},
+	} {
+		got := dialFailureReason(errors.New(tc.raw))
+		if got != tc.want {
+			t.Fatalf("dialFailureReason(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+		if strings.Contains(got, "127.0.0.1") || strings.Contains(got, "unknown error") {
+			t.Fatalf("客户端可见的原因泄露了宿主内部信息：%q", got)
+		}
+	}
+	if got := dialFailureReason(nil); got != "目标不可达" {
+		t.Fatalf("nil error = %q", got)
+	}
+}

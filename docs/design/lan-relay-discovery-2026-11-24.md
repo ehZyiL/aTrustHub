@@ -384,3 +384,25 @@ R5-1 的判定规则是"抑制属于某一次决定，不属于之后的所有�
 修复后 Windows 上应看到一次「正在发布」，而不是每 2 秒一条失败。**仍未实机验证**：
 Windows 默认防火墙是否允许本程序收到入站 UDP 5353（发布方向是出站，不受影响）；
 若同事端收不到公告，需要按 §9 的记录改用 `windns` 的 DNS-SD API。
+
+## 18. 第九轮：`登录失败：资源域名不能是 IP 地址`（同事连不上分享）
+
+现场日志（B 端）：
+
+```text
+[河投采购] 正在登录 192.168.201.135:65509 …
+[河投采购] 登录失败：资源域名不能是 IP 地址
+```
+
+这不是发现失败，而是**同事连不上已开启的分享**：B 连的是 A 的分享地址，错误由 **A 的服务端**
+在发布资源快照时抛出（`server.handleSessions` 调用 `snap.Validate()`，失败即回
+`invalid_request`，客户端只能看到这一句）。
+
+| 编号 | 轴 | 问题 | 根因 | 修复 |
+| --- | --- | --- | --- | --- |
+| R7-1 [P1] | 功能 | 只要宿主 VPN 的资源列表里存在 IP 字面量形式的"域名"，**该分享对所有同事都不可用**，而宿主自己看起来一切正常（Running） | `relayResources` 把会话快照的 `DomainRules`/`InternalDomains` 原样复制；`validateDomain` 拒绝 IP（正确），于是整份快照被拒。aTrust/EasyConnect 的真实配置里确实会出现这种条目 | 发布前调用新的 `ResourceSnapshot.DropUnusableDomains()`：丢掉不能当名称使用的条目，其余保留。丢弃只会**收窄**代理范围（地址本身若重要属于 IP 规则），不会放开任何东西；客户端的严格校验保持不变 |
+| R7-2 [P2] | 标准 | 宿主端对"快照发不出去"**完全没有记录**，只有同事端能看到一行错误，分享者无从得知 | `Server.snapshot()` 直接返回错误 | 服务端按原因记录一次 `分享资源无法发布：…`，恢复时记录 `分享资源已恢复，可以接受同事加入` |
+
+回归：`TestDropUnusableDomainsKeepsTheValidOnes`（严格校验仍拒绝未清理的快照，清理后通过且合法域名还在）、
+`TestSharePublishesDespiteIPLikeDomainRules`（端到端：带 IP 域名的会话发布后客户端 `Open` 成功）、
+`TestServerReportsAnUnservableSnapshotOnce`（撤掉记录：0 行；保留：1 行，恢复再 1 行）。

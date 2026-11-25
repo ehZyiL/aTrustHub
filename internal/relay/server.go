@@ -58,8 +58,12 @@ type Server struct {
 	tokenSHA string
 
 	snapMu sync.Mutex
-	snap   SourceSnapshot
-	snapAt time.Time
+	// snapErrMu guards the last reported snapshot failure, so a share that
+	// cannot be served says so once instead of on every client attempt.
+	snapErrMu   sync.Mutex
+	lastSnapErr string
+	snap        SourceSnapshot
+	snapAt      time.Time
 
 	mu      sync.Mutex
 	stopped bool
@@ -614,8 +618,13 @@ func (s *Server) snapshot(ctx context.Context) (SourceSnapshot, error) {
 		return SourceSnapshot{}, err
 	}
 	if err := next.Validate(); err != nil {
+		// The host is the only place this is diagnosable: the client just gets
+		// "invalid_request". Log it once per distinct reason so the sharer can
+		// see why colleagues cannot join.
+		s.logSnapshotFailure(err)
 		return SourceSnapshot{}, err
 	}
+	s.logSnapshotRecovered()
 	s.commitLocked(next)
 	return s.snap, nil
 }
@@ -864,4 +873,30 @@ func randomToken() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b[:]), nil
+}
+
+// logSnapshotFailure reports why a snapshot cannot be published to colleagues.
+// The client only ever sees "invalid_request", so without this line the host has
+// no way to learn that nobody can join.
+func (s *Server) logSnapshotFailure(err error) {
+	s.snapErrMu.Lock()
+	repeated := s.lastSnapErr == err.Error()
+	s.lastSnapErr = err.Error()
+	s.snapErrMu.Unlock()
+	if repeated {
+		return
+	}
+	s.logf("分享资源无法发布：%v", err)
+}
+
+// logSnapshotRecovered closes the loop once a previously failing snapshot is
+// publishable again.
+func (s *Server) logSnapshotRecovered() {
+	s.snapErrMu.Lock()
+	had := s.lastSnapErr != ""
+	s.lastSnapErr = ""
+	s.snapErrMu.Unlock()
+	if had {
+		s.logf("分享资源已恢复，可以接受同事加入")
+	}
 }

@@ -316,6 +316,46 @@ func validatePorts(min, max int) error {
 
 func validProtocol(p string) bool { return p == "tcp" || p == "udp" || p == "all" }
 
+// DomainUsable reports whether a name may travel as a domain rule. Real VPN
+// configurations sometimes list an address under "domains"; those entries are
+// meaningless as names and are dropped at the boundary instead of failing a
+// whole share.
+func DomainUsable(name string) bool { return validateDomain(name) == nil }
+
+// DropUnusableDomains removes domain rules and internal-domain entries that
+// cannot be expressed as names. It returns how many were dropped so the caller
+// can log once.
+//
+// Dropping a name only ever narrows what is proxied (the address itself, if it
+// matters, belongs in an IP rule), so this is safe on both the publishing and
+// the receiving side. Everything else in a snapshot - ranges, ports, size -
+// stays strict.
+func (s *ResourceSnapshot) DropUnusableDomains() int {
+	if s == nil {
+		return 0
+	}
+	dropped := 0
+	kept := s.DomainRules[:0]
+	for _, r := range s.DomainRules {
+		if !DomainUsable(r.Domain) {
+			dropped++
+			continue
+		}
+		kept = append(kept, r)
+	}
+	s.DomainRules = kept
+	domains := s.InternalDomains[:0]
+	for _, d := range s.InternalDomains {
+		if !DomainUsable(d) {
+			dropped++
+			continue
+		}
+		domains = append(domains, d)
+	}
+	s.InternalDomains = domains
+	return dropped
+}
+
 // validateDomain accepts a bare DNS suffix, including the "*." wildcard form the
 // VPN resolver uses. IPs are not domain rules, and a rule must not smuggle a
 // port or a path.

@@ -28,6 +28,11 @@ func relayResources(in *workeripc.ResourceSnapshot) *relay.ResourceSnapshot {
 	for _, r := range in.StaticDNS {
 		out.StaticDNS = append(out.StaticDNS, relay.DNSRecord{Name: r.Name, Addresses: append([]string(nil), r.Addresses...)})
 	}
+	// A session may list an address where a domain is expected. Such an entry
+	// cannot travel as a name, and sharing it verbatim would make every client
+	// reject the whole snapshot, so it is dropped here - once, on the host -
+	// instead of failing the login of every colleague.
+	out.DropUnusableDomains()
 	out.Normalize()
 	return out
 }

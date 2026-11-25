@@ -148,3 +148,71 @@ func TestRelaySessionRetriesOnceAfterAResourceChange(t *testing.T) {
 	}
 	_ = conn.Close()
 }
+
+// Windows report: a share whose session lists an address as a domain made every
+// colleague's login fail with "资源域名不能是 IP 地址". The host now drops such
+// entries when it publishes, and a client also tolerates one from an older host.
+func TestSharePublishesDespiteIPLikeDomainRules(t *testing.T) {
+	poisoned := corpResources()
+	poisoned.DomainRules = append(poisoned.DomainRules,
+		workeripc.DomainRule{Domain: "203.0.113.9", PortMin: 443, PortMax: 443, Protocol: "tcp"},
+		workeripc.DomainRule{Domain: "10.0.0.0/8", PortMin: 443, PortMax: 443, Protocol: "tcp"},
+	)
+	// The host's own conversion must strip them before anything is published.
+	published := relayResources(poisoned)
+	for _, r := range published.DomainRules {
+		if r.Domain == "203.0.113.9" || r.Domain == "10.0.0.0/8" {
+			t.Fatalf("不可用的域名被发布出去了：%+v", r)
+		}
+	}
+	if err := published.Validate(); err != nil {
+		t.Fatalf("发布侧清理后仍不合法：%v", err)
+	}
+
+	aSess := &echoStrictSession{fakeSession: newFakeSession("a1"), allow: "10.5."}
+	aSess.info.Resources = poisoned
+	aMgr := newTestManager(t, func(context.Context, model.AccessPoint, Credentials) (Session, error) {
+		return aSess, nil
+	}, testConfig(model.AccessPoint{ID: "a1", Name: "公司 VPN", Protocol: model.ProtocolATrust, Server: "vpn.example.com", Port: 443, Username: "u", InPool: true}))
+	aMgr.Connect("a1")
+	waitFor(t, "A online", func() bool { online, _, _ := aMgr.Counts(); return online == 1 })
+	source, err := aMgr.AcquireRelayShareSource("a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := relay.GenerateIdentity("127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shareID, token := randomB64(16), randomB64(32)
+	server, err := relay.StartServer(relay.ServerOptions{
+		Identity: identity, Source: source, Token: token,
+		ShareID: shareID, ServerInstanceID: "a-instance", Port: 0, Lease: 15 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close(context.Background())
+	defer source.Close()
+
+	code := relay.ShareCode{Version: 1, Host: "127.0.0.1", Port: server.Port(), ShareID: shareID,
+		Token: token, Fingerprint: identity.Fingerprint, Name: "公司 VPN"}
+	client, err := relay.NewClient(relay.ClientOptions{Code: code})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	// The login used to fail here with "资源域名不能是 IP 地址".
+	state, _, err := client.Open(context.Background())
+	if err != nil {
+		t.Fatalf("登录失败：%v", err)
+	}
+	for _, r := range state.Resources.DomainRules {
+		if r.Domain == "203.0.113.9" || r.Domain == "10.0.0.0/8" {
+			t.Fatalf("客户端收到了不可用的域名：%+v", r)
+		}
+	}
+	if len(state.Resources.DomainRules) == 0 {
+		t.Fatal("清理把合法域名也删掉了")
+	}
+}

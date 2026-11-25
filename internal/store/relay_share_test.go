@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -137,11 +138,17 @@ func TestRelayKnownCacheRoundTripAndCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("cache permissions = %o, want 0600", info.Mode().Perm())
-	}
-	if dir, err := os.Stat(filepath.Dir(st.RelayKnownPath("r1"))); err != nil || dir.Mode().Perm() != 0o700 {
-		t.Fatalf("cache directory permissions wrong: %v %v", dir, err)
+	// Windows has no POSIX mode bits: a file created with 0600 reports 0666 and a
+	// directory reports 0777, so the assertion below only means something on the
+	// platforms that enforce them. The round trip above already proves the cache
+	// is written and read on every platform.
+	if runtime.GOOS != "windows" {
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("cache permissions = %o, want 0600", info.Mode().Perm())
+		}
+		if dir, err := os.Stat(filepath.Dir(st.RelayKnownPath("r1"))); err != nil || dir.Mode().Perm() != 0o700 {
+			t.Fatalf("cache directory permissions wrong: %v %v", dir, err)
+		}
 	}
 
 	// A broken cache must be reported, never silently ignored.

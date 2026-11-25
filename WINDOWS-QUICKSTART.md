@@ -128,3 +128,25 @@ flowchart TD
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\test-capture.ps1
 ```
 该脚本在纯内存与本地回环环境下验证所有 IPC 通信与网络栈逻辑，并将结果输出到 `capture-selftest.txt` 供排查分析。
+
+### Q5：「局域网分享」开着，同事还是连不上？
+**解答**：先确认是网络层还是分享层。按顺序对：
+
+1. **网络类别必须是「专用」**。分享的防火墙规则限定 `Profile=Private`，而 Windows 把新 Wi-Fi
+   默认归为「公用」—— 此时规则存在但**不生效**，同事的 SYN 被丢，表现为「连接分享主机超时」
+   而不是「拒绝」。查询与修正（后者需管理员）：
+   ```powershell
+   Get-NetConnectionProfile | Select-Object Name,InterfaceAlias,NetworkCategory
+   Set-NetConnectionProfile -InterfaceAlias "WLAN" -NetworkCategory Private
+   ```
+   改完现有规则立即生效，不必重建分享。
+2. **确认监听与规则都对应同一个端口**（口令里的端口就是监听端口；重新开启共享会换端口，
+   旧口令随即失效）：
+   ```powershell
+   Get-NetTCPConnection -LocalPort <口令里的端口> -State Listen
+   Get-NetFirewallRule -DisplayName "ConnectHub-*" | Get-NetFirewallPortFilter
+   ```
+3. **客户端报错的含义**：`分享主机拒绝了连接：共享可能已关闭，或宿主已退出` 是连接层被拒
+   （监听不在了）；`连接分享主机超时` 基本就是被拦（防火墙/网络类别/AP 隔离）。
+4. 需要自动发现（局域网内直接看到分享）时，双方还必须允许 **5353/UDP 双向**（入站），
+   且在同一网段；这个入站放行程序不会自动改。

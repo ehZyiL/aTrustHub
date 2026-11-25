@@ -32,7 +32,7 @@
 | `desktop-status`、`linux-*` | 产物名 `easyconnect-hub-linux-amd64-*` | 现为 `connect-hub-linux-amd64-*`（本地 `build/` 里只有 `connect-hub-windows-amd64*`） |
 | `greenfield-architecture` §2.4 缺陷 2 | "发布包缺 worker（CI 只编 multitun）" | **已修**：两个打包脚本都编 worker，并做空配置 IPC 自检 |
 | `greenfield-architecture` §7 | "三处授权判定并存" | **已收敛**：`internal/routing` 是唯一决策点；worker 侧 `ErrACLDenied` 降级为兜底 |
-| `greenfield-architecture` §2.6 | 根包 51 个非测试 `.go`、28 个平台后缀、326 KB | 现在 83 个文件 / 14.2k 行 / 471 KB，其中 32 个平台后缀（结论"壳层过重"仍成立，数字需更新） |
+| `greenfield-architecture` §2.6 | 根包 51 个非测试 `.go`、28 个平台后缀、326 KB | 现在 94 个文件 / ≈18.4k 行，其中 36 个平台后缀（结论"壳层过重"仍成立，数字需更新） |
 | `greenfield-architecture` §10 / `implementation-plan` §9 | `tests/e2e` 只有 `go.mod` | 目录已不存在 |
 | `gateway-validation` | "aTrustHub GUI 在 Fedora 构建失败，缺 redirectStderr / systemProxyEnabled / helperSuffix 等符号" | 已补齐（`stderr_linux.go`、`systemproxy_linux.go`、`helperpath_linux.go` 均在） |
 | `linux-capture-helper` 等 | "产品辅助服务、受认证的 GUI 控制、提权安装、启动屏障尚未实现" | 已实现（`internal/capture/service_linux.go`、`setup_linux.go`、`launch_linux.go`） |

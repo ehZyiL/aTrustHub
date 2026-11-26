@@ -31,29 +31,15 @@ type registrationResult struct {
 // on it.
 var abandonBudget = 2 * time.Second
 
-// awaitAbandoned collects a registration that is no longer wanted. The channel
-// is buffered, so a backend that answers after the budget is drained in the
-// background and its registration is withdrawn instead of leaking a socket.
-func awaitAbandoned(resCh <-chan registrationResult) registrationResult {
+// awaitAbandoned collects a cancelled attempt within budget. If the backend
+// returns later, the producer retains ownership and closes the registration.
+func awaitAbandoned(resCh <-chan registrationResult, abandoned chan struct{}) registrationResult {
 	select {
 	case res := <-resCh:
 		return res
 	case <-time.After(abandonBudget):
-		go drainAbandoned(resCh)
+		close(abandoned)
 		return registrationResult{err: errors.New("发现后端未在预算内响应")}
-	}
-}
-
-// drainAbandoned withdraws a registration that arrived after the worker gave up
-// on it. It is bounded as well: a backend that never answers at all must not
-// leave one goroutine behind per retry.
-func drainAbandoned(resCh <-chan registrationResult) {
-	select {
-	case res := <-resCh:
-		if res.reg != nil {
-			_ = res.reg.Close()
-		}
-	case <-time.After(abandonBudget):
 	}
 }
 
@@ -106,7 +92,8 @@ type PublisherOptions struct {
 	OnChange func(Status)
 }
 
-// NewPublisher starts the coordinating worker.
+// NewPublisher prepares a publisher. Set starts its worker, Clear lets it exit
+// after withdrawal, and Close prevents all future starts.
 func NewPublisher(opts PublisherOptions) *Publisher {
 	if opts.Logf == nil {
 		opts.Logf = func(string, ...any) {}
@@ -128,9 +115,7 @@ func NewPublisher(opts PublisherOptions) *Publisher {
 		ctx:      ctx,
 		cancel:   cancel,
 		kick:     make(chan struct{}, 1),
-		done:     make(chan struct{}),
 	}
-	go p.loop()
 	return p
 }
 
@@ -150,8 +135,12 @@ func (p *Publisher) Set(a Announcement) {
 	}
 	p.want = &a
 	p.wantSeq++
-	p.mu.Unlock()
+	if p.done == nil {
+		p.done = make(chan struct{})
+		go p.loop(p.done)
+	}
 	p.wake()
+	p.mu.Unlock()
 }
 
 // Clear withdraws the announcement. Business sharing is untouched.
@@ -178,22 +167,23 @@ func (p *Publisher) Status() Status {
 // Close withdraws the announcement and waits for the worker within budget.
 func (p *Publisher) Close(ctx context.Context) error {
 	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
-		return nil
-	}
 	p.closed = true
 	p.want = nil
 	p.wantSeq++
+	done := p.done
 	p.mu.Unlock()
+	if done == nil {
+		p.cancel()
+		return nil
+	}
 	p.wake()
 
 	select {
-	case <-p.done:
+	case <-done:
 	case <-ctx.Done():
 		p.cancel()
 		select {
-		case <-p.done:
+		case <-done:
 		case <-time.After(200 * time.Millisecond):
 		}
 		return ctx.Err()
@@ -220,8 +210,8 @@ func (p *Publisher) setStatus(s Status) {
 	}
 }
 
-func (p *Publisher) loop() {
-	defer close(p.done)
+func (p *Publisher) loop(done chan struct{}) {
+	defer close(done)
 	// The worker owns this context so a Close can cut a slow registration.
 	workCtx, workCancel := context.WithCancel(p.ctx)
 	defer workCancel()
@@ -285,6 +275,14 @@ func (p *Publisher) loop() {
 			failures = 0
 			p.dropRegistration()
 			p.setStatus(Status{State: StatusIdle})
+			p.mu.Lock()
+			if p.want == nil {
+				p.done = nil
+				p.lastFailure = ""
+				p.mu.Unlock()
+				return
+			}
+			p.mu.Unlock()
 			continue
 		}
 		if current != nil && p.publishedSame(*want) {
@@ -299,11 +297,18 @@ func (p *Publisher) loop() {
 		p.setStatus(Status{State: StatusPending, Generation: want.Generation})
 
 		ann := *want
-		resCh := make(chan registrationResult, 1)
+		resCh := make(chan registrationResult)
+		abandoned := make(chan struct{})
 		attemptCtx, attemptCancel := context.WithCancel(workCtx)
 		go func() {
 			reg, err := p.backend.Advertise(attemptCtx, ann)
-			resCh <- registrationResult{reg: reg, err: err}
+			select {
+			case resCh <- registrationResult{reg: reg, err: err}:
+			case <-abandoned:
+				if reg != nil {
+					_ = reg.Close()
+				}
+			}
 		}()
 
 		var res registrationResult
@@ -318,12 +323,12 @@ func (p *Publisher) loop() {
 				// attempt instead of publishing a stale generation.
 				superseded = true
 				attemptCancel()
-				res = awaitAbandoned(resCh)
+				res = awaitAbandoned(resCh, abandoned)
 				break wait
 			case <-workCtx.Done():
 				superseded = true
 				attemptCancel()
-				res = awaitAbandoned(resCh)
+				res = awaitAbandoned(resCh, abandoned)
 				break wait
 			}
 		}
@@ -422,7 +427,7 @@ func (p *Publisher) workPending() bool {
 		return true
 	}
 	if p.want == nil {
-		return p.reg != nil || p.status.State != StatusIdle
+		return true // withdraw and retire, even if Clear beat the first attempt
 	}
 	if p.retryPending && p.retrySeq == p.wantSeq {
 		// The backoff is the current plan; the kick that would cancel it has

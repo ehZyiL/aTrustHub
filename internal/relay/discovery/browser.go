@@ -29,17 +29,20 @@ type Browser struct {
 	now     func() time.Time
 	emit    func(Snapshot)
 
-	mu      sync.Mutex
-	gen     uint64
-	session Session
-	cancel  context.CancelFunc
-	cache   *cache
-	ifaces  []Interface
-	started bool
-	err     string
-	closed  bool
+	mu       sync.Mutex
+	gen      uint64
+	session  Session
+	cancel   context.CancelFunc
+	cache    *cache
+	ifaces   []Interface
+	started  bool
+	err      string
+	closed   bool
+	shutDown bool
 
 	stopTicker chan struct{}
+	tickerDone chan struct{}
+	startDone  chan struct{}
 }
 
 // NewBrowser creates a browser. Nothing is browsed until Start is called.
@@ -63,6 +66,10 @@ func NewBrowser(opts BrowserOptions) *Browser {
 // previous generation is closed first and its cache discarded.
 func (b *Browser) Start(ifaces []Interface) error {
 	b.mu.Lock()
+	if b.shutDown {
+		b.mu.Unlock()
+		return errors.New("发现浏览器已退出")
+	}
 	// Close ends a browsing session, not the browser: reopening the page must
 	// work again (the app closes it whenever the dialog closes).
 	b.closed = false
@@ -72,36 +79,50 @@ func (b *Browser) Start(ifaces []Interface) error {
 	// the browser: it must stop here, on the success path and on both failure
 	// paths, or it would keep expiring a cache that no longer belongs to it.
 	oldStop := b.stopTicker
+	oldDone := b.tickerDone
+	oldStart := b.startDone
 	b.gen++
 	gen := b.gen
+	ctx, cancel := context.WithCancel(context.Background())
+	startDone := make(chan struct{})
 	b.session = nil
-	b.cancel = nil
+	b.cancel = cancel
+	b.startDone = startDone
 	b.stopTicker = nil
+	b.tickerDone = nil
 	b.err = ""
 	b.cache.reset()
 	b.ifaces = append([]Interface(nil), ifaces...)
 	b.started = true
 	b.mu.Unlock()
+	defer close(startDone)
 
 	if oldCancel != nil {
 		oldCancel()
 	}
 	if oldStop != nil {
 		close(oldStop)
+		<-oldDone
 	}
 	if old != nil {
 		_ = old.Close()
 	}
-
-	if len(ifaces) == 0 {
-		b.mu.Lock()
-		b.err = "没有可用的局域网网卡"
-		b.mu.Unlock()
-		b.publish()
-		return errors.New("没有可用的局域网网卡")
+	if err := waitBrowseStart(oldStart); err != nil {
+		cancel()
+		b.startFailed(gen, err)
+		return err
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	if len(ifaces) == 0 {
+		cancel()
+		err := errors.New("没有可用的局域网网卡")
+		b.startFailed(gen, err)
+		return err
+	}
+
 	session, err := b.backend.Browse(ctx, BrowseOptions{
 		Interfaces: ifaces,
 		Logf:       b.logf,
@@ -111,11 +132,10 @@ func (b *Browser) Start(ifaces []Interface) error {
 	})
 	if err != nil {
 		cancel()
-		b.mu.Lock()
-		b.err = err.Error()
-		b.started = false
-		b.mu.Unlock()
-		b.publish()
+		if session != nil {
+			_ = session.Close()
+		}
+		b.startFailed(gen, err)
 		return err
 	}
 
@@ -138,6 +158,33 @@ func (b *Browser) Start(ifaces []Interface) error {
 	return nil
 }
 
+func (b *Browser) startFailed(gen uint64, err error) {
+	b.mu.Lock()
+	if !b.closed && b.gen == gen {
+		b.err = err.Error()
+		b.started = false
+	}
+	b.mu.Unlock()
+	b.publish()
+}
+
+// Backends normally release Browse as soon as its context is cancelled. A
+// stuck platform call must not hold the UI forever; its returning Start still
+// owns and closes any late session.
+func waitBrowseStart(done <-chan struct{}) error {
+	if done == nil {
+		return nil
+	}
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-timer.C:
+		return errors.New("发现浏览启动未在预算内退出")
+	}
+}
+
 // Refresh re-queries the current generation without dropping the cache.
 func (b *Browser) Refresh() error {
 	b.mu.Lock()
@@ -153,9 +200,8 @@ func (b *Browser) Refresh() error {
 // Snapshot returns the current list.
 func (b *Browser) Snapshot() Snapshot {
 	b.mu.Lock()
-	gen := b.gen
-	b.mu.Unlock()
-	return Snapshot{Generation: gen, Candidates: b.cache.snapshot()}
+	defer b.mu.Unlock()
+	return Snapshot{Generation: b.gen, Candidates: b.cache.snapshot()}
 }
 
 // Err reports why browsing is not running, if it is not.
@@ -169,17 +215,25 @@ func (b *Browser) Err() string {
 func (b *Browser) Close() error {
 	b.mu.Lock()
 	if b.closed {
+		done := b.startDone
 		b.mu.Unlock()
-		return nil
+		return waitBrowseStart(done)
 	}
 	b.closed = true
+	b.gen++
 	b.started = false
+	b.err = ""
 	session := b.session
 	cancel := b.cancel
 	b.session = nil
 	b.cancel = nil
 	stop := b.stopTicker
+	done := b.tickerDone
+	starting := b.startDone
 	b.stopTicker = nil
+	b.tickerDone = nil
+	b.ifaces = nil
+	b.cache.reset()
 	b.mu.Unlock()
 
 	if cancel != nil {
@@ -187,12 +241,22 @@ func (b *Browser) Close() error {
 	}
 	if stop != nil {
 		close(stop)
+		<-done
 	}
 	var err error
 	if session != nil {
 		err = session.Close()
 	}
-	return err
+	return errors.Join(err, waitBrowseStart(starting))
+}
+
+// Shutdown is final, unlike closing a page. The check shares Start's mutex so
+// a page-open racing with application exit cannot recreate a browsing session.
+func (b *Browser) Shutdown() error {
+	b.mu.Lock()
+	b.shutDown = true
+	b.mu.Unlock()
+	return b.Close()
 }
 
 // apply folds records into the cache, refusing anything from an older
@@ -201,8 +265,8 @@ func (b *Browser) apply(gen uint64, records []Record) {
 	b.mu.Lock()
 	current, closed := b.gen, b.closed
 	ifaces := b.ifaces
-	b.mu.Unlock()
 	if gen != current || closed {
+		b.mu.Unlock()
 		return
 	}
 	byName := make(map[string]Interface, len(ifaces))
@@ -227,6 +291,7 @@ func (b *Browser) apply(gen uint64, records []Record) {
 			changed = true
 		}
 	}
+	b.mu.Unlock()
 	if changed {
 		b.publish()
 	}
@@ -241,18 +306,16 @@ func (b *Browser) startTickerLocked() {
 		return
 	}
 	stop := make(chan struct{})
-	if b.stopTicker != nil {
-		// A concurrent Start installed one for a generation that is already
-		// gone; closing it here keeps the only handle to it from leaking.
-		close(b.stopTicker)
-	}
+	done := make(chan struct{})
 	b.stopTicker = stop
-	go b.expireLoop(stop)
+	b.tickerDone = done
+	go b.expireLoop(stop, done, b.gen)
 }
 
 // expireLoop is the single expiry timer of one generation: not one timer per
 // candidate, and never a paint request of its own (publish is event-driven).
-func (b *Browser) expireLoop(stop <-chan struct{}) {
+func (b *Browser) expireLoop(stop <-chan struct{}, done chan struct{}, gen uint64) {
+	defer close(done)
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	for {
@@ -260,7 +323,14 @@ func (b *Browser) expireLoop(stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-t.C:
-			if events := b.cache.expire(); len(events) > 0 {
+			b.mu.Lock()
+			if b.closed || b.gen != gen {
+				b.mu.Unlock()
+				return
+			}
+			changed := len(b.cache.expire()) > 0
+			b.mu.Unlock()
+			if changed {
 				b.publish()
 			}
 		}
@@ -273,10 +343,11 @@ func (b *Browser) publish() {
 	}
 	b.mu.Lock()
 	gen, closed := b.gen, b.closed
+	snapshot := b.cache.snapshot()
 	b.mu.Unlock()
 	if closed {
 		// Nothing may reach the UI after the page closed.
 		return
 	}
-	b.emit(Snapshot{Generation: gen, Candidates: b.cache.snapshot()})
+	b.emit(Snapshot{Generation: gen, Candidates: snapshot})
 }

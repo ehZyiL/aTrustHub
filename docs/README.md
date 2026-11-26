@@ -63,8 +63,9 @@ docs/
 | [review/lan-relay-sharing-review-e888e47-2026-11-24.md](review/lan-relay-sharing-review-e888e47-2026-11-24.md) | 局域网分享合并前的 10 项审查发现（S1–S3、R1–R7）与复现方式 |
 | [review/lan-relay-sharing-remediation-e888e47-2026-11-24.md](review/lan-relay-sharing-remediation-e888e47-2026-11-24.md) | 上述 10 项的处理方案、约束与验收用例 |
 | [roadmap.md](roadmap.md) | 哪些"未完成"是代码可判定的、哪些只能等实机 |
-| [plans/component-boundaries-2026-11-26.md](plans/component-boundaries-2026-11-26.md) | 从分享分支推进结构重构的阶段、组件边界、资源预算和验收方式（待实施） |
+| [plans/component-boundaries-2026-11-26.md](plans/component-boundaries-2026-11-26.md) | 从分享分支推进结构重构的阶段、组件边界、资源预算和验收方式（P0/P1 已有实现，后续待实施） |
 | [plans/p0-baseline-2026-11-26.md](plans/p0-baseline-2026-11-26.md) | 统一构建入口、固定来源、首次内存对照、生命周期反馈与后续预算（阶段性证据） |
+| [plans/p1-lifecycle-2026-11-26.md](plans/p1-lifecycle-2026-11-26.md) | 按需启停、取消与任务退出、十轮回归、P1 内存复测及平台限制 |
 
 ## 平台能力矩阵（已核实）
 

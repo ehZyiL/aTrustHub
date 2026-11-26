@@ -136,12 +136,18 @@ type DiscoveryAnnouncement struct {
 // and shutdown. It never logs in a VPN, never edits the system proxy and never
 // changes the selected point behind the user's back.
 type Controller struct {
-	mu      sync.Mutex
-	persist Persistence
-	sink    Sink
-	nets    NetworkProvider
-	logf    func(string, ...any)
-	notify  func()
+	// Operations may drop mu while closing network resources. Serialize them so
+	// a new enable cannot inherit an identity that a concurrent disable revokes.
+	opMu         sync.Mutex
+	workMu       sync.Mutex // cancellation must not wait for an in-flight AcquireSource
+	workCancel   context.CancelFunc
+	stopRequests int
+	mu           sync.Mutex
+	persist      Persistence
+	sink         Sink
+	nets         NetworkProvider
+	logf         func(string, ...any)
+	notify       func()
 
 	settings Settings
 	state    State
@@ -164,13 +170,12 @@ type Controller struct {
 	// restoreSuppressed locks automatic restore for the rest of this run, used
 	// when the disable state could not be persisted.
 	restoreSuppressed bool
-	startedRun        bool
 	closed            bool
 
-	stopCh chan struct{}
-	wg     sync.WaitGroup
-	kickCh chan struct{}
-	subs   map[chan struct{}]struct{}
+	runCancel context.CancelFunc
+	runDone   chan struct{}
+	kickCh    chan struct{}
+	subs      map[chan struct{}]struct{}
 }
 
 // NewController builds a controller. It does not start anything: call Restore
@@ -186,15 +191,11 @@ func NewController(p Persistence, sink Sink, nets NetworkProvider, logf func(str
 		logf:    logf,
 		notify:  notify,
 		state:   StateOff,
-		stopCh:  make(chan struct{}),
-		kickCh:  make(chan struct{}, 1),
 	}
 	c.settings = p.ShareSettings()
 	if !c.settings.Enabled {
 		c.state = StateOff
 	}
-	c.wg.Add(1)
-	go c.loop()
 	return c
 }
 
@@ -326,8 +327,26 @@ func (c *Controller) publishLocked() {
 // Enable persists the user's intent and starts serving when possible. It is the
 // only path that may switch a share on.
 func (c *Controller) Enable(ctx context.Context, opts EnableOptions) error {
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
+	ctx, finish := c.beginWork(ctx)
+	defer finish()
+	var retired <-chan struct{}
+	defer func() {
+		if retired != nil {
+			<-retired
+		}
+	}()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	defer func() {
+		if !c.settings.Enabled {
+			retired = c.stopLoopLocked()
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if c.closed {
 		return errors.New("分享已退出")
 	}
@@ -382,28 +401,41 @@ func (c *Controller) Enable(ctx context.Context, opts EnableOptions) error {
 		c.publishLocked()
 		return errors.New(c.failure)
 	}
-	c.startedRun = true
-	return c.reconcileLocked(ctx, true)
+	err := c.reconcileLocked(ctx, true)
+	c.startLoopLocked()
+	return err
 }
 
 // Restore starts the share if the persisted intent says it was on. A VPN that is
 // not connected yet leaves it Waiting; nothing logs in automatically.
 func (c *Controller) Restore(ctx context.Context) error {
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
+	ctx, finish := c.beginWork(ctx)
+	defer finish()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.startedRun = true
+	if c.closed {
+		return errors.New("分享已退出")
+	}
 	if !c.settings.Enabled {
 		c.state = StateOff
 		c.publishLocked()
 		return nil
 	}
-	return c.reconcileLocked(ctx, false)
+	err := c.reconcileLocked(ctx, false)
+	c.startLoopLocked()
+	return err
 }
 
 // Disable switches sharing off for good: it stops serving, revokes the token and
 // persists Enabled=false. A failed persist still stops the network immediately
 // and is reported honestly instead of claiming a permanent close.
 func (c *Controller) Disable(ctx context.Context) error {
+	finishStop := c.beginStop()
+	defer finishStop()
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
 	c.mu.Lock()
 	c.opID++
 	c.restoreSuppressed = true
@@ -411,9 +443,13 @@ func (c *Controller) Disable(ctx context.Context) error {
 	c.state = StateStopping
 	c.publishLocked()
 	server, source := c.detachInstanceLocked()
+	done := c.stopLoopLocked()
 	c.mu.Unlock()
 
 	cleanupErr := closeInstance(ctx, server, source)
+	if done != nil {
+		<-done
+	}
 
 	c.mu.Lock()
 	shareID := c.settings.ShareID
@@ -440,9 +476,10 @@ func (c *Controller) Disable(ctx context.Context) error {
 		c.failCode = "cleanup"
 	}
 	c.publishLocked()
+	failure := c.failure
 	c.mu.Unlock()
 	if saveErr != nil {
-		return errors.New(c.failure)
+		return errors.New(failure)
 	}
 	return cleanupErr
 }
@@ -450,6 +487,10 @@ func (c *Controller) Disable(ctx context.Context) error {
 // CancelEnable rolls back a first enable that the user cancelled while it was
 // starting: no listener, no intent, no identity left behind.
 func (c *Controller) CancelEnable(ctx context.Context) error {
+	finishStop := c.beginStop()
+	defer finishStop()
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
 	c.mu.Lock()
 	if !c.settings.Enabled || c.state == StateRunning || c.state == StateWaiting || c.state == StateBlocked {
 		c.mu.Unlock()
@@ -459,9 +500,13 @@ func (c *Controller) CancelEnable(ctx context.Context) error {
 	c.restoreSuppressed = true
 	c.settings.Enabled = false
 	server, source := c.detachInstanceLocked()
+	done := c.stopLoopLocked()
 	c.mu.Unlock()
 
 	err := closeInstance(ctx, server, source)
+	if done != nil {
+		<-done
+	}
 
 	c.mu.Lock()
 	shareID := c.settings.ShareID
@@ -480,6 +525,10 @@ func (c *Controller) CancelEnable(ctx context.Context) error {
 // Suspend stops the running instance but keeps the enable intent, so the next
 // start (or restore) serves the same identity, address and port.
 func (c *Controller) Suspend(ctx context.Context) error {
+	finishStop := c.beginStop()
+	defer finishStop()
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
 	c.mu.Lock()
 	c.opID++
 	server, source := c.detachInstanceLocked()
@@ -497,6 +546,10 @@ func (c *Controller) Suspend(ctx context.Context) error {
 // Shutdown stops the running instance and the reconcile loop. It keeps Enabled
 // and the identity; only Disable clears them.
 func (c *Controller) Shutdown(ctx context.Context) error {
+	finishStop := c.beginStop()
+	defer finishStop()
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -505,6 +558,7 @@ func (c *Controller) Shutdown(ctx context.Context) error {
 	c.opID++
 	c.closed = true
 	server, source := c.detachInstanceLocked()
+	done := c.stopLoopLocked()
 	if c.settings.Enabled {
 		c.state = StateWaiting
 	} else {
@@ -514,14 +568,17 @@ func (c *Controller) Shutdown(ctx context.Context) error {
 	c.mu.Unlock()
 
 	err := closeInstance(ctx, server, source)
-	close(c.stopCh)
-	c.wg.Wait()
+	if done != nil {
+		<-done
+	}
 	return err
 }
 
 // Wake asks the reconcile loop to re-check now, for example after the VPN came
 // online or the network changed.
 func (c *Controller) Wake() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	select {
 	case c.kickCh <- struct{}{}:
 	default:
@@ -562,26 +619,85 @@ func (c *Controller) RetryPersistDisable() error {
 
 // ---- internals -----------------------------------------------------------
 
-func (c *Controller) loop() {
-	defer c.wg.Done()
+func (c *Controller) beginWork(parent context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	c.workMu.Lock()
+	c.workCancel = cancel
+	if c.stopRequests > 0 {
+		cancel()
+	}
+	c.workMu.Unlock()
+	return ctx, func() {
+		cancel()
+		c.workMu.Lock()
+		c.workCancel = nil
+		c.workMu.Unlock()
+	}
+}
+
+func (c *Controller) beginStop() func() {
+	c.workMu.Lock()
+	c.stopRequests++
+	if c.workCancel != nil {
+		c.workCancel()
+	}
+	c.workMu.Unlock()
+	return func() {
+		c.workMu.Lock()
+		c.stopRequests--
+		c.workMu.Unlock()
+	}
+}
+
+// startLoopLocked allocates the watcher only for an explicitly enabled share.
+func (c *Controller) startLoopLocked() {
+	if c.closed || !c.settings.Enabled || c.restoreSuppressed || c.runDone != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done, kick := make(chan struct{}), make(chan struct{}, 1)
+	c.runCancel, c.runDone, c.kickCh = cancel, done, kick
+	go c.loop(ctx, done, kick)
+}
+
+// stopLoopLocked detaches the worker; the operation waits outside mu. opMu
+// prevents another enable from starting until that wait has completed.
+func (c *Controller) stopLoopLocked() <-chan struct{} {
+	done := c.runDone
+	if c.runCancel != nil {
+		c.runCancel()
+	}
+	c.runCancel, c.runDone, c.kickCh = nil, nil, nil
+	return done
+}
+
+func (c *Controller) loop(ctx context.Context, done chan struct{}, kick <-chan struct{}) {
+	defer close(done)
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-c.stopCh:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
-		case <-c.kickCh:
+		case <-kick:
 		}
-		c.reconcileTick()
+		// A public operation already reconciles or stops the instance. Never
+		// wait behind its stop-and-join while holding the worker alive.
+		if c.opMu.TryLock() {
+			workCtx, finish := c.beginWork(ctx)
+			c.reconcileTick(workCtx)
+			finish()
+			c.opMu.Unlock()
+		}
 	}
 }
 
 // reconcileTick re-checks a share that should be running. A dead source is torn
 // down first so a late connection can never cross into the new generation.
-func (c *Controller) reconcileTick() {
+func (c *Controller) reconcileTick(ctx context.Context) {
 	c.mu.Lock()
-	if c.closed || !c.settings.Enabled || c.restoreSuppressed {
+	if ctx.Err() != nil || c.closed || !c.settings.Enabled || c.restoreSuppressed {
 		c.mu.Unlock()
 		return
 	}
@@ -612,7 +728,7 @@ func (c *Controller) reconcileTick() {
 	// sees Starting for an attempt that is not actually being made.
 	c.opID++
 	c.state = StateStarting
-	err := c.reconcileLocked(context.Background(), false)
+	err := c.reconcileLocked(ctx, false)
 	c.mu.Unlock()
 	if err != nil {
 		c.logf("[局域网分享] 恢复失败：%v", err)
@@ -628,6 +744,17 @@ func (c *Controller) reconcileLocked(ctx context.Context, first bool) error {
 	}
 	if c.state == StateRunning && c.server != nil {
 		return nil
+	}
+	cancelled := func() error {
+		if first {
+			c.rollbackFirstEnableLocked()
+			c.state = StateOff
+			c.publishLocked()
+		}
+		return ctx.Err()
+	}
+	if ctx.Err() != nil {
+		return cancelled()
 	}
 	s := c.settings
 	blocked := func(code, msg string) error {
@@ -664,6 +791,12 @@ func (c *Controller) reconcileLocked(ctx context.Context, first bool) error {
 		return blocked("address", fmt.Sprintf("局域网地址已变化（%s → %s），请关闭共享后重新开启并重新分发口令", c.identity.Address, address))
 	}
 	src, err := c.sink.AcquireSource(ctx, s.PointID)
+	if ctx.Err() != nil {
+		if src != nil {
+			_ = src.Close()
+		}
+		return cancelled()
+	}
 	if err != nil {
 		if errors.Is(err, ErrPointMissing) {
 			return blocked("point", "共享接入点已不存在")
@@ -700,6 +833,10 @@ func (c *Controller) reconcileLocked(ctx context.Context, first bool) error {
 		Logf:             c.logf,
 		Port:             port,
 	})
+	if ctx.Err() != nil {
+		_ = closeInstance(context.Background(), server, src)
+		return cancelled()
+	}
 	if err != nil {
 		_ = src.Close()
 		if first {
@@ -735,7 +872,7 @@ func (c *Controller) reconcileLocked(ctx context.Context, first bool) error {
 		c.state = StateOff
 		c.failCode, c.failure = "persist", "分享端口无法保存："+err.Error()
 		c.publishLocked()
-		go func() { _ = closeInstance(context.Background(), server2, source2) }()
+		_ = closeInstance(context.Background(), server2, source2)
 		return errors.New(c.failure)
 	}
 	c.logf("[局域网分享] 已在 %s:%d 开启，共享接入点「%s」", address, c.port, c.sink.PointName(s.PointID))

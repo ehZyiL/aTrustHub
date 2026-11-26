@@ -859,18 +859,16 @@ func TestAcceptanceFailedOffSaveOffersARetry(t *testing.T) {
 	}
 }
 
-// The feature must cost nothing for users who never open it: no repaint timer,
-// and only the two coordinating goroutines (publisher worker + state watcher).
+// Unused discovery has no workers or sockets. Opening the browser owns a
+// bounded search deadline; closing it releases that deadline and its session.
 func TestIdleDiscoveryIsFree(t *testing.T) {
 	a := testApp(t)
 	backend := newTestDiscoveryBackend()
 	a.discoveryBackend = backend
-	before := runtime.NumGoroutine()
+	before := len(optionalWorkerStacks())
 	a.setupLANDiscovery()
-	after := runtime.NumGoroutine()
-	if added := after - before; added > 2 {
-		t.Fatalf("空闲的发现功能新增了 %d 个 goroutine", added)
-	}
+	t.Cleanup(a.shutdownLANDiscovery)
+	waitOptionalWorkers(t, before)
 	// Idle discovery must not hold a single file descriptor: no socket, no
 	// multicast membership, nothing for a user who never enables it.
 	if runtime.GOOS == "linux" {
@@ -904,13 +902,7 @@ func TestIdleDiscoveryIsFree(t *testing.T) {
 		t.Fatal("搜索窗口结束后不应继续请求帧")
 	}
 	a.shutdownLANDiscovery()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && runtime.NumGoroutine() > before+2 {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if got := runtime.NumGoroutine(); got > before+2 {
-		t.Fatalf("退出后发现仍有 %d 个多余 goroutine（基线 %d）", got-before, before)
-	}
+	waitOptionalWorkers(t, before)
 }
 
 // openFDs counts the process's open descriptors, so a test can prove the idle

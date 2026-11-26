@@ -55,6 +55,12 @@ if [[ "$helper_protocol" != 7 ]]; then
   printf 'Windows capture helper protocol mismatch: expected 7, got %s\n' "$helper_protocol" >&2
   exit 1
 fi
+cleanup_protocol=$("$bundle/core/connect-hub-cleanup.exe" --protocol-version)
+cleanup_capability=$("$bundle/core/connect-hub-cleanup.exe" --task-capability)
+if [[ "$cleanup_protocol" != 2 || "$cleanup_capability" != cleanup-task-v1 ]]; then
+  printf 'Cleanup component protocol mismatch: %s / %s\n' "$cleanup_protocol" "$cleanup_capability" >&2
+  exit 1
+fi
 if [[ "$bundle_profile" == test ]]; then
   env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" test -mod=readonly -trimpath -c -o "$bundle/windows-capture-tests.exe" ./internal/wincapture
   "$go_tool" list -m all > "$bundle/desktop-modules.txt"
@@ -88,15 +94,17 @@ Bundle profile: $bundle_profile
 Architecture: $target_arch
 Worker IPC protocol: 7
 Windows capture helper protocol: $helper_protocol
+Cleanup CLI protocol: $cleanup_protocol
+Cleanup task capability: $cleanup_capability
 Source branch: $repo_branch
 Source commit: $repo_commit$repo_dirty
 Worker source commit: $worker_commit
 App build: ${app_build:-unknown}
 Scope: IPv4 TCP and DNS. System IPv4 UDP for eligible L3 sessions is experimental; IPv6 is unsupported.
 Layout: connect-hub.exe at the bundle root; connect-hub-worker.exe and
-connect-hub-capture.exe under core/. Launch only connect-hub.exe;
-the two programs in core/ are internal and start on demand.
-GUI, worker and helper are a matched build from this bundle; do not mix files from other bundles.
+connect-hub-capture.exe and connect-hub-cleanup.exe under core/. Launch connect-hub.exe;
+the programs in core/ start on demand. Cleanup is optional and Windows-only.
+GUI, worker, helper and cleanup are a matched build; do not mix files from other bundles.
 EOF
 if [[ "$bundle_profile" == test ]]; then
   install -m 0644 "$app_root/packaging/windows/test-capture.ps1" "$bundle/test-capture.ps1"

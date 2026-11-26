@@ -1,0 +1,206 @@
+package service
+
+import (
+	"testing"
+)
+
+func TestClassifyDosDevice(t *testing.T) {
+	tests := []struct {
+		name     string
+		letter   string
+		target   string
+		expected string
+	}{
+		{
+			name:     "Invalid letter (AUX)",
+			letter:   "AUX",
+			target:   `C:\some\path`,
+			expected: "kept",
+		},
+		{
+			name:     "Invalid letter (COM1)",
+			letter:   "COM1",
+			target:   `C:\some\path`,
+			expected: "kept",
+		},
+		{
+			name:     "Raw device prefix",
+			letter:   "Z:",
+			target:   `\Device\HarddiskVolume1`,
+			expected: "manual",
+		},
+		{
+			name:     "Sangfor target suspicious",
+			letter:   "X:",
+			target:   `C:\Program Files (x86)\Sangfor\aTrust\Workspace`,
+			expected: "suspicious",
+		},
+		{
+			name:     "Valid user virtual drive kept",
+			letter:   "Y:",
+			target:   `D:\MyProjects\Work`,
+			expected: "kept",
+		},
+		{
+			name:     "Non-existent or broken non-sangfor drive kept (anti-misclassification)",
+			letter:   "W:",
+			target:   `E:\DeletedFolder`,
+			expected: "kept",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := ClassifyDosDevice(tt.letter, tt.target)
+			if res != tt.expected {
+				t.Errorf("ClassifyDosDevice(%q, %q) = %q, want %q", tt.letter, tt.target, res, tt.expected)
+			}
+		})
+	}
+}
+
+func TestClassifyInstalledApp(t *testing.T) {
+	tests := []struct {
+		name            string
+		keyName         string
+		displayName     string
+		publisher       string
+		uninstallString string
+		wantMatch       bool
+		wantName        string
+	}{
+		{
+			name:            "Standard EasyConnect",
+			keyName:         "EasyConnect",
+			displayName:     "EasyConnect",
+			publisher:       "Sangfor Technologies Inc.",
+			uninstallString: `C:\Program Files (x86)\Sangfor\SSL\EasyConnect\Uninstall.exe`,
+			wantMatch:       true,
+			wantName:        "EasyConnect",
+		},
+		{
+			name:            "Tenant branded DisplayName with Sangfor publisher",
+			keyName:         "EasyConnect",
+			displayName:     "中原招标采购交易平台",
+			publisher:       "Sangfor Technologies Inc.",
+			uninstallString: `C:\Program Files (x86)\Sangfor\SSL\EasyConnect\Uninstall.exe`,
+			wantMatch:       true,
+			wantName:        "中原招标采购交易平台",
+		},
+		{
+			name:            "SangforVNC virtual nic product",
+			keyName:         "SangforVNC",
+			displayName:     "SangforVNC",
+			publisher:       "Sangfor",
+			uninstallString: `C:\Program Files (x86)\Sangfor\SSL\CSClient\VNIC\uninstall.exe`,
+			wantMatch:       true,
+			wantName:        "SangforVNC",
+		},
+		{
+			name:            "aTrust client",
+			keyName:         "aTrust",
+			displayName:     "aTrust",
+			publisher:       "Sangfor",
+			uninstallString: `C:\Program Files (x86)\Sangfor\aTrust\uninst.exe`,
+			wantMatch:       true,
+			wantName:        "aTrust",
+		},
+		{
+			name:            "Unrelated software (7-Zip)",
+			keyName:         "7-Zip",
+			displayName:     "7-Zip 23.01",
+			publisher:       "Igor Pavlov",
+			uninstallString: `C:\Program Files\7-Zip\Uninstall.exe`,
+			wantMatch:       false,
+			wantName:        "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			match, gotName := ClassifyInstalledApp(tt.keyName, tt.displayName, tt.publisher, tt.uninstallString)
+			if match != tt.wantMatch {
+				t.Fatalf("match = %v, want %v", match, tt.wantMatch)
+			}
+			if match && gotName != tt.wantName {
+				t.Errorf("gotName = %q, want %q", gotName, tt.wantName)
+			}
+		})
+	}
+}
+
+func TestClassifyBrowserPolicyValue(t *testing.T) {
+	if !ClassifyBrowserPolicyValue("SangforHelper", "https://sangfor.com/update") {
+		t.Errorf("Expected true for Sangfor policy value")
+	}
+	if ClassifyBrowserPolicyValue("StandardPolicy", "https://google.com") {
+		t.Errorf("Expected false for non-Sangfor policy value")
+	}
+}
+
+func TestClassifyWinsockEntry(t *testing.T) {
+	if !ClassifyWinsockEntry(`C:\Program Files (x86)\Sangfor\SSL\ClientComponent\1_SangforNsp.dll`) {
+		t.Errorf("Expected true for Sangfor NSP dll")
+	}
+	if !ClassifyWinsockEntry("SangforLSP_def over [MSAFD Tcpip [TCP/IP]]") {
+		t.Errorf("Expected true for Sangfor LSP protocol name")
+	}
+	if ClassifyWinsockEntry(`C:\Windows\System32\mswsock.dll`) {
+		t.Errorf("Expected false for standard system mswsock")
+	}
+}
+
+func TestSplitUninstallString(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantExe  string
+		wantArgs string
+	}{
+		{
+			name:     "Unquoted path with spaces (EasyConnect)",
+			input:    `C:\Program Files (x86)\Sangfor\SSL\EasyConnect\Uninstall.exe`,
+			wantExe:  `C:\Program Files (x86)\Sangfor\SSL\EasyConnect\Uninstall.exe`,
+			wantArgs: "",
+		},
+		{
+			name:     "Unquoted path with spaces and args",
+			input:    `C:\Program Files (x86)\Sangfor\SSL\CSClient\VNIC\uninstall.exe /S /force`,
+			wantExe:  `C:\Program Files (x86)\Sangfor\SSL\CSClient\VNIC\uninstall.exe`,
+			wantArgs: "/S /force",
+		},
+		{
+			name:     "Quoted path with args",
+			input:    `"C:\Program Files\Sangfor\Uninstall.exe" /silent`,
+			wantExe:  `C:\Program Files\Sangfor\Uninstall.exe`,
+			wantArgs: "/silent",
+		},
+		{
+			name:     "Quoted path without args",
+			input:    `"C:\Program Files\Sangfor\Uninstall.exe"`,
+			wantExe:  `C:\Program Files\Sangfor\Uninstall.exe`,
+			wantArgs: "",
+		},
+		{
+			name:     "MsiExec command",
+			input:    `MsiExec.exe /X{12345678-ABCD-1234-ABCD-1234567890AB}`,
+			wantExe:  `MsiExec.exe`,
+			wantArgs: `/X{12345678-ABCD-1234-ABCD-1234567890AB}`,
+		},
+		{
+			name:     "Empty input",
+			input:    "",
+			wantExe:  "",
+			wantArgs: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotExe, gotArgs := SplitUninstallString(tt.input)
+			if gotExe != tt.wantExe || gotArgs != tt.wantArgs {
+				t.Errorf("SplitUninstallString(%q) = (%q, %q), want (%q, %q)", tt.input, gotExe, gotArgs, tt.wantExe, tt.wantArgs)
+			}
+		})
+	}
+}

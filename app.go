@@ -133,6 +133,7 @@ type app struct {
 	quitRequested atomic.Bool
 	// heartbeatOnce keeps one goroutine refreshing the helper's alive file.
 	heartbeatOnce sync.Once
+	cleanup       cleanupState
 	// Global TUN state.
 	// tunOn / tunPending are read by the background loops and written by the UI
 	// thread, so they are atomic; there is no separate mirror to keep in sync.
@@ -766,6 +767,7 @@ func (a *app) shutdown() {
 		}
 		// 先把排队的重绘停掉：窗口马上要销毁，别再排新的帧。
 		a.stopPainting()
+		a.shutdownCleanup()
 		if a.resourceTUN != nil {
 			if err := a.resourceTUN.Close(); err != nil {
 				a.tunLogf("系统捕获清理未完成：%v", err)

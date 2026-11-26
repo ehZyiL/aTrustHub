@@ -61,6 +61,7 @@ func (a *app) view(c *ui.Context) {
 	a.syncLogViewActive()
 	// 后台只写 Store；配置的发布点只有这里，主线程读写 a.cfg。
 	a.applyPendingConfigReload()
+	a.drainCleanup()
 	// The firewall rule follows the share's running state; this only acts when
 	// that state changed and never prompts for elevation.
 	a.syncLanShareFirewallIfNeeded()
@@ -1938,6 +1939,7 @@ const (
 	settingNetwork
 	settingLogs
 	settingAbout
+	settingMaintenance
 )
 
 // settingsPage 是整页设置：顶部切换分区，改动即时生效。
@@ -1956,8 +1958,11 @@ func (a *app) settingsPage(c *ui.Context) {
 			}
 		})
 		ui.Row(c).Children(func() {
-			ui.Segmented(c, &d.section, "通用", "网络与接管", "日志", "关于").
-				Label("设置分类").Background(t.SurfaceHover).Radius(8)
+			labels := []string{"通用", "网络与接管", "日志", "关于"}
+			if supportsCleanup() {
+				labels = append(labels, "维护")
+			}
+			ui.Segmented(c, &d.section, labels...).Label("设置分类").Background(t.SurfaceHover).Radius(8)
 		})
 		ui.Divider(c)
 		ui.Scroll(c).Grow(1).MinHeight(0).ScrollbarInsets(6, 2, 6, 0).Children(func() {
@@ -1969,6 +1974,8 @@ func (a *app) settingsPage(c *ui.Context) {
 					a.logsSection(c)
 				case settingAbout:
 					a.aboutSection(c)
+				case settingMaintenance:
+					a.maintenanceSection(c)
 				default:
 					a.generalSection(c)
 				}

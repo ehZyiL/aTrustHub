@@ -38,18 +38,19 @@ type source struct {
 }
 
 type manifest struct {
-	Schema      int               `json:"schema"`
-	Inputs      inputs            `json:"inputs"`
-	InputSHA256 string            `json:"inputs_sha256"`
-	Hub         source            `json:"hub"`
-	Worker      source            `json:"worker"`
-	Go          string            `json:"go"`
-	Target      string            `json:"target"`
-	GOWORK      string            `json:"gowork"`
-	BuildFlags  []string          `json:"build_flags"`
-	Components  []string          `json:"components"`
-	SHA256      map[string]string `json:"sha256"`
-	Development bool              `json:"development"`
+	Schema         int                 `json:"schema"`
+	Inputs         inputs              `json:"inputs"`
+	InputSHA256    string              `json:"inputs_sha256"`
+	Hub            source              `json:"hub"`
+	Worker         source              `json:"worker"`
+	Go             string              `json:"go"`
+	Target         string              `json:"target"`
+	GOWORK         string              `json:"gowork"`
+	BuildFlags     []string            `json:"build_flags"`
+	ComponentFlags map[string][]string `json:"component_flags,omitempty"`
+	Components     []string            `json:"components"`
+	SHA256         map[string]string   `json:"sha256"`
+	Development    bool                `json:"development"`
 }
 
 type module struct {
@@ -220,9 +221,20 @@ func buildBinaries(o options, goTool string, m *manifest) error {
 	if o.targetOS != "darwin" {
 		targets = append(targets, struct{ dir, pkg, name string }{o.root, "./cmd/app-helper", "core/connect-hub-capture"})
 	}
+	if o.targetOS == "windows" {
+		targets = append(targets, struct{ dir, pkg, name string }{o.root, "./cmd/app-cleanup", "core/connect-hub-cleanup"})
+	}
 	for _, target := range targets {
 		name := target.name + ext
-		args := []string{"build", "-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=" + ldflags, "-o", filepath.Join(o.out, filepath.FromSlash(name)), target.pkg}
+		targetFlags := ldflags
+		if target.pkg == "./cmd/app-cleanup" {
+			targetFlags = "-s -w"
+		} // CLI stays usable; Hub hides its child explicitly.
+		if m.ComponentFlags == nil {
+			m.ComponentFlags = make(map[string][]string)
+		}
+		m.ComponentFlags[name] = []string{"-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=" + targetFlags, "CGO_ENABLED=0"}
+		args := []string{"build", "-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=" + targetFlags, "-o", filepath.Join(o.out, filepath.FromSlash(name)), target.pkg}
 		if err := execute(target.dir, buildEnv(map[string]string{"GOOS": o.targetOS, "GOARCH": o.arch}), goTool, args...); err != nil {
 			return err
 		}

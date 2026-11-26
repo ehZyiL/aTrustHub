@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	cleanupclient "github.com/ehzyil/connect-hub/internal/cleanup/client"
@@ -17,6 +18,63 @@ type cleanupStub struct{ calls int }
 func (s *cleanupStub) Run(context.Context, contract.Request, func(cleanupclient.Snapshot)) cleanupclient.Snapshot {
 	s.calls++
 	return cleanupclient.Snapshot{}
+}
+
+type cleanupPageRunner struct{ requests chan contract.Request }
+
+func (r *cleanupPageRunner) Run(_ context.Context, req contract.Request, publish func(cleanupclient.Snapshot)) cleanupclient.Snapshot {
+	s := cleanupclient.Snapshot{Operation: req.Operation, Done: true, Result: contract.Result{Outcome: "complete", Total: 3, OK: 1, Skipped: 1, Reboot: 1}}
+	publish(s)
+	r.requests <- req
+	return s
+}
+
+func TestMaintenanceConfirmationSelectionAndResult(t *testing.T) {
+	a := testApp(t)
+	a.settings.open, a.settings.section = true, settingMaintenance
+	runner := &cleanupPageRunner{requests: make(chan contract.Request, 1)}
+	a.cleanup.runner = runner
+	a.cleanup.scanDir = "fixture-scan"
+	a.cleanup.selected = map[string]bool{"normal": true, "deep": false}
+	a.cleanup.view.Findings = []contract.Finding{{ID: "normal", Title: "普通残留"}, {ID: "deep", Title: "深度残留", Deep: true}}
+	tt := ui.NewTester(a.maintenanceSection, 1120, 1000)
+	if err := tt.Click("备份并清理所选项"); err != nil {
+		t.Fatal(err)
+	}
+	if a.cleanup.confirm != contract.Apply || a.cleanup.busy {
+		t.Fatal("mutation ran before confirmation")
+	}
+	if err := tt.Click("返回检查"); err != nil {
+		t.Fatal(err)
+	}
+	if a.cleanup.confirm != "" || a.cleanup.busy {
+		t.Fatal("back did not cancel confirmation")
+	}
+	if err := tt.Click("备份并清理所选项"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("确认执行"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case req := <-runner.requests:
+		if req.Operation != contract.Apply || req.ScanDir != "fixture-scan" || len(req.Selected) != 1 || req.Selected[0] != "normal" {
+			t.Fatalf("incorrect request: %+v", req)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("confirmed task not launched")
+	}
+	a.drainCleanup()
+	tt.Frame()
+	text := strings.Join(tt.Texts(), "|")
+	for _, want := range []string{"成功 1 项", "已不存在/跳过 1 项", "重启生效 1 项"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing result %q: %s", want, text)
+		}
+	}
+	if a.cleanup.busy || len(a.cleanup.view.Findings) > 0 || a.cleanup.scanDir != "" {
+		t.Fatal("completed task retained selection")
+	}
 }
 
 func TestMaintenancePageDoesNotStartOptionalWork(t *testing.T) {

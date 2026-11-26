@@ -130,6 +130,7 @@ type PolicyBackupItem struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
 	Data  string `json:"data,omitempty"`
+	Type  uint32 `json:"type,omitempty"`
 }
 
 // WinsockBackupItem Winsock 状态备份

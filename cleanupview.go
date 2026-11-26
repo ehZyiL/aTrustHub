@@ -72,7 +72,7 @@ func (a *app) maintenanceSection(c *ui.Context) {
 			ui.Text(c, fmt.Sprintf("扫描完成，发现 %d 项。", s.view.Result.Total)).FontSize(12)
 		}
 		if s.view.Done && (s.view.Operation == contract.Apply || s.view.Operation == contract.Restore) {
-			ui.Text(c, fmt.Sprintf("成功 %d 项 · 失败 %d 项 · 重启生效 %d 项", s.view.Result.OK, s.view.Result.Failed, s.view.Result.Reboot)).FontSize(12)
+			ui.Text(c, fmt.Sprintf("成功 %d 项 · 已不存在/跳过 %d 项 · 失败 %d 项 · 重启生效 %d 项", s.view.Result.OK, s.view.Result.Skipped, s.view.Result.Failed, s.view.Result.Reboot)).FontSize(12).Wrap()
 			if s.view.Result.BackupID != "" {
 				ui.Text(c, "备份："+s.view.Result.BackupID).FontSize(11).Wrap()
 			}
@@ -82,7 +82,7 @@ func (a *app) maintenanceSection(c *ui.Context) {
 		settingsGroup(c, "备份与恢复", func() {
 			for _, b := range s.view.Backups {
 				ui.Row(c).Gap(10).Children(func() {
-					ui.Text(c, fmt.Sprintf("%s · 文件 %d · 注册表 %d · 证书 %d", b.CreatedAt.Format("2006-01-02 15:04"), b.Files, b.Registry, b.Certificates)).FontSize(12)
+					ui.Text(c, fmt.Sprintf("%s · 文件 %d · 注册表 %d · 证书 %d · 策略 %d", b.CreatedAt.Format("2006-01-02 15:04"), b.Files, b.Registry, b.Certificates, b.Policies)).FontSize(12)
 					if ui.Button(c, "恢复此备份").Disabled(s.busy).Clicked() {
 						s.backupID = b.ID
 						s.confirm = contract.Restore

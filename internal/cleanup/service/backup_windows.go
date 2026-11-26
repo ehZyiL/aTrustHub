@@ -123,7 +123,9 @@ func CreateBackupContext(ctx context.Context, plan *Plan, backupRootDir string) 
 
 			if hive != "" && key != "" {
 				fullKey := hive + `\` + key
-				safeName := strings.ReplaceAll(strings.ReplaceAll(fullKey, `\`, `_`), `:`, `_`) + "_" + view
+				// reg.exe rejects long output paths. Original key/view remain in the manifest.
+				digest := sha256.Sum256([]byte(fullKey + "\x00" + view))
+				safeName := hex.EncodeToString(digest[:16])
 				backupRel := filepath.Join("registry", safeName+".reg")
 				backupDest := filepath.Join(backupDir, backupRel)
 
@@ -146,6 +148,12 @@ func CreateBackupContext(ctx context.Context, plan *Plan, backupRootDir string) 
 					})
 				}
 			}
+		} else if f.Action == ActionDeletePolicyValue {
+			item, err := backupPolicyValue(f)
+			if err != nil {
+				return nil, fmt.Errorf("备份策略值失败: %w", err)
+			}
+			manifest.Policies = append(manifest.Policies, item)
 		} else if f.Action == ActionDeletePath {
 			path, _ := f.Params["path"].(string)
 			if path == "" {

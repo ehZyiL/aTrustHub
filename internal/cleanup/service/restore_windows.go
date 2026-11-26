@@ -32,7 +32,7 @@ func RestoreBackupContext(ctx context.Context, manifestPath string, rw *ReportWr
 		_ = rw.WriteEvent(ReportEvent{
 			Event:    "start",
 			BackupID: manifest.BackupID,
-			Total:    len(manifest.Registry) + len(manifest.Files) + len(manifest.Certificates),
+			Total:    len(manifest.Registry) + len(manifest.Files) + len(manifest.Certificates) + len(manifest.Policies),
 		})
 	}
 
@@ -135,6 +135,23 @@ func RestoreBackupContext(ctx context.Context, manifestPath string, rw *ReportWr
 					Message: "已还原根证书",
 				})
 			}
+		}
+	}
+
+	for _, policy := range manifest.Policies {
+		id := "policy:" + policy.Key + `\` + policy.Value
+		if err := checkpoint(ctx, rw, id); err != nil {
+			return err
+		}
+		status, message := StatusOk, "已还原策略值"
+		if err := restorePolicyValue(policy); err != nil {
+			failedCount++
+			status, message = StatusFailed, fmt.Sprintf("还原策略值失败: %v", err)
+		} else {
+			okCount++
+		}
+		if rw != nil {
+			_ = rw.WriteEvent(ReportEvent{Event: "item", ID: id, Status: status, Message: message})
 		}
 	}
 

@@ -87,6 +87,7 @@ type Backup struct {
 	Files        int       `json:"files"`
 	Registry     int       `json:"registry"`
 	Certificates int       `json:"certificates"`
+	Policies     int       `json:"policies,omitempty"`
 }
 
 type Result struct {
@@ -94,6 +95,7 @@ type Result struct {
 	Total     int    `json:"total,omitempty"`
 	OK        int    `json:"ok,omitempty"`
 	Failed    int    `json:"failed,omitempty"`
+	Skipped   int    `json:"skipped,omitempty"`
 	Reboot    int    `json:"reboot,omitempty"`
 	Truncated bool   `json:"truncated,omitempty"`
 	BackupID  string `json:"backupId,omitempty"`

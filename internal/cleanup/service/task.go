@@ -255,6 +255,8 @@ func reportEmitter(emit Emit, result *contract.Result) func(ReportEvent) error {
 				result.OK++
 			case StatusFailed:
 				result.Failed++
+			case StatusSkipped:
+				result.Skipped++
 			case StatusReboot:
 				result.Reboot++
 			}
@@ -327,7 +329,7 @@ func listBackupSummaries(ctx context.Context, root string, emit Emit) (contract.
 				result.Truncated = true
 				return result, nil
 			}
-			b := contract.Backup{ID: e.Name(), CreatedAt: m.CreatedAt, Files: len(m.Files), Registry: len(m.Registry), Certificates: len(m.Certificates)}
+			b := contract.Backup{ID: e.Name(), CreatedAt: m.CreatedAt, Files: len(m.Files), Registry: len(m.Registry), Certificates: len(m.Certificates), Policies: len(m.Policies)}
 			if err = emit("", contract.Update{Backup: &b}); err != nil {
 				return result, err
 			}

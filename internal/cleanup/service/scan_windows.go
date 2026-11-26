@@ -455,6 +455,13 @@ func scanNetAdapters(plan *Plan) {
 		sk.Close()
 
 		if MatchesKeyword(driverDesc) || MatchesKeyword(matchingDevID) {
+			// NetCfgInstanceId is a network interface GUID, not the PnP device
+			// instance ID required by pnputil /remove-device.
+			instanceID, err := networkDeviceInstanceID(netCfgInstanceId)
+			if err != nil {
+				plan.Warnings = append(plan.Warnings, fmt.Sprintf("无法确定网卡设备实例，保留 %s: %v", driverDesc, err))
+				continue
+			}
 			plan.Findings = append(plan.Findings, Finding{
 				ID:     fmt.Sprintf("adapter:%s", sub),
 				Group:  "netadapter",
@@ -464,7 +471,7 @@ func scanNetAdapters(plan *Plan) {
 				Risk:   RiskDeep,
 				Action: ActionRemoveDevice,
 				Params: map[string]interface{}{
-					"instanceId": netCfgInstanceId,
+					"instanceId": instanceID,
 					"driverDesc": driverDesc,
 					"subKey":     classKey + `\` + sub,
 				},
@@ -472,6 +479,26 @@ func scanNetAdapters(plan *Plan) {
 			})
 		}
 	}
+}
+
+func networkDeviceInstanceID(interfaceGUID string) (string, error) {
+	if _, err := windows.GUIDFromString(interfaceGUID); err != nil {
+		return "", err
+	}
+	path := `SYSTEM\CurrentControlSet\Control\Network\{4d36e972-e325-11ce-bfc1-08002be10318}\` + interfaceGUID + `\Connection`
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
+	if err != nil {
+		return "", err
+	}
+	defer k.Close()
+	id, _, err := k.GetStringValue("PnpInstanceID")
+	if err != nil {
+		return "", err
+	}
+	if !strings.Contains(id, `\`) {
+		return "", fmt.Errorf("无效的 PnP 设备实例")
+	}
+	return id, nil
 }
 
 func scanCertificates(plan *Plan) {

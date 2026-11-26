@@ -3,11 +3,101 @@
 package service
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows/registry"
 )
+
+func TestRegistryBackupLongKeyPath(t *testing.T) {
+	keyPath := `Software\ConnectHubCleanupTest-` + strings.Repeat("x", 140) + filepath.Base(t.TempDir())
+	k, _, err := registry.CreateKey(registry.CURRENT_USER, keyPath, registry.ALL_ACCESS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.DeleteKey(registry.CURRENT_USER, keyPath)
+	defer k.Close()
+	if err := k.SetStringValue("test", "long key survives restore"); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	m, err := CreateBackup(&Plan{Findings: []Finding{{ID: "reg:long", Action: ActionDeleteRegistry, Selected: true, Params: map[string]interface{}{"hive": "HKCU", "key": keyPath, "view": "64"}}}}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Registry) != 1 {
+		t.Fatal("missing registry backup")
+	}
+	if err := k.SetStringValue("test", "changed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RestoreBackup(filepath.Join(root, m.BackupID, "manifest.json"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if v, _, err := k.GetStringValue("test"); err != nil || v != "long key survives restore" {
+		t.Fatalf("restore: %q %v", v, err)
+	}
+}
+
+func TestPolicyBackupRestoresOnlySelectedValue(t *testing.T) {
+	for _, expand := range []bool{false, true} {
+		t.Run(fmt.Sprint(expand), func(t *testing.T) {
+			keyPath := `Software\ConnectHubCleanupTest-` + filepath.Base(t.TempDir())
+			k, _, err := registry.CreateKey(registry.CURRENT_USER, keyPath, registry.ALL_ACCESS)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer registry.DeleteKey(registry.CURRENT_USER, keyPath)
+			defer k.Close()
+			const original = `Sangfor %TEMP% 测试`
+			if expand {
+				err = k.SetExpandStringValue("selected", original)
+			} else {
+				err = k.SetStringValue("selected", original)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := Finding{ID: "policy:test", Action: ActionDeletePolicyValue, Selected: true, Params: map[string]interface{}{"hive": "HKCU", "key": keyPath, "value": "selected"}}
+			root := t.TempDir()
+			m, err := CreateBackup(&Plan{Findings: []Finding{f}}, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(m.Policies) != 1 {
+				t.Fatalf("policy backup missing: %d", len(m.Policies))
+			}
+			status, message := executeDeletePolicyValue(f)
+			if status != StatusOk {
+				t.Fatalf("delete: %s %s", status, message)
+			}
+			if _, _, err := k.GetStringValue("selected"); err != registry.ErrNotExist {
+				t.Fatalf("not deleted: %v", err)
+			}
+			if err := k.SetStringValue("unrelated", "changed after backup"); err != nil {
+				t.Fatal(err)
+			}
+			if err := RestoreBackup(filepath.Join(root, m.BackupID, "manifest.json"), nil); err != nil {
+				t.Fatal(err)
+			}
+			got, typ, err := k.GetStringValue("selected")
+			wantType := uint32(registry.SZ)
+			if expand {
+				wantType = registry.EXPAND_SZ
+			}
+			if err != nil || got != original || typ != wantType {
+				t.Fatalf("restore: %q type=%d err=%v", got, typ, err)
+			}
+			if got, _, err := k.GetStringValue("unrelated"); err != nil || got != "changed after backup" {
+				t.Fatalf("unrelated changed: %q %v", got, err)
+			}
+		})
+	}
+}
 
 func TestBackupAndRestoreFiles(t *testing.T) {
 	tmpDir := t.TempDir()

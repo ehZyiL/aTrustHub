@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -298,12 +299,34 @@ func executeKillProcess(f Finding) (ReportStatus, string) {
 		return StatusOk, "已终止进程: " + image
 	}
 
-	// 找不到进程说明原本就已退出
-	if strings.Contains(outStr, "找不到") || strings.Contains(outStr, "not found") || strings.Contains(outStr, "128") {
+	// A child can exit when an earlier parent is killed. Check the OS process
+	// table instead of parsing taskkill's localized/OEM-encoded message.
+	if running, checkErr := processImageRunning(image); checkErr == nil && !running {
 		return StatusSkipped, "进程已未在运行"
 	}
 
 	return StatusFailed, fmt.Sprintf("终止进程失败: %s (%v)", strings.TrimSpace(outStr), err)
+}
+
+func processImageRunning(image string) (bool, error) {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return false, err
+	}
+	defer windows.CloseHandle(snapshot)
+	var p windows.ProcessEntry32
+	p.Size = uint32(unsafe.Sizeof(p))
+	err = windows.Process32First(snapshot, &p)
+	for err == nil {
+		if strings.EqualFold(windows.UTF16ToString(p.ExeFile[:]), image) {
+			return true, nil
+		}
+		err = windows.Process32Next(snapshot, &p)
+	}
+	if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+		return false, nil
+	}
+	return false, err
 }
 
 func executeDeleteService(f Finding) (ReportStatus, string) {

@@ -2,17 +2,12 @@
 set -euo pipefail
 
 export GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
+export GOWORK=off GOFLAGS=-mod=readonly GOTOOLCHAIN=local
 
 app_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # 工作树里没有 zju-connect 兄弟目录，允许用环境变量指过去；
 # 默认仍是同级的 ../zju-connect。
 worker_root=${ZJU_CONNECT_ROOT:-$(cd -- "$app_root/../zju-connect" && pwd)}
-# worker 的源码目录改名过（cmd/easyconnect-worker）；固定的 WORKER_REF 可能还停在
-# 旧 commit 上，所以按存在的路径选，产物名始终是新的。
-worker_cmd=./cmd/connect-hub-worker
-if [[ ! -d "$worker_root/cmd/connect-hub-worker" ]]; then
-  worker_cmd=./cmd/easyconnect-worker
-fi
 # 把来源写进包里：否则"这个包是哪份代码打的"只能靠猜。
 repo_branch=$(git -C "$app_root" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
 repo_commit=$(git -C "$app_root" rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -24,9 +19,6 @@ app_build=$(sed -n 's/^const appBuild = "\(.*\)"$/\1/p' "$app_root/app.go" | hea
 worker_commit=$(git -C "$worker_root" rev-parse --short HEAD 2>/dev/null || echo unknown)
 printf 'Packaging %s@%s%s (appBuild %s, worker %s)\n' "$repo_branch" "$repo_commit" "$repo_dirty" "${app_build:-unknown}" "$worker_commit"
 go_tool=${GO:-go}
-# 协议单源化：内部 workeripc/protocol.go 由 worker 仓库的 protocol.go 生成；
-# 两边不一致时打包直接失败（提示重新生成，而不是让人手抄）。
-(cd "$app_root" && env "$go_tool" run ./internal/workeripc/cmd/protogen -check -src "$worker_root/internal/desktop/protocol.go" -out ./internal/workeripc/protocol.go)
 target_arch=${GOARCH:-amd64}
 if [[ "$target_arch" != "amd64" ]]; then
   printf 'Windows capture test bundle currently supports amd64 only\n' >&2
@@ -54,15 +46,10 @@ trap 'rm -rf -- "$bundle"' EXIT
 mkdir -p "$bundle/resources" "$bundle/LICENSES" "$bundle/core"
 
 cd "$app_root"
-# go build 自己不写 Windows 资源，没有 .syso 时 EXE 会顶着 Go 的默认图标。
-# 先生成带应用图标的资源对象，链接进 GUI 后再删除，免得留在工作树里。
-icon_syso="$app_root/appicon_windows_${target_arch}.syso"
-trap 'rm -rf -- "$bundle"; rm -f -- "$icon_syso"' EXIT
-env "$go_tool" run ./cmd/appicon -icon resources/icon.png -arch "$target_arch" -out "$icon_syso"
-env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags='-H=windowsgui -s -w' -o "$bundle/connect-hub.exe" .
-rm -f -- "$icon_syso"
-# worker 和抓包助手是内部程序，放进 core/，避免用户打开目录时误双击。
-env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags='-H=windowsgui -s -w' -o "$bundle/core/connect-hub-capture.exe" ./cmd/app-helper
+# Local and CI builds share one source/version/dependency gate and binary builder.
+build_args=(-worker "$worker_root" -out "$bundle" -os windows -arch "$target_arch")
+if [[ "${EASYCONNECT_DEVELOPMENT_BUILD:-0}" == 1 ]]; then build_args+=(-development); fi
+bash "$app_root/scripts/build.sh" "${build_args[@]}"
 helper_protocol=$("$bundle/core/connect-hub-capture.exe" --protocol-version)
 if [[ "$helper_protocol" != 7 ]]; then
   printf 'Windows capture helper protocol mismatch: expected 7, got %s\n' "$helper_protocol" >&2
@@ -73,7 +60,6 @@ if [[ "$bundle_profile" == test ]]; then
   "$go_tool" list -m all > "$bundle/desktop-modules.txt"
 fi
 cd "$worker_root"
-env GOWORK=off GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -ldflags='-H=windowsgui -s -w' -o "$bundle/core/connect-hub-worker.exe" "$worker_cmd"
 if [[ "$bundle_profile" == test ]]; then
   env GOWORK=off "$go_tool" list -m all > "$bundle/worker-modules.txt"
 fi

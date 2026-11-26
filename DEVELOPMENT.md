@@ -1,5 +1,12 @@
 # Connect Hub 开发手册
 
+> 2026-11-26 构建更新：本地配套二进制使用 `./scripts/build.ps1 -development`
+> 或 `bash scripts/build.sh -development`；发行脚本与 CI 调用同一构建工具，
+> 固定 Go/Worker 输入见 `packaging/build-inputs.json`。
+> 入口显式使用 `GOWORK=off`，记录两侧模块清单并检查 uTLS 来源。
+> 下文的历史手工编译步骤不能替代这一入口的来源与版本检查。
+> 详见 [P0 构建与资源基线](docs/plans/p0-baseline-2026-11-26.md)。
+
 本手册为 **Connect Hub** 桌面客户端及其底层 VPN 核心、特权网络助手的开发者提供全面的技术架构解析、开发环境搭建指南、本地编译调试方法与测试发布规范。
 
 ---

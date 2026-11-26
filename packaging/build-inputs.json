@@ -1,0 +1,6 @@
+{
+  "go": "1.27.4",
+  "worker_repository": "ehZyiL/zju-connect",
+  "worker_commit": "9f433a08fa28528775b268a338610138b6c7f147",
+  "embedded_kernel_tree": "58f9689fff8ab20fcbf4e7b324589154963a8534"
+}

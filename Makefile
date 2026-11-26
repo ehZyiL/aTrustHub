@@ -8,7 +8,8 @@ CACHE := $(CURDIR)/.cache
 
 # 国内访问 proxy.golang.org 常常不通，默认走 goproxy.cn。
 export GOPROXY ?= https://goproxy.cn,direct
-export GOFLAGS ?= -mod=mod
+export GOFLAGS ?= -mod=readonly
+export GOWORK := off
 
 # 只能写仓库目录时（沙箱、临时机）用 make LOCAL=1，缓存落到 .cache/。
 ifeq ($(LOCAL),1)
@@ -53,11 +54,11 @@ helpers-all:
 	cd third_party/zju-connect && GOOS=windows GOARCH=386 $(GO) build -ldflags "-H=windowsgui" -o ../../resources/windows-386/zju-connect-multitun.exe ./cmd/multitun
 	cd third_party/zju-connect && GOOS=windows GOARCH=arm64 $(GO) build -ldflags "-H=windowsgui" -o ../../resources/windows-arm64/zju-connect-multitun.exe ./cmd/multitun
 
-## build: 打包成本机应用（macOS 上是 build/darwin-arm64/aTrustHub.app）
+## build: 使用固定输入和统一入口构建本机开发二进制；发行包用 scripts/package-*.sh
 build:
-	$(GO) tool mygo build -skip-dmg
+	GO="$(GO)" bash ./scripts/build.sh -development -out build/debug
 
-## build-debug: 同 build，但保留 WebView 开发者工具（登录窗口按 F12 可打开）
+## build-debug: 旧 MyGo 调试入口（登录窗口按 F12）；不作为配套组件发行入口
 build-debug:
 	$(GO) tool mygo build -skip-dmg -debug
 

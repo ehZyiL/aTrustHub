@@ -2,20 +2,13 @@
 set -euo pipefail
 
 export GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
+export GOWORK=off GOFLAGS=-mod=readonly GOTOOLCHAIN=local
 
 app_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 worker_root=${ZJU_CONNECT_ROOT:-$(cd -- "$app_root/../zju-connect" && pwd)}
-# worker 的源码目录改名过（cmd/easyconnect-worker）；固定的提交可能还停在旧路径上，
-# 所以按存在的目录选，产物名始终是新的。
-worker_cmd=./cmd/connect-hub-worker
-if [[ ! -d "$worker_root/cmd/connect-hub-worker" ]]; then
-  worker_cmd=./cmd/easyconnect-worker
-fi
 # The two independently built modules must agree before bundling their IPC.
 worker_commit=$(git -C "$worker_root" rev-parse --short HEAD 2>/dev/null || echo unknown)
 go_tool=${GO:-go}
-# 协议单源化：workeripc/protocol.go 由 worker 仓库的 protocol.go 生成；不一致则打包失败。
-(cd "$app_root" && env "$go_tool" run ./internal/workeripc/cmd/protogen -check -src "$worker_root/internal/desktop/protocol.go" -out ./internal/workeripc/protocol.go)
 target_arch=${GOARCH:-$($go_tool env GOARCH)}
 bundle_name=${EASYCONNECT_BUNDLE_NAME:-connect-hub-linux-$target_arch}
 if [[ ! "$bundle_name" =~ ^[a-zA-Z0-9._-]+$ || "$bundle_name" == "." || "$bundle_name" == ".." ]]; then
@@ -31,9 +24,9 @@ cd "$app_root"
 # ELF 不能像 EXE 那样内嵌图标：窗口和托盘图标由程序自己读 resources/icon.png，
 # 应用菜单、Dock 则需要 hicolor 图标；这里把它们按尺寸放进包里。
 env "$go_tool" run ./cmd/appicon -icon resources/icon.png -png-dir "$bundle/share/icons/hicolor" -png-name connect-hub
-env GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/connect-hub" .
-# worker 和抓包助手是内部程序，放进 core/，避免用户直接双击。
-env GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/core/connect-hub-capture" ./cmd/app-helper
+build_args=(-worker "$worker_root" -out "$bundle" -os linux -arch "$target_arch")
+if [[ "${EASYCONNECT_DEVELOPMENT_BUILD:-0}" == 1 ]]; then build_args+=(-development); fi
+bash "$app_root/scripts/build.sh" "${build_args[@]}"
 helper_protocol=$("$bundle/core/connect-hub-capture" --protocol-version)
 if [[ "$helper_protocol" != 11 ]]; then
   printf 'Linux capture helper protocol mismatch: expected 11, got %s\n' "$helper_protocol" >&2
@@ -41,7 +34,6 @@ if [[ "$helper_protocol" != 11 ]]; then
 fi
 "$go_tool" list -m all > "$bundle/desktop-modules.txt"
 cd "$worker_root"
-env GOWORK=off GOOS=linux GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$bundle/core/connect-hub-worker" "$worker_cmd"
 env GOWORK=off "$go_tool" list -m all > "$bundle/worker-modules.txt"
 
 install -m 0644 "$app_root/resources/icon.png" "$bundle/resources/icon.png"

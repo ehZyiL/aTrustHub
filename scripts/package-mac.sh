@@ -2,20 +2,15 @@
 set -euo pipefail
 
 export GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
+export GOWORK=off GOFLAGS=-mod=readonly GOTOOLCHAIN=local
 
 app_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 worker_root=${ZJU_CONNECT_ROOT:-$(cd -- "$app_root/../zju-connect" && pwd)}
 
-worker_cmd=./cmd/connect-hub-worker
-if [[ ! -d "$worker_root/cmd/connect-hub-worker" ]]; then
-  worker_cmd=./cmd/easyconnect-worker
-fi
 
 worker_commit=$(git -C "$worker_root" rev-parse --short HEAD 2>/dev/null || echo unknown)
 go_tool=${GO:-go}
 
-# 协议一致性校验：使用宿主机原生架构运行工具
-(cd "$app_root" && env GOOS="" GOARCH="" "$go_tool" run ./internal/workeripc/cmd/protogen -check -src "$worker_root/internal/desktop/protocol.go" -out ./internal/workeripc/protocol.go)
 
 target_arch=${GOARCH:-$($go_tool env GOARCH)}
 bundle_name=${EASYCONNECT_BUNDLE_NAME:-connect-hub-macos-$target_arch}
@@ -39,11 +34,10 @@ cd "$app_root"
 app_version=$(sed -n 's/^const version = "\(.*\)"$/\1/p' "$app_root/app.go" | head -n1)
 app_version=${app_version:-0.1.0}
 
-# 1. 编译 GUI 主程序
-env GOOS=darwin GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$macos_bin/connect-hub" .
-
-# 2. 编译 Worker 协议核心
-(cd "$worker_root" && env GOWORK=off GOOS=darwin GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" build -mod=readonly -trimpath -o "$macos_bin/core/connect-hub-worker" "$worker_cmd")
+# 1–2. Shared binary builder, including locked inputs and module manifests.
+build_args=(-worker "$worker_root" -out "$macos_bin" -os darwin -arch "$target_arch")
+if [[ "${EASYCONNECT_DEVELOPMENT_BUILD:-0}" == 1 ]]; then build_args+=(-development); fi
+bash "$app_root/scripts/build.sh" "${build_args[@]}"
 
 # 3. 部署资源与图标
 install -m 0644 "$app_root/resources/icon.png" "$resources/icon.png"

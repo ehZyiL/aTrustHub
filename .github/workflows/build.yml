@@ -22,12 +22,10 @@ permissions:
   contents: write
 
 env:
-  GOFLAGS: -mod=mod
+  GOFLAGS: -mod=readonly
+  GOWORK: "off"
+  GOTOOLCHAIN: local
   GOPROXY: https://goproxy.cn,https://proxy.golang.org,direct
-  WORKER_REPOSITORY: ehZyiL/zju-connect
-  # 固定 worker 版本：优先用仓库变量 WORKER_REF（建议填一个 commit SHA），
-  # 缺省回退分支——分支会移动，开发包可以，发布包请把 WORKER_REF 钉到 SHA。
-  WORKER_REF: ${{ vars.WORKER_REF || 'feat/desktop-worker' }}
 
 jobs:
   build-windows:
@@ -39,18 +37,31 @@ jobs:
         with:
           path: connect-hub
 
-      - name: 检出 ZJU-Connect (依赖 Worker 分支)
+      - name: 读取固定构建输入
+        id: inputs
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          with open('connect-hub/packaging/build-inputs.json', encoding='utf-8') as f:
+              inputs = json.load(f)
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              for key in ('go', 'worker_repository', 'worker_commit'):
+                  print(f'{key}={inputs[key]}', file=f)
+          PY
+
+      - name: 检出固定 Worker 提交
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.WORKER_REPOSITORY }}
-          ref: ${{ env.WORKER_REF }}
+          repository: ${{ steps.inputs.outputs.worker_repository }}
+          ref: ${{ steps.inputs.outputs.worker_commit }}
           token: ${{ secrets.GH_PAT || github.token }}
           path: zju-connect
 
       - name: 配置 Go 运行环境
         uses: actions/setup-go@v5
         with:
-          go-version-file: connect-hub/go.mod
+          go-version: ${{ steps.inputs.outputs.go }}
           cache: true
           cache-dependency-path: |
             connect-hub/go.sum
@@ -125,18 +136,31 @@ jobs:
         with:
           path: connect-hub
 
-      - name: 检出 ZJU-Connect (依赖 Worker 分支)
+      - name: 读取固定构建输入
+        id: inputs
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          with open('connect-hub/packaging/build-inputs.json', encoding='utf-8') as f:
+              inputs = json.load(f)
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              for key in ('go', 'worker_repository', 'worker_commit'):
+                  print(f'{key}={inputs[key]}', file=f)
+          PY
+
+      - name: 检出固定 Worker 提交
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.WORKER_REPOSITORY }}
-          ref: ${{ env.WORKER_REF }}
+          repository: ${{ steps.inputs.outputs.worker_repository }}
+          ref: ${{ steps.inputs.outputs.worker_commit }}
           token: ${{ secrets.GH_PAT || github.token }}
           path: zju-connect
 
       - name: 配置 Go 运行环境
         uses: actions/setup-go@v5
         with:
-          go-version-file: connect-hub/go.mod
+          go-version: ${{ steps.inputs.outputs.go }}
           cache: true
           cache-dependency-path: |
             connect-hub/go.sum
@@ -199,18 +223,31 @@ jobs:
         with:
           path: connect-hub
 
-      - name: 检出 ZJU-Connect (依赖 Worker 分支)
+      - name: 读取固定构建输入
+        id: inputs
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          with open('connect-hub/packaging/build-inputs.json', encoding='utf-8') as f:
+              inputs = json.load(f)
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              for key in ('go', 'worker_repository', 'worker_commit'):
+                  print(f'{key}={inputs[key]}', file=f)
+          PY
+
+      - name: 检出固定 Worker 提交
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.WORKER_REPOSITORY }}
-          ref: ${{ env.WORKER_REF }}
+          repository: ${{ steps.inputs.outputs.worker_repository }}
+          ref: ${{ steps.inputs.outputs.worker_commit }}
           token: ${{ secrets.GH_PAT || github.token }}
           path: zju-connect
 
       - name: 配置 Go 运行环境
         uses: actions/setup-go@v5
         with:
-          go-version-file: connect-hub/go.mod
+          go-version: ${{ steps.inputs.outputs.go }}
           cache: true
           cache-dependency-path: |
             connect-hub/go.sum

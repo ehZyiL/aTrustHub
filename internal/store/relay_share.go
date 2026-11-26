@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	"github.com/ehzyil/connect-hub/internal/model"
-	"github.com/ehzyil/connect-hub/internal/relay"
+	relay "github.com/ehzyil/connect-hub/internal/relay/contract"
 )
 
 // RelayShareStore adapts the configuration and secret store to the relay

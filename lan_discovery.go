@@ -3,17 +3,17 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/egoist/mygo/ui"
+	"github.com/ehzyil/connect-hub/internal/model"
+	relayclient "github.com/ehzyil/connect-hub/internal/relay/client"
+	relay "github.com/ehzyil/connect-hub/internal/relay/contract"
+	discovery "github.com/ehzyil/connect-hub/internal/relay/discovery/contract"
+	relayfirewall "github.com/ehzyil/connect-hub/internal/relay/firewall"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/egoist/mygo/ui"
-
-	"github.com/ehzyil/connect-hub/internal/model"
-	"github.com/ehzyil/connect-hub/internal/relay"
-	"github.com/ehzyil/connect-hub/internal/relay/discovery"
 )
 
 // lanDiscovery owns the two sides of 局域网发现: the publisher that follows the
@@ -23,9 +23,8 @@ import (
 // by controller notifications through kick, and the browser is started and
 // stopped by the UI thread because it is a user action.
 type lanDiscovery struct {
-	backend discovery.Backend
-	pub     *discovery.Publisher
-	browser *discovery.Browser
+	pub     relayclient.Publisher
+	browser relayclient.Browser
 
 	wg          sync.WaitGroup
 	syncMu      sync.Mutex
@@ -78,46 +77,6 @@ type lanDiscoveryUI struct {
 	// searchWindow is how long an empty list reads as "still looking". It is a
 	// variable so tests can shorten it.
 	searchWindow time.Duration
-}
-
-// setupLANDiscovery builds the publisher and the browser. The browser emits
-// snapshots from its own goroutine, so they are parked here and picked up by
-// the UI thread on its next frame.
-func (a *app) setupLANDiscovery() {
-	backend := a.discoveryBackend
-	if backend == nil {
-		backend = discovery.NewMDNSBackend(func(format string, args ...any) {
-			a.tunLogf("局域网发现："+format, args...)
-		})
-	}
-	d := &lanDiscovery{
-		backend: backend,
-	}
-	d.pub = discovery.NewPublisher(discovery.PublisherOptions{
-		Backend: backend,
-		Logf: func(format string, args ...any) {
-			a.tunLogf("局域网发现："+format, args...)
-		},
-		OnChange: func(discovery.Status) {
-			a.invalidateCoalesced()
-		},
-	})
-	d.browser = discovery.NewBrowser(discovery.BrowserOptions{
-		Backend: backend,
-		Logf: func(format string, args ...any) {
-			a.tunLogf("局域网发现："+format, args...)
-		},
-		Emit: func(s discovery.Snapshot) {
-			d.mu.Lock()
-			if !d.shutDown && d.browsing && (d.pending == nil || s.Generation >= d.pending.Generation) {
-				snapshot := s
-				d.pending = &snapshot
-			}
-			d.mu.Unlock()
-			a.invalidateCoalesced()
-		},
-	})
-	a.lanDisc = d
 }
 
 // resumeLANDiscovery runs after the share restored: a share that is already
@@ -307,8 +266,6 @@ func (a *app) retryLANDiscoveryPreference() error {
 	return nil
 }
 
-// ---- browsing ------------------------------------------------------------
-
 // browseInterfaces returns the exact interfaces to browse on. Virtual adapters
 // and point-to-point links are not browsing targets: they are what makes "I
 // found my own VPN" a bug report. The classification is the share panel's own
@@ -405,7 +362,7 @@ func (a *app) localLANBrowseCandidates() []lanCandidate {
 		a.lanDisc.mu.Unlock()
 	}
 	list := lanAddresses{}.LANCandidates()
-	cands := newLANCandidates(list, relay.SubnetOfAddress)
+	cands := newLANCandidates(list, relayfirewall.SubnetOfAddress)
 	if a.lanDisc != nil {
 		// Both copies come from this one list, written under one lock: a reader
 		// can never observe an annotation set that belongs to another list.
@@ -595,8 +552,6 @@ func (a *app) drainLANDiscovery() {
 	d.mu.Unlock()
 }
 
-// ---- host panel ----------------------------------------------------------
-
 // lanShareDiscoveryView is the discovery block of the 局域网分享 panel. It only
 // edits the preference: switching it never restarts the share, revokes the
 // token or touches the access point.
@@ -742,8 +697,6 @@ func (a *app) saveLANDiscoveryName(name string) {
 	}()
 	a.invalidate()
 }
-
-// ---- colleague side ------------------------------------------------------
 
 // relayDiscoveryBody is the 发现局域网分享 list. It shows only what was learned
 // from the network: a name, an address and a port. Joining still needs a code.

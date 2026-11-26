@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
-
 	"github.com/ehzyil/connect-hub/internal/model"
 	"github.com/ehzyil/connect-hub/internal/relay"
+	relayclient "github.com/ehzyil/connect-hub/internal/relay/client"
 	"github.com/ehzyil/connect-hub/internal/routing"
 	"github.com/ehzyil/connect-hub/internal/store"
 	"github.com/ehzyil/connect-hub/internal/vpn"
@@ -70,7 +70,7 @@ func withLANShare(t *testing.T, a *app) *testRelaySink {
 		sink.points[p.ID] = p.Name
 	}
 	ctrl := relay.NewController(store.RelayShareStore{Store: a.store}, sink, emptyNets{}, nil, a.lanShareChanged)
-	a.lanShare = ctrl
+	a.lanShare = relayclient.NewLocal(ctrl)
 	a.lanShareUI.results = make(chan lanShareResult, 4)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -776,7 +776,7 @@ func installLANShareWith(t *testing.T, a *app, sink relay.Sink, nets relay.Netwo
 	t.Helper()
 	// The production notification: discovery follows the share from here.
 	ctrl := relay.NewController(store.RelayShareStore{Store: a.store}, sink, nets, nil, a.lanShareChanged)
-	a.lanShare = ctrl
+	a.lanShare = relayclient.NewLocal(ctrl)
 	a.lanShareUI.results = make(chan lanShareResult, 4)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

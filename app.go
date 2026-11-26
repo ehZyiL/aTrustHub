@@ -23,11 +23,12 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
-
 	"github.com/ehzyil/connect-hub/internal/localapps"
 	"github.com/ehzyil/connect-hub/internal/model"
-	"github.com/ehzyil/connect-hub/internal/relay"
+	relayclient "github.com/ehzyil/connect-hub/internal/relay/client"
+	relaycontract "github.com/ehzyil/connect-hub/internal/relay/contract"
 	"github.com/ehzyil/connect-hub/internal/relay/discovery"
+	relayfirewall "github.com/ehzyil/connect-hub/internal/relay/firewall"
 	"github.com/ehzyil/connect-hub/internal/store"
 	"github.com/ehzyil/connect-hub/internal/vpn"
 )
@@ -52,10 +53,11 @@ type app struct {
 	bus   *vpn.LogBus
 	// lanShare owns A's 局域网分享 lifecycle; lanShareUI and relayImport are its
 	// panel drafts (UI thread only).
-	lanShare      *relay.Controller
+	lanShare      relayclient.Controller
 	lanShareUI    lanShareDraft
 	relayImport   relayImportDraft
 	relayDiagnose relayDiagnoseDraft
+	relayCheck    func(context.Context, relaycontract.ShareCode) ([]string, error)
 	relayPoint    relayPointDraft
 	// lanDisc is the discovery side of 局域网分享: the publisher that follows the
 	// share and the browser that lives only while its page is open.
@@ -74,8 +76,8 @@ type app struct {
 	// fwOnce/fwRules own every firewall rule this app creates; fwSeen remembers
 	// the share state whose rules were already reconciled.
 	fwOnce  sync.Once
-	fwExec  relay.FirewallExecutor
-	fwRules *relay.Rules
+	fwExec  relayfirewall.FirewallExecutor
+	fwRules *relayfirewall.Rules
 	fwSeen  fwSeenState
 	fwQueue firewallQueue
 	// cfg is what the UI thread reads and writes. Background loops must use
@@ -468,11 +470,7 @@ func newApp() (*app, error) {
 		vpn.NewProtocolConnector(vpn.ZJUOptions{
 			DataDir: dir,
 			Debug:   os.Getenv("EASYCONNECT_DEBUG") != "",
-			// A relay node's control channel must never go through the local
-			// proxy or a capture adapter, or it would recurse into itself.
-			RelayDial:         relay.DirectDialer,
-			RelaySaveSnapshot: a.saveRelaySnapshot,
-		}),
+		}, a.relayConnector()),
 		a.credentials,
 		a.bus,
 		// 接入点状态变化也是事件源：合并到 33ms 一帧，交互路径另走即时。

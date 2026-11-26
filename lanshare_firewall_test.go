@@ -12,16 +12,17 @@ import (
 
 	"github.com/ehzyil/connect-hub/internal/model"
 	"github.com/ehzyil/connect-hub/internal/relay"
+	relayfirewall "github.com/ehzyil/connect-hub/internal/relay/firewall"
 )
 
 // appFirewall is a controllable privileged executor for the app-level tests.
 type appFirewall struct {
 	mu      sync.Mutex
-	ops     []relay.FirewallOperation
-	handler func(relay.FirewallOperation) (relay.FirewallResult, error)
+	ops     []relayfirewall.FirewallOperation
+	handler func(relayfirewall.FirewallOperation) (relayfirewall.FirewallResult, error)
 }
 
-func (f *appFirewall) Run(_ context.Context, op relay.FirewallOperation) (relay.FirewallResult, error) {
+func (f *appFirewall) Run(_ context.Context, op relayfirewall.FirewallOperation) (relayfirewall.FirewallResult, error) {
 	f.mu.Lock()
 	f.ops = append(f.ops, op)
 	handler := f.handler
@@ -29,18 +30,18 @@ func (f *appFirewall) Run(_ context.Context, op relay.FirewallOperation) (relay.
 	if handler != nil {
 		return handler(op)
 	}
-	return relay.FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: relay.FirewallRemoved}, nil
+	return relayfirewall.FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: relayfirewall.FirewallRemoved}, nil
 }
 
-func (f *appFirewall) calls() []relay.FirewallOperation {
+func (f *appFirewall) calls() []relayfirewall.FirewallOperation {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]relay.FirewallOperation(nil), f.ops...)
+	return append([]relayfirewall.FirewallOperation(nil), f.ops...)
 }
 
 // installFirewall gives the test app a firewall coordinator with a fake
 // privileged executor. It also prevents the real one from ever being built.
-func installFirewall(t *testing.T, a *app, exec relay.FirewallExecutor) *relay.Rules {
+func installFirewall(t *testing.T, a *app, exec relayfirewall.FirewallExecutor) *relayfirewall.Rules {
 	t.Helper()
 	// Set the executor before the coordinator exists: the coordinator is built
 	// lazily on first use, exactly like in production.
@@ -68,13 +69,13 @@ func testProgramPath(t *testing.T) string {
 	return exe
 }
 
-func firewallAppRule() relay.FirewallRule {
+func firewallAppRule() relayfirewall.FirewallRule {
 	exe, err := os.Executable()
 	if err != nil {
 		exe = filepath.Join(string(filepath.Separator), "opt", "connect-hub")
 	}
-	return relay.FirewallRule{
-		ID:          relay.NewFirewallRuleID(23456, time.Unix(0, 1700000000000000000)),
+	return relayfirewall.FirewallRule{
+		ID:          relayfirewall.NewFirewallRuleID(23456, time.Unix(0, 1700000000000000000)),
 		Name:        "Connect Hub 局域网分享",
 		ProgramPath: exe,
 		Port:        23456,
@@ -91,11 +92,11 @@ func TestDisableRemovesRecordedFirewallRules(t *testing.T) {
 	fake := &appFirewall{}
 	installFirewall(t, a, fake)
 	rule := firewallAppRule()
-	journal, err := relay.LoadFirewallJournal(a.dir)
+	journal, err := relayfirewall.LoadFirewallJournal(a.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := journal.Put(a.dir, relay.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relay.FirewallEntryConfirmed}); err != nil {
+	if err := journal.Put(a.dir, relayfirewall.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relayfirewall.FirewallEntryConfirmed}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -105,14 +106,14 @@ func TestDisableRemovesRecordedFirewallRules(t *testing.T) {
 
 	var deleted bool
 	for _, op := range fake.calls() {
-		if op.Op == relay.FirewallOpDelete && op.RuleID == rule.ID {
+		if op.Op == relayfirewall.FirewallOpDelete && op.RuleID == rule.ID {
 			deleted = true
 		}
 	}
 	if !deleted {
 		t.Fatalf("no delete was requested: %+v", fake.calls())
 	}
-	journal, err = relay.LoadFirewallJournal(a.dir)
+	journal, err = relayfirewall.LoadFirewallJournal(a.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,24 +126,24 @@ func TestDisableRemovesRecordedFirewallRules(t *testing.T) {
 // as done, and the record has to survive for the next start.
 func TestFirewallCleanupFailureKeepsTheRecord(t *testing.T) {
 	a := testApp(t)
-	fake := &appFirewall{handler: func(op relay.FirewallOperation) (relay.FirewallResult, error) {
-		return relay.FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: relay.FirewallDenied, Detail: "系统拒绝授权"}, nil
+	fake := &appFirewall{handler: func(op relayfirewall.FirewallOperation) (relayfirewall.FirewallResult, error) {
+		return relayfirewall.FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: relayfirewall.FirewallDenied, Detail: "系统拒绝授权"}, nil
 	}}
 	installFirewall(t, a, fake)
 	rule := firewallAppRule()
-	journal, _ := relay.LoadFirewallJournal(a.dir)
-	if err := journal.Put(a.dir, relay.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relay.FirewallEntryConfirmed}); err != nil {
+	journal, _ := relayfirewall.LoadFirewallJournal(a.dir)
+	if err := journal.Put(a.dir, relayfirewall.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relayfirewall.FirewallEntryConfirmed}); err != nil {
 		t.Fatal(err)
 	}
 	a.doReconcileLanShareFirewall(a.lanShareViewState())
 	if a.firewallErr == "" {
 		t.Fatal("a failed cleanup was not reported")
 	}
-	journal, _ = relay.LoadFirewallJournal(a.dir)
+	journal, _ = relayfirewall.LoadFirewallJournal(a.dir)
 	if journal.Find(rule.ID) == nil {
 		t.Fatal("a failed cleanup discarded the recovery record")
 	}
-	if journal.Find(rule.ID).State == relay.FirewallEntryConfirmed {
+	if journal.Find(rule.ID).State == relayfirewall.FirewallEntryConfirmed {
 		t.Fatal("a failed cleanup still claims the rule is in place")
 	}
 }
@@ -166,14 +167,14 @@ func TestQuitKeepsTheShareIntentButCleansRules(t *testing.T) {
 		t.Fatalf("Enable: %v", err)
 	}
 	view := a.lanShare.View()
-	rule := relay.FirewallRule{
-		ID:          relay.NewFirewallRuleID(view.Port, time.Unix(0, 1)),
+	rule := relayfirewall.FirewallRule{
+		ID:          relayfirewall.NewFirewallRuleID(view.Port, time.Unix(0, 1)),
 		ProgramPath: filepath.Join(string(filepath.Separator), "opt", "connect-hub"),
 		Port:        view.Port,
 		Profile:     "private",
 	}
-	journal, _ := relay.LoadFirewallJournal(a.dir)
-	if err := journal.Put(a.dir, relay.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relay.FirewallEntryConfirmed}); err != nil {
+	journal, _ := relayfirewall.LoadFirewallJournal(a.dir)
+	if err := journal.Put(a.dir, relayfirewall.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relayfirewall.FirewallEntryConfirmed}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -184,7 +185,7 @@ func TestQuitKeepsTheShareIntentButCleansRules(t *testing.T) {
 	if settings := a.store.Config().Settings.LANShare; !settings.Enabled {
 		t.Fatal("quit discarded the share intent")
 	}
-	journal, _ = relay.LoadFirewallJournal(a.dir)
+	journal, _ = relayfirewall.LoadFirewallJournal(a.dir)
 	if journal.Find(rule.ID) != nil {
 		t.Fatal("quitting left the inbound rule behind")
 	}
@@ -205,13 +206,13 @@ func TestDeletedRelayNodeRemovesItsRule(t *testing.T) {
 	fake := &appFirewall{}
 	installFirewall(t, a, fake)
 	rule := firewallAppRule()
-	journal, _ := relay.LoadFirewallJournal(a.dir)
-	if err := journal.Put(a.dir, relay.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relay.FirewallEntryConfirmed}); err != nil {
+	journal, _ := relayfirewall.LoadFirewallJournal(a.dir)
+	if err := journal.Put(a.dir, relayfirewall.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relayfirewall.FirewallEntryConfirmed}); err != nil {
 		t.Fatal(err)
 	}
 	a.removePoint("node-1")
 	a.awaitFirewall(t)
-	journal, _ = relay.LoadFirewallJournal(a.dir)
+	journal, _ = relayfirewall.LoadFirewallJournal(a.dir)
 	if journal.Find(rule.ID) != nil {
 		t.Fatal("the rule of a removed node survived")
 	}
@@ -228,7 +229,7 @@ func TestFirewallRefusesToGuessTheSubnet(t *testing.T) {
 		t.Fatalf("an unknown subnet was not refused: %q", a.firewallErr)
 	}
 	for _, op := range fake.calls() {
-		if op.Op == relay.FirewallOpApply {
+		if op.Op == relayfirewall.FirewallOpApply {
 			t.Fatalf("a rule was created without a verified subnet: %+v", op)
 		}
 	}
@@ -240,13 +241,13 @@ func TestDesiredRulesMatchTheRunningShareExactly(t *testing.T) {
 	a := testApp(t)
 	installFirewall(t, a, &appFirewall{})
 	exe := testProgramPath(t)
-	base := relay.FirewallRule{ID: relay.FirewallRulePrefix + "1", ProgramPath: exe, Port: 23456, Profile: "private", RemoteIP: "192.168.31.0/24"}
+	base := relayfirewall.FirewallRule{ID: relayfirewall.FirewallRulePrefix + "1", ProgramPath: exe, Port: 23456, Profile: "private", RemoteIP: "192.168.31.0/24"}
 	other := base
-	other.ID = relay.FirewallRulePrefix + "2"
+	other.ID = relayfirewall.FirewallRulePrefix + "2"
 	other.RemoteIP = "10.0.0.0/8"
-	journal, _ := relay.LoadFirewallJournal(a.dir)
-	for _, rule := range []relay.FirewallRule{base, other} {
-		if err := journal.Put(a.dir, relay.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relay.FirewallEntryConfirmed}); err != nil {
+	journal, _ := relayfirewall.LoadFirewallJournal(a.dir)
+	for _, rule := range []relayfirewall.FirewallRule{base, other} {
+		if err := journal.Put(a.dir, relayfirewall.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relayfirewall.FirewallEntryConfirmed}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -293,8 +294,8 @@ func TestFirewallSeenStateIsRaceFree(t *testing.T) {
 func TestQuitWaitsForFirewallCleanup(t *testing.T) {
 	a := testApp(t)
 	released := make(chan struct{})
-	fake := &appFirewall{handler: func(op relay.FirewallOperation) (relay.FirewallResult, error) {
-		if op.Op == relay.FirewallOpDelete {
+	fake := &appFirewall{handler: func(op relayfirewall.FirewallOperation) (relayfirewall.FirewallResult, error) {
+		if op.Op == relayfirewall.FirewallOpDelete {
 			time.Sleep(120 * time.Millisecond)
 			select {
 			case <-released:
@@ -302,17 +303,17 @@ func TestQuitWaitsForFirewallCleanup(t *testing.T) {
 				close(released)
 			}
 		}
-		return relay.FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: relay.FirewallRemoved}, nil
+		return relayfirewall.FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: relayfirewall.FirewallRemoved}, nil
 	}}
 	installFirewall(t, a, fake)
 	rule := firewallAppRule()
-	journal, _ := relay.LoadFirewallJournal(a.dir)
-	if err := journal.Put(a.dir, relay.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relay.FirewallEntryConfirmed}); err != nil {
+	journal, _ := relayfirewall.LoadFirewallJournal(a.dir)
+	if err := journal.Put(a.dir, relayfirewall.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relayfirewall.FirewallEntryConfirmed}); err != nil {
 		t.Fatal(err)
 	}
 	a.shutdownLANShare()
 	// No awaitFirewall here on purpose: shutdown itself must have waited.
-	journal, err := relay.LoadFirewallJournal(a.dir)
+	journal, err := relayfirewall.LoadFirewallJournal(a.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,11 +367,11 @@ func TestFirewallSchedulerConverges(t *testing.T) {
 	fake := &appFirewall{}
 	installFirewall(t, a, fake)
 	rule := firewallAppRule()
-	journal, err := relay.LoadFirewallJournal(a.dir)
+	journal, err := relayfirewall.LoadFirewallJournal(a.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := journal.Put(a.dir, relay.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relay.FirewallEntryConfirmed}); err != nil {
+	if err := journal.Put(a.dir, relayfirewall.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relayfirewall.FirewallEntryConfirmed}); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
@@ -389,7 +390,7 @@ func TestFirewallSchedulerConverges(t *testing.T) {
 	if !a.awaitFirewallIdle(10 * time.Second) {
 		t.Fatal("the queue never became idle")
 	}
-	journal, err = relay.LoadFirewallJournal(a.dir)
+	journal, err = relayfirewall.LoadFirewallJournal(a.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,25 +409,25 @@ func TestRestoredWaitingShareReusesItsFirewallRule(t *testing.T) {
 	installFirewall(t, a, fake)
 	rule := firewallAppRule()
 	rule.RemoteIP = "192.168.31.0/24"
-	fake.handler = func(op relay.FirewallOperation) (relay.FirewallResult, error) {
+	fake.handler = func(op relayfirewall.FirewallOperation) (relayfirewall.FirewallResult, error) {
 		switch op.Op {
-		case relay.FirewallOpQuery:
-			return relay.FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: relay.FirewallPresent, State: matchingAppState(rule)}, nil
-		case relay.FirewallOpDelete:
-			return relay.FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: relay.FirewallRemoved}, nil
+		case relayfirewall.FirewallOpQuery:
+			return relayfirewall.FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: relayfirewall.FirewallPresent, State: matchingAppState(rule)}, nil
+		case relayfirewall.FirewallOpDelete:
+			return relayfirewall.FirewallResult{OperationID: op.OperationID, Op: op.Op, Outcome: relayfirewall.FirewallRemoved}, nil
 		}
-		return relay.FirewallResult{Outcome: relay.FirewallPresent}, nil
+		return relayfirewall.FirewallResult{Outcome: relayfirewall.FirewallPresent}, nil
 	}
-	journal, err := relay.LoadFirewallJournal(a.dir)
+	journal, err := relayfirewall.LoadFirewallJournal(a.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := journal.Put(a.dir, relay.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relay.FirewallEntryConfirmed}); err != nil {
+	if err := journal.Put(a.dir, relayfirewall.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relayfirewall.FirewallEntryConfirmed}); err != nil {
 		t.Fatal(err)
 	}
 	for _, state := range []relay.State{relay.StateWaiting, relay.StateStarting} {
 		a.doReconcileLanShareFirewall(relay.View{State: state, Port: rule.Port, Address: "192.168.31.61"})
-		journal, err = relay.LoadFirewallJournal(a.dir)
+		journal, err = relayfirewall.LoadFirewallJournal(a.dir)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -436,10 +437,10 @@ func TestRestoredWaitingShareReusesItsFirewallRule(t *testing.T) {
 	}
 	// A blocked or stopped share has nothing to serve, so the rule goes.
 	for _, state := range []relay.State{relay.StateBlocked, relay.StateOff} {
-		journal, _ := relay.LoadFirewallJournal(a.dir)
-		_ = journal.Put(a.dir, relay.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relay.FirewallEntryConfirmed})
+		journal, _ := relayfirewall.LoadFirewallJournal(a.dir)
+		_ = journal.Put(a.dir, relayfirewall.FirewallJournalEntry{Rule: rule, OperationID: rule.ID, State: relayfirewall.FirewallEntryConfirmed})
 		a.doReconcileLanShareFirewall(relay.View{State: state, Port: rule.Port, Address: "192.168.31.61"})
-		journal, _ = relay.LoadFirewallJournal(a.dir)
+		journal, _ = relayfirewall.LoadFirewallJournal(a.dir)
 		if journal.Find(rule.ID) != nil {
 			t.Fatalf("%s 状态下留下了不再需要的放行规则", state)
 		}
@@ -447,8 +448,8 @@ func TestRestoredWaitingShareReusesItsFirewallRule(t *testing.T) {
 }
 
 // matchingAppState is what the system reports for a rule this app created.
-func matchingAppState(rule relay.FirewallRule) relay.FirewallRuleState {
-	return relay.FirewallRuleState{
+func matchingAppState(rule relayfirewall.FirewallRule) relayfirewall.FirewallRuleState {
+	return relayfirewall.FirewallRuleState{
 		Name:          rule.ID,
 		Direction:     "Inbound",
 		Action:        "Allow",

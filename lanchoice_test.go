@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
-
 	"github.com/ehzyil/connect-hub/internal/model"
 	"github.com/ehzyil/connect-hub/internal/relay"
+	relayfirewall "github.com/ehzyil/connect-hub/internal/relay/firewall"
 )
 
 // 选择网络的提示必须能让人一眼判断：子网是否和同事相同、是不是虚拟网卡、哪个是推荐。
@@ -129,7 +129,7 @@ func TestLANSharePanelRecommendsTheReachableAdapter(t *testing.T) {
 	tt := ui.NewTester(a.view, 880, 600)
 	texts := strings.Join(tt.Texts(), "|")
 
-	cands := newLANCandidates(list, relay.SubnetOfAddress)
+	cands := newLANCandidates(list, relayfirewall.SubnetOfAddress)
 	pick := recommendLAN(cands, outboundIPv4())
 	if pick < 0 {
 		t.Skip("no LAN-sized physical adapter on this host")
@@ -138,7 +138,7 @@ func TestLANSharePanelRecommendsTheReachableAdapter(t *testing.T) {
 	if !strings.Contains(texts, "（推荐）") {
 		t.Fatalf("the picker does not mark a recommendation: %s", texts)
 	}
-	subnet, err := relay.SubnetOfAddress(want)
+	subnet, err := relayfirewall.SubnetOfAddress(want)
 	if err != nil {
 		t.Fatalf("SubnetOfAddress(%s): %v", want, err)
 	}
@@ -176,7 +176,7 @@ func TestRunningSharePanelShowsTheSubnetHint(t *testing.T) {
 	echo, closeEcho := echoListenerForTest(t)
 	defer closeEcho()
 	ctrl := installLANShareWith(t, a, &appTestSink{names: map[string]string{"p1": "公司 VPN"}, echo: echo}, lanAddresses{})
-	cands := newLANCandidates(list, relay.SubnetOfAddress)
+	cands := newLANCandidates(list, relayfirewall.SubnetOfAddress)
 	pick := recommendLAN(cands, outboundIPv4())
 	if pick < 0 {
 		t.Skip("no LAN-sized physical adapter on this host")
@@ -188,7 +188,7 @@ func TestRunningSharePanelShowsTheSubnetHint(t *testing.T) {
 	a.openLANShare()
 	tt := ui.NewTester(a.view, 880, 620)
 	texts := strings.Join(tt.Texts(), "|")
-	subnet, err := relay.SubnetOfAddress(pickAddr)
+	subnet, err := relayfirewall.SubnetOfAddress(pickAddr)
 	if err != nil {
 		t.Fatalf("SubnetOfAddress(%s): %v", pickAddr, err)
 	}

@@ -5,10 +5,9 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo/ui"
-
 	"github.com/ehzyil/connect-hub/internal/model"
-	"github.com/ehzyil/connect-hub/internal/relay"
-	"github.com/ehzyil/connect-hub/internal/relay/discovery"
+	relay "github.com/ehzyil/connect-hub/internal/relay/contract"
+	discovery "github.com/ehzyil/connect-hub/internal/relay/discovery/contract"
 )
 
 // relayImportDraft is the 同事分享 import panel. Preview is local: parsing and

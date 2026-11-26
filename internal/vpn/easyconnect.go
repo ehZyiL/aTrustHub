@@ -21,30 +21,19 @@ import (
 
 	"github.com/ehzyil/connect-hub/internal/model"
 	hubproxy "github.com/ehzyil/connect-hub/internal/proxy"
+	session "github.com/ehzyil/connect-hub/internal/vpn/contract"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
 	"github.com/miekg/dns"
 	"golang.org/x/net/proxy"
 )
 
-// NewProtocolConnector dispatches explicitly. Three protocols exist and an
-// unknown value is refused: a LAN relay node must never accidentally run the
-// aTrust login with a share token as its password.
-func NewProtocolConnector(options ZJUOptions) Connector {
+// NewProtocolConnector registers built-in protocols and explicitly supplied
+// optional connectors. Missing protocols fail before any login or network IO.
+func NewProtocolConnector(options ZJUOptions, optional ...Registration) Connector {
 	atrust := NewZJUConnector(options)
 	easy := NewEasyConnectConnector("")
-	lan := NewRelayConnector(RelayConnectorOptions{Dial: options.RelayDial, SaveSnapshot: options.RelaySaveSnapshot})
-	return func(ctx context.Context, point model.AccessPoint, creds Credentials) (Session, error) {
-		switch point.Protocol {
-		case model.ProtocolEasyConnect:
-			return easy(ctx, point, creds)
-		case model.ProtocolLANRelay:
-			return lan(ctx, point, creds)
-		case model.ProtocolATrust, "":
-			return atrust(ctx, point, creds)
-		default:
-			return nil, fmt.Errorf("不支持的 VPN 协议：%q", point.Protocol)
-		}
-	}
+	return Dispatch(append([]Registration{{Protocol: model.ProtocolATrust, Connect: atrust},
+		{Protocol: model.ProtocolEasyConnect, Connect: easy}}, optional...)...)
 }
 
 // workerPath deliberately avoids PATH or the current working directory.
@@ -204,8 +193,6 @@ type processSession struct {
 	dnsSlots    chan struct{}
 	flows       atomic.Pointer[flowDials]
 }
-
-var ErrStrictVPNUnavailable = errors.New("当前核心不支持严格 VPN 拨号，请更新配套核心")
 
 func (s *processSession) configureReady(m workeripc.Message, password string) error {
 	validAddress := func(address string) bool {
@@ -381,6 +368,7 @@ func (s *processSession) setError(err error) {
 		s.err = err
 	}
 }
+
 func (s *processSession) Err() error {
 	s.errMu.Lock()
 	defer s.errMu.Unlock()
@@ -389,10 +377,13 @@ func (s *processSession) Err() error {
 	}
 	return s.err
 }
+
 func (s *processSession) Done() <-chan struct{} { return s.done }
+
 func (s *processSession) Info() SessionInfo {
 	return cloneSessionInfo(s.info)
 }
+
 func (s *processSession) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	if network != "tcp" && network != "tcp4" {
 		return nil, errors.New("EasyConnect 桌面代理目前只支持 TCP")
@@ -504,3 +495,5 @@ func (s *processSession) ProbeDNS(ctx context.Context) error {
 	}
 	return errProbeUnavailable
 }
+
+var ErrStrictVPNUnavailable = session.ErrStrictVPNUnavailable

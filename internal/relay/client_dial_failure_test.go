@@ -52,7 +52,8 @@ func TestClosedShareReportsAHostRefusal(t *testing.T) {
 	addr := ln.Addr().(*net.TCPAddr)
 	_ = ln.Close()
 
-	code := validShare()
+	code := ShareCode{Version: 1, Host: "192.168.1.50", Port: 23456,
+		Fingerprint: strings.Repeat("ab", 32)}
 	code.Host = "127.0.0.1"
 	code.Port = addr.Port
 	client, err := NewClient(ClientOptions{Code: code})

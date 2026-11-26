@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ehzyil/connect-hub/internal/relay"
+	relayfirewall "github.com/ehzyil/connect-hub/internal/relay/firewall"
 	"github.com/ehzyil/connect-hub/internal/wincapture"
 	"golang.org/x/sys/windows"
 )
@@ -40,11 +40,11 @@ func main() {
 			*parent == 0 || *created == 0 || uint64(*parent) > 0xffffffff {
 			os.Exit(2)
 		}
-		if err := relay.VerifyLaunchCaller(relay.ProcessIdentity{PID: uint32(*parent), Created: *created}); err != nil {
+		if err := relayfirewall.VerifyLaunchCaller(relayfirewall.ProcessIdentity{PID: uint32(*parent), Created: *created}); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		if err := relay.FirewallHelperMain(*firewallOp, *firewallResult); err != nil {
+		if err := relayfirewall.FirewallHelperMain(*firewallOp, *firewallResult); err != nil {
 			fmt.Fprintln(os.Stderr, "firewall helper stopped")
 			os.Exit(1)
 		}

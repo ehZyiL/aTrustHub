@@ -1,4 +1,4 @@
-package relay
+package firewall
 
 // This script is the only privileged work the helper performs. It is kept in a
 // portable file so its contract (BOM-less UTF-8 output, structured parameters)

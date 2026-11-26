@@ -2,7 +2,6 @@ package vpn
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -19,53 +18,28 @@ import (
 // update. The review's reproducer: consumeUpdates ran synchronously before
 // watch, so a healthy Updates channel kept Done from ever being observed.
 func TestDeadRelaySessionLeavesOnlineWithoutUpdates(t *testing.T) {
-	code := relay.ShareCode{Version: 1, Host: "192.168.1.50", Port: 12345, Fingerprint: strings.Repeat("ab", 32)}
-	c, err := relay.NewClient(relay.ClientOptions{Code: code})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sess := &relaySession{client: c, done: make(chan struct{}), updates: make(chan SessionUpdate), ctx: ctx, cancel: cancel}
+	sess := &endedUpdaterSession{updaterSession: &updaterSession{fakeSession: newFakeSession("r1"), updates: make(chan SessionUpdate)}, done: make(chan struct{})}
 	m := newTestManager(t, func(context.Context, model.AccessPoint, Credentials) (Session, error) {
 		return sess, nil
 	}, testConfig(model.AccessPoint{ID: "r1", Name: "relay", Protocol: model.ProtocolLANRelay, Server: "192.168.1.50", Port: 12345, InPool: true}))
 	m.Connect("r1")
 	waitFor(t, "online", func() bool { v, _ := m.View("r1"); return v.State == StateOnline })
 
-	sess.fail(relay.NewError(relay.CodeShareClosed, "closed"))
+	close(sess.done)
 	waitFor(t, "offline after the session ended", func() bool {
 		v, _ := m.View("r1")
 		return v.State != StateOnline
 	})
 }
 
-// R6: the friendly wording replaced the typed error with errors.New, so a
-// terminal share failure looked reconnectable again.
-func TestFriendlyRelayErrorKeepsTerminalClassification(t *testing.T) {
-	terminal := []relay.Code{relay.CodeShareClosed, relay.CodeInvalidCredentials, relay.CodeProtocolUnsupported}
-	for _, code := range terminal {
-		friendly := friendlyRelayError(relay.NewError(code, "raw"))
-		if RelayReconnectable(friendly) {
-			t.Fatalf("%s became reconnectable after presentation: %v", code, friendly)
-		}
-		var re *relay.Error
-		if !errors.As(friendly, &re) || re.Code != code {
-			t.Fatalf("%s lost its type through presentation: %v", code, friendly)
-		}
-		if strings.Contains(friendly.Error(), "raw") {
-			t.Fatalf("%s still shows the protocol text: %v", code, friendly)
-		}
-	}
-	// Transient failures must keep their bounded reconnect budget.
-	if !RelayReconnectable(friendlyRelayError(relay.NewError(relay.CodeVPNUnavailable, "broken pipe"))) {
-		t.Fatal("a transient share error stopped being reconnectable")
-	}
-	// A plain error is not a share error and keeps the old behaviour.
-	if !RelayReconnectable(errors.New("dial failed")) {
-		t.Fatal("plain errors must stay reconnectable")
-	}
+type endedUpdaterSession struct {
+	*updaterSession
+	done chan struct{}
 }
+
+func (s *endedUpdaterSession) Done() <-chan struct{} { return s.done }
+
+func (s *endedUpdaterSession) Err() error { return relay.NewError(relay.CodeShareClosed, "closed") }
 
 // updaterSession publishes resource snapshots on demand.
 type updaterSession struct {
@@ -152,39 +126,6 @@ func hasRule(m *Manager, id, prefix string) bool {
 		}
 	}
 	return false
-}
-
-// R1 (cleanup half): fail must still be reaped by the Manager's Close, not
-// return early because the session already marked itself closed.
-func TestFailedRelaySessionIsStillReaped(t *testing.T) {
-	code := relay.ShareCode{Version: 1, Host: "192.168.1.50", Port: 12345, Fingerprint: strings.Repeat("ab", 32)}
-	c, err := relay.NewClient(relay.ClientOptions{Code: code})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sess := &relaySession{client: c, done: make(chan struct{}), updates: make(chan SessionUpdate, 4), ctx: ctx, cancel: cancel}
-	sess.fail(relay.NewError(relay.CodeShareClosed, "closed"))
-	// Close after fail must finish cleanup instead of returning early.
-	done := make(chan struct{})
-	go func() {
-		_ = sess.Close()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Close blocked after fail")
-	}
-	select {
-	case _, open := <-sess.updates:
-		if open {
-			t.Fatal("unexpected update after the session ended")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("the update stream was never closed after fail")
-	}
 }
 
 // R2: history must survive a later, smaller snapshot. The review's reproducer:

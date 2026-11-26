@@ -8,15 +8,10 @@ import (
 	"strings"
 	"time"
 
+	session "github.com/ehzyil/connect-hub/internal/vpn/contract"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
 	"github.com/miekg/dns"
 )
-
-// DNSExchanger is optional; aTrust sessions retain their existing behavior.
-// It only accepts internal DNS questions scoped to this EasyConnect session.
-type DNSExchanger interface {
-	ExchangeDNS(context.Context, []byte) ([]byte, error)
-}
 
 // ExchangeDNS binds one diagnostic to the current session and discards a late
 // response if the endpoint was disconnected or replaced in the meantime.
@@ -158,3 +153,5 @@ func (s *processSession) exchangeDNSReply(ctx context.Context, packet []byte, ca
 		return result, nil
 	}
 }
+
+type DNSExchanger = session.DNSExchanger

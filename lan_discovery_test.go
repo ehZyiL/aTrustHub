@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
-
 	"github.com/ehzyil/connect-hub/internal/model"
 	"github.com/ehzyil/connect-hub/internal/relay"
+	relayadapter "github.com/ehzyil/connect-hub/internal/relay/adapter"
 	"github.com/ehzyil/connect-hub/internal/relay/discovery"
 	"github.com/ehzyil/connect-hub/internal/vpn"
 )
@@ -738,10 +738,10 @@ func TestLiveDiscoveryJoinEndToEnd(t *testing.T) {
 	b.mgr.Close()
 	b.mgr = vpn.NewManager(
 		vpn.NewProtocolConnector(vpn.ZJUOptions{
-			DataDir:           t.TempDir(),
-			RelayDial:         relay.DirectDialer,
-			RelaySaveSnapshot: b.saveRelaySnapshot,
-		}),
+			DataDir: t.TempDir(),
+		}, vpn.Registration{Protocol: model.ProtocolLANRelay, Connect: relayadapter.NewConnector(relayadapter.Options{
+			Dial: relay.DirectDialer, SaveSnapshot: b.saveRelaySnapshot,
+		})}),
 		b.credentials, b.bus, b.invalidateCoalesced,
 	)
 	t.Cleanup(b.mgr.Close)

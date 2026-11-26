@@ -8,7 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/ehzyil/connect-hub/internal/relay"
+	relay "github.com/ehzyil/connect-hub/internal/relay/contract"
 	"github.com/ehzyil/connect-hub/internal/routing"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
 	"github.com/miekg/dns"

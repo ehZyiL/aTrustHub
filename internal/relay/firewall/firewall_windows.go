@@ -1,6 +1,6 @@
 //go:build windows
 
-package relay
+package firewall
 
 import (
 	"bytes"

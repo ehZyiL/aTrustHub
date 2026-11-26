@@ -11,9 +11,10 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
-
+	"github.com/ehzyil/connect-hub/internal/components"
 	"github.com/ehzyil/connect-hub/internal/model"
-	"github.com/ehzyil/connect-hub/internal/relay"
+	relay "github.com/ehzyil/connect-hub/internal/relay/contract"
+	relayfirewall "github.com/ehzyil/connect-hub/internal/relay/firewall"
 	"github.com/ehzyil/connect-hub/internal/store"
 	"github.com/ehzyil/connect-hub/internal/vpn"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
@@ -61,29 +62,6 @@ type lanShareDraft struct {
 	// panel offers a retry.
 	discoverySavePending bool
 	results              chan lanShareResult
-}
-
-// relaySink binds the relay controller to the app's manager and configuration.
-type relaySink struct{ a *app }
-
-func (s relaySink) AcquireSource(ctx context.Context, pointID string) (relay.Source, error) {
-	if s.a.mgr == nil {
-		return nil, relay.ErrPointNotReady
-	}
-	return s.a.mgr.AcquireRelayShareSource(pointID)
-}
-
-func (s relaySink) PointName(pointID string) string {
-	cfg := s.a.configForBackground()
-	if p := cfg.Find(pointID); p != nil {
-		return p.Name
-	}
-	return ""
-}
-
-func (s relaySink) PointExists(pointID string) bool {
-	cfg := s.a.configForBackground()
-	return cfg.Find(pointID) != nil
 }
 
 // lanAddresses enumerates the addresses a share may bind: up, non-loopback
@@ -167,24 +145,6 @@ func virtualInterface(name string) bool {
 	return false
 }
 
-// setupLANShare wires the controller. It runs after the manager exists, and it
-// only prepares: Restore is what may resume a previously enabled share.
-func (a *app) setupLANShare() {
-	a.lanShare = relay.NewController(
-		store.RelayShareStore{Store: a.store},
-		relaySink{a: a},
-		lanAddresses{},
-		func(format string, args ...any) {
-			if a.bus != nil {
-				a.bus.Add("app", fmt.Sprintf(format, args...))
-			}
-		},
-		a.lanShareChanged,
-	)
-	a.lanShareUI.results = make(chan lanShareResult, 4)
-	a.setupLANDiscovery()
-}
-
 // lanShareChanged is the controller's change notification. Discovery follows the
 // share from here, not from the render loop.
 func (a *app) lanShareChanged() {
@@ -224,7 +184,7 @@ func (a *app) shutdownLANShare() {
 	// but it does get a bounded chance to finish before the process exits.
 	a.cancelPendingFirewallOps()
 	a.reconcileLanShareFirewall(a.lanShareViewState())
-	if !a.awaitFirewallIdle(relay.FirewallShutdownBudget) {
+	if !a.awaitFirewallIdle(relayfirewall.FirewallShutdownBudget) {
 		a.tunLogf("局域网分享：防火墙规则清理未在退出前完成，已保留待处理记录")
 	}
 }
@@ -233,8 +193,6 @@ func (a *app) shutdownLANShare() {
 func (a *app) lanShareEnabled() bool {
 	return a.lanShare != nil && a.lanShare.View().Enabled
 }
-
-// ---- UI ------------------------------------------------------------------
 
 // lanShareStrip is the compact status line under the toolbar. It only appears
 // while sharing is enabled, so it costs no room when the feature is unused.
@@ -315,6 +273,9 @@ func (a *app) lanShareSection(c *ui.Context) {
 }
 
 func lanShareStateText(view relay.View) string {
+	if view.FailureCode == "unavailable" {
+		return "分享组件不可用：" + view.Failure
+	}
 	switch view.State {
 	case relay.StateRunning:
 		if view.Clients > 0 {
@@ -533,7 +494,7 @@ func lanChoiceLabel(cand lanCandidate, recommended bool) string {
 // shows the subnet and the most likely one is marked: the default route when it
 // is a real LAN, otherwise the first LAN-sized physical adapter.
 func (a *app) relayInterfaceChoices() ([]string, map[string]relay.Interface) {
-	cands := newLANCandidates(lanAddresses{}.LANCandidates(), relay.SubnetOfAddress)
+	cands := newLANCandidates(lanAddresses{}.LANCandidates(), relayfirewall.SubnetOfAddress)
 	pick := recommendLAN(cands, outboundIPv4())
 	labels := make([]string, 0, len(cands))
 	byLabel := make(map[string]relay.Interface, len(cands))
@@ -575,6 +536,13 @@ func (a *app) lanShareView(c *ui.Context) {
 	ui.Modal(c, &d.open, func() {
 		ui.Column(c).Width(dialogRegular).Gap(10).Children(func() {
 			dialogHeader(c, "局域网分享", lanShareStateText(view))
+			if a.lanShare == nil || a.lanShare.Component().Availability != components.Ready {
+				ui.Text(c, "分享组件不可用，请检查安装包；基础 VPN 连接仍可使用。").Wrap()
+				if ui.Button(c, "关闭面板").Clicked() {
+					d.open = false
+				}
+				return
+			}
 			ui.Scroll(c).MaxHeight(a.dialogBodyMaxHeight()).MinHeight(0).
 				ScrollbarInsets(4, 2, 4, 0).Children(func() {
 				ui.Column(c).Padding(0, 14, 8, 0).Gap(10).Children(func() {
@@ -697,7 +665,7 @@ func (a *app) lanShareEnableForm(c *ui.Context, d *lanShareDraft) {
 		}
 		if current == "" {
 			// No remembered choice: start on the recommendation, if there is one.
-			cands := newLANCandidates(lanAddresses{}.LANCandidates(), relay.SubnetOfAddress)
+			cands := newLANCandidates(lanAddresses{}.LANCandidates(), relayfirewall.SubnetOfAddress)
 			if pick := recommendLAN(cands, outboundIPv4()); pick >= 0 {
 				for label, cand := range iaByLabel {
 					if cand.IPv4 == cands[pick].iface.IPv4 {
@@ -749,7 +717,7 @@ func (a *app) lanShareManageBody(c *ui.Context, d *lanShareDraft, view relay.Vie
 	t := c.Theme()
 	subnet := ""
 	if view.Address != "" {
-		if got, err := relay.SubnetOfAddress(view.Address); err == nil {
+		if got, err := relayfirewall.SubnetOfAddress(view.Address); err == nil {
 			subnet = got
 		}
 	}
@@ -794,7 +762,7 @@ func (a *app) lanShareManageBody(c *ui.Context, d *lanShareDraft, view relay.Vie
 	}
 	a.lanShareDiscoveryView(c, view)
 	if view.State == relay.StateRunning {
-		info := relay.FirewallInfo()
+		info := relayfirewall.FirewallInfo()
 		ui.Column(c).Gap(3).Children(func() {
 			for _, line := range info.Lines {
 				ui.Text(c, line).FontSize(11).TextColor(t.TextMuted).Wrap()
@@ -1190,6 +1158,13 @@ type relayDiagnoseResult struct {
 	err   error
 }
 
+func (a *app) checkRelay(ctx context.Context, code relay.ShareCode) ([]string, error) {
+	if a.relayCheck == nil {
+		return nil, errors.New("分享诊断组件不可用")
+	}
+	return a.relayCheck(ctx, code)
+}
+
 // relayCodeForPoint rebuilds the share code of an imported node from the stored
 // metadata and the credential store. It never prints the token.
 func (a *app) relayCodeForPoint(p *model.AccessPoint) (relay.ShareCode, error) {
@@ -1237,8 +1212,8 @@ func (a *app) openRelayDiagnose(pointID string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		report := relay.Diagnose(ctx, code, relay.DiagnoseOptions{})
-		res := relayDiagnoseResult{lines: relay.FormatReport(report)}
+		lines, err := a.checkRelay(ctx, code)
+		res := relayDiagnoseResult{lines: lines, err: err}
 		d.results <- res
 		a.invalidate()
 	}()

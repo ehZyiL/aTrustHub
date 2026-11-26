@@ -1,6 +1,8 @@
-package relay
+package contract
 
-import "testing"
+import (
+	"testing"
+)
 
 // A VPN session may list an address where a domain is expected. Such an entry
 // cannot be published, but it must not make the whole share unusable either:

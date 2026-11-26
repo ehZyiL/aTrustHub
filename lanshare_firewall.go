@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
-
-	"github.com/ehzyil/connect-hub/internal/relay"
+	relay "github.com/ehzyil/connect-hub/internal/relay/contract"
+	relayfirewall "github.com/ehzyil/connect-hub/internal/relay/firewall"
 )
 
 // This file owns every firewall rule the app creates. Rules outlive the process,
@@ -20,13 +20,13 @@ import (
 
 // firewallRules is the process-wide coordinator. It is created on first use so a
 // test app without a data directory never touches the disk.
-func (a *app) firewallRules() *relay.Rules {
+func (a *app) firewallRules() *relayfirewall.Rules {
 	a.fwOnce.Do(func() {
 		exec := a.fwExec
 		if exec == nil {
-			exec = relay.NewElevatedFirewall()
+			exec = relayfirewall.NewElevatedFirewall()
 		}
-		a.fwRules = relay.NewRules(a.dir, exec, func(format string, args ...any) {
+		a.fwRules = relayfirewall.NewRules(a.dir, exec, func(format string, args ...any) {
 			if a.bus != nil {
 				a.bus.Add("app", fmt.Sprintf(format, args...))
 			}
@@ -185,7 +185,7 @@ func (a *app) doReconcileLanShareFirewall(view relay.View) {
 	if err != nil {
 		a.setFirewallError(err.Error())
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), relay.FirewallOpBudget)
+	ctx, cancel := context.WithTimeout(context.Background(), relayfirewall.FirewallOpBudget)
 	defer cancel()
 	var errs []error
 	if len(desired) > 0 {
@@ -237,7 +237,7 @@ func (a *app) setFirewallError(msg string) {
 // A share that is starting or waiting for its VPN keeps its rule: it is on its way
 // back to serving the same instance, and deleting the rule would make the user
 // approve a new elevation prompt on every restart.
-func (a *app) desiredFirewallRules(view relay.View) ([]relay.FirewallRule, error) {
+func (a *app) desiredFirewallRules(view relay.View) ([]relayfirewall.FirewallRule, error) {
 	port, address := view.Port, view.Address
 	switch view.State {
 	case relay.StateRunning:
@@ -257,13 +257,13 @@ func (a *app) desiredFirewallRules(view relay.View) ([]relay.FirewallRule, error
 	if port == 0 {
 		return nil, nil
 	}
-	journal, err := relay.LoadFirewallJournal(a.dir)
+	journal, err := relayfirewall.LoadFirewallJournal(a.dir)
 	if err != nil {
 		return nil, err
 	}
 	exe, exeErr := os.Executable()
-	subnet, subnetErr := relay.SubnetOfAddress(address)
-	var desired []relay.FirewallRule
+	subnet, subnetErr := relayfirewall.SubnetOfAddress(address)
+	var desired []relayfirewall.FirewallRule
 	for _, entry := range journal.Entries {
 		rule := entry.Rule
 		if rule.Port != port {
@@ -286,7 +286,7 @@ func (a *app) lanShareFirewallView(c *ui.Context, view relay.View) {
 	if view.State != relay.StateRunning {
 		return
 	}
-	info := relay.FirewallInfo()
+	info := relayfirewall.FirewallInfo()
 	t := c.Theme()
 	for _, line := range info.Lines {
 		ui.Text(c, line).FontSize(11).TextColor(t.TextMuted).Wrap()
@@ -294,12 +294,12 @@ func (a *app) lanShareFirewallView(c *ui.Context, view relay.View) {
 	if !info.Automatic {
 		return
 	}
-	journal, err := relay.LoadFirewallJournal(a.dir)
+	journal, err := relayfirewall.LoadFirewallJournal(a.dir)
 	if err != nil {
 		ui.Text(c, "防火墙恢复记录无法读取："+err.Error()).FontSize(11).TextColor(t.Danger).Wrap()
 		return
 	}
-	var own []relay.FirewallJournalEntry
+	var own []relayfirewall.FirewallJournalEntry
 	for _, entry := range journal.Entries {
 		if entry.Rule.Port == view.Port {
 			own = append(own, entry)
@@ -307,9 +307,9 @@ func (a *app) lanShareFirewallView(c *ui.Context, view relay.View) {
 	}
 	for _, entry := range own {
 		switch entry.State {
-		case relay.FirewallEntryConfirmed:
+		case relayfirewall.FirewallEntryConfirmed:
 			ui.Text(c, fmt.Sprintf("已记录本程序端口 %d 的放行规则。", entry.Rule.Port)).FontSize(11).TextColor(t.TextMuted).Wrap()
-		case relay.FirewallEntryPending:
+		case relayfirewall.FirewallEntryPending:
 			ui.Text(c, "上次授权未确认，规则状态未知；启动或关闭共享时会先核对再处理。").FontSize(11).TextColor(t.Warning).Wrap()
 		default:
 			ui.Text(c, "上次清理未完成，记录已保留，下次启动会重试。").FontSize(11).TextColor(t.Warning).Wrap()
@@ -348,14 +348,14 @@ func (a *app) allowLanShareFirewall(view relay.View) {
 		a.invalidate()
 		return
 	}
-	subnet, err := relay.SubnetOfAddress(view.Address)
+	subnet, err := relayfirewall.SubnetOfAddress(view.Address)
 	if err != nil {
 		a.firewallErr = "无法确定该地址所在网卡的子网掩码，未创建规则：" + err.Error()
 		a.invalidate()
 		return
 	}
-	rule := relay.FirewallRule{
-		ID:          relay.NewFirewallRuleID(view.Port, time.Now()),
+	rule := relayfirewall.FirewallRule{
+		ID:          relayfirewall.NewFirewallRuleID(view.Port, time.Now()),
 		Name:        "Connect Hub 局域网分享",
 		ProgramPath: exe,
 		Port:        view.Port,
@@ -373,25 +373,25 @@ func (a *app) allowLanShareFirewall(view relay.View) {
 	a.firewallNotice = "正在请求系统授权…"
 	a.invalidate()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), relay.FirewallOpBudget)
+		ctx, cancel := context.WithTimeout(context.Background(), relayfirewall.FirewallOpBudget)
 		defer cancel()
 		result, applyErr := a.firewallRules().Apply(ctx, rule)
-		if applyErr == nil && result.Outcome == relay.FirewallFailed {
+		if applyErr == nil && result.Outcome == relayfirewall.FirewallFailed {
 			applyErr = errors.New(result.Detail)
 		}
 		a.firewallPost(func() {
 			a.firewallBusy = false
 			switch {
-			case result.Outcome == relay.FirewallCreated:
+			case result.Outcome == relayfirewall.FirewallCreated:
 				a.firewallNotice = fmt.Sprintf("已放行端口 %d（仅本程序、专用网络、%s）", rule.Port, rule.RemoteIP)
 				a.firewallErr = ""
-			case result.Outcome == relay.FirewallCanceled:
+			case result.Outcome == relayfirewall.FirewallCanceled:
 				// The user declined, or sharing was closed meanwhile. Nothing was
 				// changed; do not claim the port is open.
 				a.firewallNotice = "已取消系统授权，未修改防火墙规则"
-			case result.Outcome == relay.FirewallDenied:
+			case result.Outcome == relayfirewall.FirewallDenied:
 				a.firewallErr = "系统拒绝授权，未修改防火墙规则"
-			case result.Outcome == relay.FirewallTimeout:
+			case result.Outcome == relayfirewall.FirewallTimeout:
 				a.firewallErr = "等待系统授权超时，规则状态未知；已保留待核对记录"
 			case applyErr != nil:
 				a.firewallErr = applyErr.Error() + "；恢复记录已保留"
@@ -416,7 +416,7 @@ func (a *app) removeLanShareFirewall() {
 	a.firewallErr = ""
 	a.invalidate()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), relay.FirewallOpBudget)
+		ctx, cancel := context.WithTimeout(context.Background(), relayfirewall.FirewallOpBudget)
 		defer cancel()
 		_, errs := a.firewallRules().Reconcile(ctx, nil)
 		a.firewallPost(func() {

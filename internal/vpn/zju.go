@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ehzyil/connect-hub/internal/model"
+	session "github.com/ehzyil/connect-hub/internal/vpn/contract"
 	atrustclient "github.com/mythologyli/zju-connect/client/atrust"
 	"github.com/mythologyli/zju-connect/client/atrust/auth"
 	"github.com/mythologyli/zju-connect/dial"
@@ -20,10 +22,6 @@ import (
 	"github.com/mythologyli/zju-connect/service"
 	"github.com/mythologyli/zju-connect/stack/gvisor"
 	"github.com/mythologyli/zju-connect/underlay"
-
-	"github.com/ehzyil/connect-hub/internal/model"
-	"github.com/ehzyil/connect-hub/internal/relay"
-	"github.com/ehzyil/connect-hub/internal/workeripc"
 )
 
 // ZJUOptions configure the ZJU-Connect backed connector.
@@ -38,12 +36,6 @@ type ZJUOptions struct {
 	DNSTTL uint64
 	// Debug turns on ZJU-Connect's debug log.
 	Debug bool
-	// RelayDial dials the lantern network for LAN relay nodes. nil means the
-	// direct dialer; the client never uses a system proxy either way.
-	RelayDial relay.Dialer
-	// RelaySaveSnapshot persists the imported share's attribution before it is
-	// published as usable.
-	RelaySaveSnapshot func(pointID string, source RelaySnapshotSource, resources *workeripc.ResourceSnapshot) error
 }
 
 // NewZJUConnector returns a Connector that logs in with ZJU-Connect's
@@ -125,7 +117,11 @@ func connectZJU(ctx context.Context, opts ZJUOptions, point model.AccessPoint, c
 	var promptCode auth.CodePrompter
 	if creds.PromptCode != nil {
 		promptCode = func(req auth.CodeRequest) (string, error) {
-			return creds.PromptCode(ctx, req)
+			kind, err := codeKindFromAuth(req.Kind)
+			if err != nil {
+				return "", err
+			}
+			return creds.PromptCode(ctx, CodeRequest{Kind: kind, Tip: req.Tip})
 		}
 	}
 	done := make(chan setupResult, 1)
@@ -250,6 +246,21 @@ func connectZJU(ctx context.Context, opts ZJUOptions, point model.AccessPoint, c
 	cleanupUnderlay = false
 	cleanupClient = false
 	return sess, nil
+}
+
+func codeKindFromAuth(kind auth.CodeKind) (CodeKind, error) {
+	switch kind {
+	case auth.CodeSMS:
+		return CodeSMS, nil
+	case auth.CodeCustomSMS:
+		return CodeCustomSMS, nil
+	case auth.CodeTOTP:
+		return CodeTOTP, nil
+	case auth.CodeRADIUS:
+		return CodeRADIUS, nil
+	default:
+		return 0, fmt.Errorf("不支持的验证码类型：%d", kind)
+	}
 }
 
 type zjuSession struct {
@@ -498,13 +509,6 @@ var (
 	_ SessionWatcher = (*zjuSession)(nil)
 )
 
-// SessionWatcher is a Session that reports when its tunnel ends without
-// Close being called.
-type SessionWatcher interface {
-	Done() <-chan struct{}
-	Err() error
-}
-
 // savedSessionIDs pulls the session id and device id out of a saved session,
 // so Setup can resume it without logging in.
 func savedSessionIDs(clientData []byte) (sid, deviceID string) {
@@ -569,3 +573,5 @@ func writeResourceDump(dir, id string, data []byte) (string, error) {
 	}
 	return path, nil
 }
+
+type SessionWatcher = session.SessionWatcher

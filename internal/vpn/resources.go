@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/ehzyil/connect-hub/internal/attribution"
+	session "github.com/ehzyil/connect-hub/internal/vpn/contract"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
 	zcclient "github.com/mythologyli/zju-connect/client"
 )
@@ -89,9 +90,5 @@ func filterDisabledAppsSnapshot(snapshot *workeripc.ResourceSnapshot, disabled [
 }
 
 func cloneSessionInfo(in SessionInfo) SessionInfo {
-	in.Resources = cloneResources(in.Resources)
-	in.Apps = cloneApps(in.Apps)
-	in.NodeGroups = append([]string(nil), in.NodeGroups...)
-	in.BestNodes = cloneMap(in.BestNodes)
-	return in
+	return session.CloneInfo(in)
 }

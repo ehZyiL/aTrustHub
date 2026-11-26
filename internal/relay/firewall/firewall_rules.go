@@ -1,4 +1,4 @@
-package relay
+package firewall
 
 import (
 	"context"

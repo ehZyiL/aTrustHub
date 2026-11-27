@@ -161,6 +161,7 @@ func (s *Server) handlePairStart(w http.ResponseWriter, r *http.Request) {
 	}
 	inv := p.invite
 	p.mu.Unlock()
+	extendPairHandshake(r)
 	ws, err := (&websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }, HandshakeTimeout: TLSHandshakeTimeout}).Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -210,6 +211,9 @@ func (s *Server) handlePairStart(w http.ResponseWriter, r *http.Request) {
 	}
 	ke3, err := srv.Deserialize.KE3(encoded)
 	if err != nil || srv.LoginFinish(ke3, output.ClientMAC) != nil {
+		return
+	}
+	if promoteConnection(r, connectionPair) != nil {
 		return
 	}
 	id, err := randomToken()

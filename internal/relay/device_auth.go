@@ -69,6 +69,10 @@ func (s *Server) handleDeviceSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, NewError(CodeInvalidCredentials, "设备授权已撤销或尚未确认"))
 		return
 	}
+	if err := promoteConnection(r, connectionControl); err != nil {
+		writeError(w, err)
+		return
+	}
 	snap, err := s.snapshot(r.Context())
 	if err != nil {
 		writeError(w, err)

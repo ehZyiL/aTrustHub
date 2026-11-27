@@ -179,7 +179,7 @@ func StartServer(opts ServerOptions) (*Server, error) {
 		cancel()
 		return nil, fmt.Errorf("分享端口无法监听：%w", err)
 	}
-	s.ln = &limitedListener{Listener: ln, sem: make(chan struct{}, MaxUnauthenticated+MaxBusinessConnsTotal), tlsHandshake: TLSHandshakeTimeout}
+	s.ln = newLimitedListener(ln, MaxUnauthenticated)
 	s.addr = ln.Addr().String()
 	if _, port, err := net.SplitHostPort(s.addr); err == nil {
 		s.port, _ = strconv.Atoi(port)
@@ -187,9 +187,21 @@ func StartServer(opts ServerOptions) (*Server, error) {
 	s.http = &http.Server{
 		Handler:           http.HandlerFunc(s.route),
 		ReadHeaderTimeout: TLSHandshakeTimeout,
+		ReadTimeout:       TLSHandshakeTimeout,
+		IdleTimeout:       ClientLease,
 		MaxHeaderBytes:    MaxHeaderBytes,
 		TLSConfig:         tlsConfig,
 		BaseContext:       func(net.Listener) context.Context { return root },
+		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
+			return context.WithValue(ctx, connectionKey{}, managedConnection(conn))
+		},
+		ConnState: func(conn net.Conn, state http.ConnState) {
+			if state == http.StateIdle {
+				if c := managedConnection(conn); c != nil {
+					c.closeUnauthenticated()
+				}
+			}
+		},
 		// Handshake failures are expected (wrong pin, scanners); they belong in
 		// the app log at most, never on stderr.
 		ErrorLog: log.New(io.Discard, "", 0),
@@ -207,6 +219,9 @@ func StartServer(opts ServerOptions) (*Server, error) {
 // route dispatches CONNECT separately: its request target is an authority, not
 // a path, and it becomes a byte stream once the response is written.
 func (s *Server) route(w http.ResponseWriter, r *http.Request) {
+	if c, _ := r.Context().Value(connectionKey{}).(*limitedConn); c != nil {
+		w = &connectionResponse{ResponseWriter: w, conn: c}
+	}
 	if r.Method == http.MethodConnect {
 		s.handleConnect(w, r)
 		return
@@ -241,7 +256,7 @@ func (s *Server) authenticateShare(r *http.Request) error {
 	if !equalBytes([]byte(tokenDigest(token)), []byte(s.tokenSHA)) {
 		return NewError(CodeInvalidCredentials, "分享口令无效或已被撤销")
 	}
-	return nil
+	return promoteConnection(r, connectionControl)
 }
 
 // authenticateClient checks a client session token and renews its lease.
@@ -266,6 +281,13 @@ func (s *Server) authenticateClient(w http.ResponseWriter, r *http.Request) (*cl
 	// hides the real cause.
 	if _, ok := s.clients.touch(c, time.Now()); !ok {
 		return nil, NewError(CodeSessionExpired, "客户端会话已过期，请重新认证")
+	}
+	kind := connectionControl
+	if r.Method == http.MethodConnect {
+		kind = connectionTunnel
+	}
+	if err := promoteConnection(r, kind); err != nil {
+		return nil, err
 	}
 	return c, nil
 }
@@ -497,6 +519,10 @@ func (s *Server) handleSessionCurrent(w http.ResponseWriter, r *http.Request) {
 // ---- CONNECT -------------------------------------------------------------
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
+	// A failed CONNECT must release its reservation rather than park a
+	// tunnel-budget socket in HTTP keep-alive. Successful hijacks write their
+	// own response and keep the socket until the tracked tunnel closes.
+	w.Header().Set("Connection", "close")
 	// A CONNECT carries no body: bytes after the request line would otherwise be
 	// indistinguishable from tunnel data and be forwarded to the upstream.
 	if r.ContentLength > 0 || len(r.TransferEncoding) > 0 || r.Header.Get("Content-Length") != "" {
@@ -813,6 +839,8 @@ func (s *Server) Close(ctx context.Context) error {
 	select {
 	case <-done:
 		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	case <-time.After(CleanupBudget):
 		return errors.New("分享连接清理未在期限内完成")
 	}
@@ -849,36 +877,6 @@ func clientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
-}
-
-// limitedListener bounds concurrently accepted connections. It caps handshake
-// and failed-auth floods without sleeping inside a handler; the TLS handshake
-// timeout closes a stalled peer.
-type limitedListener struct {
-	net.Listener
-	sem          chan struct{}
-	tlsHandshake time.Duration
-}
-
-func (l *limitedListener) Accept() (net.Conn, error) {
-	conn, err := l.Listener.Accept()
-	if err != nil {
-		return nil, err
-	}
-	l.sem <- struct{}{}
-	return &limitedConn{Conn: conn, release: func() { <-l.sem }}, nil
-}
-
-type limitedConn struct {
-	net.Conn
-	once    sync.Once
-	release func()
-}
-
-func (c *limitedConn) Close() error {
-	err := c.Conn.Close()
-	c.once.Do(c.release)
-	return err
 }
 
 // slotLimiter bounds concurrent DNS queries globally and per client.

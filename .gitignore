@@ -4,6 +4,7 @@ build/
 
 # go build 用的 Windows 资源对象（cmd/appicon 生成，链接后即删除）
 appicon_windows_*.syso
+mygo_windows_*.syso
 
 # 本地模块与编译缓存（make LOCAL=1）
 .cache/

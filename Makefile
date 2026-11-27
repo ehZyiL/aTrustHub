@@ -24,7 +24,7 @@ all: run
 
 ## run: 直接跑应用
 run:
-	$(GO) run .
+	$(GO) run ./cmd/connect-hub
 
 ## dev: mygo 的开发模式，改代码自动重启
 dev:

@@ -14,7 +14,7 @@ repo_dirty=""
 if [[ -n "$(git -C "$app_root" status --porcelain --untracked-files=no 2>/dev/null || true)" ]]; then
   repo_dirty=" (dirty)"
 fi
-app_build=$(sed -n 's/^const appBuild = "\(.*\)"$/\1/p' "$app_root/app.go" | head -n1)
+app_build=$(sed -n 's/^const appBuild = "\(.*\)"$/\1/p' "$app_root/internal/desktop/app.go" | head -n1)
 worker_commit=$(git -C "$worker_root" rev-parse --short HEAD 2>/dev/null || echo unknown)
 printf 'Packaging %s@%s%s (appBuild %s, worker %s)\n' "$repo_branch" "$repo_commit" "$repo_dirty" "${app_build:-unknown}" "$worker_commit"
 go_tool=${GO:-go}

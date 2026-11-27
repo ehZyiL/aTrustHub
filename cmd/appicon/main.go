@@ -7,7 +7,7 @@
 //
 // 两种用法：
 //
-//	go run ./cmd/appicon -arch amd64 -out appicon_windows_amd64.syso
+//	go run ./cmd/appicon -arch amd64 -out cmd/connect-hub/appicon_windows_amd64.syso
 //	go run ./cmd/appicon -png-dir share/icons/hicolor -png-name easyconnect-hub
 //
 // Windows 资源对象的文件名形如 *_windows_<arch>.syso，只会被 GOOS=windows

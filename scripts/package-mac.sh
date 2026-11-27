@@ -31,7 +31,7 @@ resources="$contents/Resources"
 mkdir -p "$macos_bin/core" "$resources" "$bundle/LICENSES"
 
 cd "$app_root"
-app_version=$(sed -n 's/^const version = "\(.*\)"$/\1/p' "$app_root/app.go" | head -n1)
+app_version=$(sed -n 's/^const version = "\(.*\)"$/\1/p' "$app_root/internal/desktop/app.go" | head -n1)
 app_version=${app_version:-0.1.0}
 
 # 1–2. Shared binary builder, including locked inputs and module manifests.

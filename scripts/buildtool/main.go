@@ -199,7 +199,7 @@ func buildBinaries(o options, goTool string, m *manifest) error {
 	if o.targetOS == "windows" {
 		ext = ".exe"
 		ldflags += " -H=windowsgui"
-		icon := filepath.Join(o.root, "appicon_windows_"+o.arch+".syso")
+		icon := filepath.Join(o.root, "cmd", "connect-hub", "appicon_windows_"+o.arch+".syso")
 		f, err := os.OpenFile(icon, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 		if err != nil {
 			return fmt.Errorf("reserve generated icon (another build may be running): %w", err)
@@ -212,7 +212,7 @@ func buildBinaries(o options, goTool string, m *manifest) error {
 	}
 	m.BuildFlags = append(m.BuildFlags, "-ldflags="+ldflags, "CGO_ENABLED=0")
 	targets := []struct{ dir, pkg, name string }{
-		{o.root, ".", "connect-hub"},
+		{o.root, "./cmd/connect-hub", "connect-hub"},
 		{o.worker, "./cmd/connect-hub-worker", "core/connect-hub-worker"},
 	}
 	if o.targetOS != "darwin" {

@@ -16,19 +16,22 @@ import (
 // lanDiscovery owns the two sides of 局域网发现: the publisher that follows the
 // share lifecycle, and the browser that only lives while the page is open.
 //
-// Nothing here runs on the render loop for correctness: the publisher is woken
-// by controller notifications through kick, and the browser is started and
-// stopped by the UI thread because it is a user action.
+// The UI queues browsing requests; one short-lived worker serializes process
+// startup, network queries and teardown without blocking a frame.
 type lanDiscovery struct {
 	pub     relayclient.Publisher
 	browser relayclient.Browser
 
-	wg          sync.WaitGroup
-	syncMu      sync.Mutex
-	syncPending bool // guarded by mu; notifications coalesce into one worker
-	syncRunning bool
-	searchStop  chan struct{}
-	searchDone  chan struct{}
+	wg            sync.WaitGroup
+	syncMu        sync.Mutex
+	syncPending   bool // guarded by mu; notifications coalesce into one worker
+	syncRunning   bool
+	searchStop    chan struct{}
+	searchDone    chan struct{}
+	browseRunning bool
+	browseVersion uint64
+	browseRequest *lanBrowseRequest
+	browseResult  *lanBrowseResult
 
 	// suppressed stops announcements for this run without touching the
 	// preference. It is used when the user turns discovery off and the saved
@@ -74,6 +77,22 @@ type lanDiscoveryUI struct {
 	// searchWindow is how long an empty list reads as "still looking". It is a
 	// variable so tests can shorten it.
 	searchWindow time.Duration
+	starting     bool
+	generation   uint64
+}
+
+type lanBrowseRequest struct {
+	version uint64
+	iface   string
+	close   bool
+	refresh bool
+}
+
+type lanBrowseResult struct {
+	version      uint64
+	snapshot     discovery.Snapshot
+	err          error
+	noInterfaces bool
 }
 
 // resumeLANDiscovery runs after the share restored: a share that is already
@@ -94,6 +113,9 @@ func (a *app) shutdownLANDiscovery() {
 	d.shutDown = true
 	d.browsing = false
 	d.pending = nil
+	d.browseRequest, d.browseResult = nil, nil
+	d.localAddrs, d.localCands = nil, nil
+	d.localAt = time.Time{}
 	d.stopSearchLocked()
 	d.mu.Unlock()
 	d.wg.Wait()
@@ -282,21 +304,23 @@ func (a *app) closeLANDiscovery() {
 	}
 	d.ui.open = false
 	d.ui.searching = false
+	d.ui.starting = false
 	d.ui.cands = nil
 	d.ui.snap = discovery.Snapshot{}
 	d.mu.Lock()
 	d.browsing = false
-	done := d.stopSearchLocked()
+	d.stopSearchLocked()
 	// A snapshot parked by the closing generation must not survive into the
 	// next one; the page that reopens starts from an empty list.
 	d.pending = nil
 	d.localAddrs, d.localCands = nil, nil
 	d.localAt = time.Time{}
-	d.mu.Unlock()
-	_ = d.browser.Close()
-	if done != nil {
-		<-done
+	d.browseVersion++
+	d.browseResult = nil
+	if !d.shutDown {
+		d.queueBrowseLocked(a, lanBrowseRequest{version: d.browseVersion, close: true})
 	}
+	d.mu.Unlock()
 }
 
 func (a *app) startLANDiscoveryBrowsing() {
@@ -304,11 +328,11 @@ func (a *app) startLANDiscoveryBrowsing() {
 	if d == nil || a.lanDiscoveryShutDown() {
 		return
 	}
-	ifaces := a.browseInterfaces(d.ui.ifaceName)
 	d.ui.err = ""
 	d.ui.cands = nil
 	d.ui.snap = discovery.Snapshot{}
 	d.ui.searching = true
+	d.ui.starting = true
 	d.ui.startedAt = time.Now()
 	d.mu.Lock()
 	if d.shutDown {
@@ -322,6 +346,9 @@ func (a *app) startLANDiscoveryBrowsing() {
 	// only one this page can apply, otherwise a snapshot parked by the previous
 	// generation could be shown as if it belonged to the new network.
 	d.pending = nil
+	d.browseVersion++
+	d.browseResult = nil
+	d.queueBrowseLocked(a, lanBrowseRequest{version: d.browseVersion, iface: d.ui.ifaceName})
 	window := d.ui.searchWindow
 	if window <= 0 {
 		window = 5 * time.Second
@@ -331,10 +358,74 @@ func (a *app) startLANDiscoveryBrowsing() {
 	d.wg.Add(1)
 	go a.runLANDiscoverySearch(d, stop, done, window)
 	d.mu.Unlock()
-	if err := d.browser.Start(ifaces); err != nil {
-		d.ui.err = err.Error()
-	}
 	a.invalidate()
+}
+
+// queueBrowseLocked coalesces rapid open/close/interface changes. Only this
+// worker calls the browser, so a late Start cannot run after a newer Close.
+func (d *lanDiscovery) queueBrowseLocked(a *app, req lanBrowseRequest) {
+	d.browseRequest = &req
+	if !d.browseRunning {
+		d.browseRunning = true
+		d.wg.Add(1)
+		go a.runLANDiscoveryBrowse(d)
+	}
+}
+
+func (a *app) runLANDiscoveryBrowse(d *lanDiscovery) {
+	defer d.wg.Done()
+	for {
+		d.mu.Lock()
+		req := d.browseRequest
+		d.browseRequest = nil
+		if d.shutDown || req == nil {
+			d.browseRunning = false
+			d.mu.Unlock()
+			return
+		}
+		d.mu.Unlock()
+		if req.close {
+			_ = d.browser.Close()
+			d.mu.Lock()
+			if !d.browsing {
+				d.localAddrs, d.localCands = nil, nil
+				d.localAt = time.Time{}
+			}
+			d.mu.Unlock()
+			continue
+		}
+		result := &lanBrowseResult{version: req.version}
+		if req.refresh {
+			// The network picker also refreshes off-thread after adapter changes.
+			a.localLANBrowseCandidates()
+			result.err = d.browser.Refresh()
+		} else {
+			ifaces := a.browseInterfaces(req.iface)
+			d.mu.Lock()
+			current := !d.shutDown && d.browsing && d.browseVersion == req.version
+			d.mu.Unlock()
+			if !current {
+				continue
+			}
+			result.noInterfaces = len(ifaces) == 0
+			if result.noInterfaces {
+				// A paste-only import does not need to launch the optional component.
+				result.err = fmt.Errorf("没有可用的局域网网卡")
+				_ = d.browser.Close()
+			} else {
+				result.err = d.browser.Start(ifaces)
+			}
+		}
+		if result.err == nil || req.refresh {
+			result.snapshot = d.browser.Snapshot()
+		}
+		d.mu.Lock()
+		if !d.shutDown && d.browsing && d.browseVersion == req.version {
+			d.browseResult = result
+		}
+		d.mu.Unlock()
+		a.invalidateCoalesced()
+	}
 }
 
 // stopSearchLocked cancels the bounded page deadline without touching sharing.
@@ -372,12 +463,14 @@ func (a *app) runLANDiscoverySearch(d *lanDiscovery, stop <-chan struct{}, done 
 // refreshLANDiscovery re-queries the same generation without losing results.
 func (a *app) refreshLANDiscovery() {
 	d := a.lanDisc
-	if d == nil {
+	if d == nil || !d.ui.open || d.ui.starting {
 		return
 	}
-	if err := d.browser.Refresh(); err != nil {
-		d.ui.err = err.Error()
+	d.mu.Lock()
+	if !d.shutDown {
+		d.queueBrowseLocked(a, lanBrowseRequest{version: d.browseVersion, refresh: true})
 	}
+	d.mu.Unlock()
 	a.invalidate()
 }
 
@@ -403,10 +496,36 @@ func (a *app) drainLANDiscovery() {
 		return
 	}
 	d.mu.Lock()
+	result := d.browseResult
+	d.browseResult = nil
 	snap := d.pending
 	d.pending = nil
+	if result != nil && result.version != d.browseVersion {
+		result = nil
+	}
+	// Keep startup snapshots parked until its generation is known. Reading the
+	// browser here could wait for its process-start mutex on the render thread.
+	if d.ui.starting && result == nil {
+		d.pending = snap
+		snap = nil
+	}
 	d.mu.Unlock()
-	if snap != nil && snap.Generation == d.browser.Snapshot().Generation && snap.Generation >= d.ui.snap.Generation {
+	if result != nil {
+		d.ui.starting = false
+		d.ui.generation = result.snapshot.Generation
+		d.ui.err = ""
+		if result.err != nil {
+			d.ui.err = result.err.Error()
+		}
+		if result.noInterfaces && a.relayImport.open && a.relayImport.tab == 0 {
+			a.relayImport.tab = 1
+			a.closeLANDiscovery()
+			return
+		}
+		d.ui.snap = result.snapshot
+		d.ui.cands = a.withoutOwnShare(result.snapshot.Candidates)
+	}
+	if snap != nil && snap.Generation == d.ui.generation && snap.Generation >= d.ui.snap.Generation {
 		// A snapshot from an older generation must not overwrite a newer list. An
 		// equal one may: a refresh re-queries without starting a new generation.
 		// startLANDiscoveryBrowsing clears the parked slot, so the comparison is

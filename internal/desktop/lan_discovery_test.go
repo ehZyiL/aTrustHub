@@ -462,6 +462,7 @@ func TestAcceptanceDiscoveryDoesNotTouchSavedNodes(t *testing.T) {
 	// Browse and feed a forged record with the same share ID but another
 	// address: it must neither rewrite the node nor produce a "join" action.
 	a.openLANDiscovery()
+	waitLANBrowse(t, a)
 	backend.feed([]discovery.Record{
 		{Kind: discovery.KindPTR, Instance: discovery.InstanceName(code.ShareID), TTL: 4500, Interface: "en0"},
 		{Kind: discovery.KindSRV, Instance: discovery.InstanceName(code.ShareID),
@@ -552,6 +553,7 @@ func TestAcceptanceDiscoveryFailureDegradesHonestly(t *testing.T) {
 	if a.relayImport.tab != 0 {
 		t.Fatal("有网卡时应当默认进入发现页")
 	}
+	waitLANBrowse(t, a)
 	tt := ui.NewTester(a.view, 1120, 800)
 	texts := strings.Join(tt.Texts(), "|")
 	if !strings.Contains(texts, "仍然可以粘贴分享口令加入") {
@@ -662,6 +664,7 @@ func TestAcceptanceOwnShareIsFilteredByAddress(t *testing.T) {
 	enableShare(t, a, iface, true, "本机共享")
 	own := a.lanShare.Settings()
 	a.openRelayImport()
+	waitLANBrowse(t, a)
 
 	mk := func(addr string) []discovery.Record {
 		return []discovery.Record{
@@ -819,10 +822,12 @@ func TestAcceptanceBrowsingWorksWithoutSharing(t *testing.T) {
 		t.Skip("本机没有局域网网卡，跳过（需实机覆盖）")
 	}
 	a.openLANDiscovery()
+	waitLANBrowse(t, a)
 	if a.lanDisc.ui.err != "" {
 		t.Fatalf("没有开启共享也应能浏览：%s", a.lanDisc.ui.err)
 	}
 	a.openRelayImport()
+	waitLANBrowse(t, a)
 	if a.relayImport.tab != 0 {
 		t.Fatal("有网卡时应当默认进入发现页")
 	}

@@ -130,7 +130,7 @@ func start(opts relay.ServerOptions, executable string) (*processServer, error) 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	probe := exec.CommandContext(ctx, executable, "--protocol-version")
+	probe := newCommandContext(ctx, executable, "--protocol-version")
 	out, err := probe.Output()
 	if err != nil || strings.TrimSpace(string(out)) != ProtocolVersion {
 		return nil, errors.New("局域网分享组件版本不兼容，请重新安装完整程序")
@@ -157,7 +157,7 @@ func start(opts relay.ServerOptions, executable string) (*processServer, error) 
 	}
 	start := startup{Version: ProtocolVersion, Mode: "share", BrokerAddress: listener.Addr().String(), BrokerToken: token,
 		Identity: identity, Token: opts.Token, ShareID: opts.ShareID, InstanceID: instance, Port: opts.Port}
-	cmd := exec.Command(executable)
+	cmd := newCommand(executable)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		_ = b.Close()

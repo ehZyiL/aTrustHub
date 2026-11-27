@@ -71,13 +71,13 @@ func NewConnector(executable string, saveSnapshot func(string, contract.RelaySna
 
 func startImported(ctx context.Context, executable string, point model.AccessPoint, token string, save func(string, contract.RelaySnapshotSource, *workeripc.ResourceSnapshot) error) (*importedSession, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
-	probe := exec.CommandContext(probeCtx, executable, "--protocol-version")
+	probe := newCommandContext(probeCtx, executable, "--protocol-version")
 	out, err := probe.Output()
 	cancel()
 	if err != nil || strings.TrimSpace(string(out)) != ProtocolVersion {
 		return nil, errors.New("局域网分享组件版本不兼容，请重新安装完整程序")
 	}
-	cmd := exec.Command(executable)
+	cmd := newCommand(executable)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

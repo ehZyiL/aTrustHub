@@ -181,7 +181,7 @@ func (a *app) relayDiscoveryBody(c *ui.Context, d *relayImportDraft) {
 			a.setLANDiscoveryInterface(byLabel[next])
 		}
 		ui.Row(c).Grow(1)
-		if ui.Button(c, "刷新").FontSize(11).Clicked() {
+		if ui.Button(c, "刷新").FontSize(11).Disabled(disc.ui.starting).Clicked() {
 			a.refreshLANDiscovery()
 		}
 	})

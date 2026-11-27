@@ -272,7 +272,16 @@ const maxBrowsedInterfaces = 8
 func (a *app) allLANInterfaces() []discovery.Interface {
 	var out []discovery.Interface
 	seen := map[string]bool{}
-	for _, cand := range a.localLANBrowseCandidates() {
+	var cands []lanCandidate
+	if a.lanDisc != nil && a.lanDisc.ui.open {
+		// Rendering only reads the cache populated by the browse worker.
+		a.lanDisc.mu.Lock()
+		cands = append(cands, a.lanDisc.localCands...)
+		a.lanDisc.mu.Unlock()
+	} else {
+		cands = a.localLANBrowseCandidates()
+	}
+	for _, cand := range cands {
 		if cand.iface.IPv4 == "" || seen[cand.iface.Name] || !browsableAdapter(cand) {
 			continue
 		}
@@ -306,9 +315,11 @@ func (a *app) localLANBrowseCandidates() []lanCandidate {
 		// Both copies come from this one list, written under one lock: a reader
 		// can never observe an annotation set that belongs to another list.
 		a.lanDisc.mu.Lock()
-		a.lanDisc.localAddrs = append([]relay.Interface(nil), list...)
-		a.lanDisc.localCands = append([]lanCandidate(nil), cands...)
-		a.lanDisc.localAt = now
+		if !a.lanDisc.shutDown {
+			a.lanDisc.localAddrs = append([]relay.Interface(nil), list...)
+			a.lanDisc.localCands = append([]lanCandidate(nil), cands...)
+			a.lanDisc.localAt = now
+		}
 		a.lanDisc.mu.Unlock()
 	}
 	return cands
@@ -317,6 +328,11 @@ func (a *app) localLANBrowseCandidates() []lanCandidate {
 // localLANCandidates is the plain address list, for callers that only need to
 // recognise this machine's own addresses.
 func (a *app) localLANCandidates() []relay.Interface {
+	if a.lanDisc != nil && a.lanDisc.ui.open {
+		a.lanDisc.mu.Lock()
+		defer a.lanDisc.mu.Unlock()
+		return append([]relay.Interface(nil), a.lanDisc.localAddrs...)
+	}
 	cands := a.localLANBrowseCandidates()
 	out := make([]relay.Interface, 0, len(cands))
 	for _, cand := range cands {

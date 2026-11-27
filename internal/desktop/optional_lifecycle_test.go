@@ -23,6 +23,7 @@ func optionalWorkerStacks() []string {
 			".(*app).setupLANDiscovery.func",
 			".(*app).runLANDiscoverySync(",
 			".(*app).runLANDiscoverySearch(",
+			".(*app).runLANDiscoveryBrowse(",
 			"/internal/relay/discovery.(*Browser).expireLoop(",
 		} {
 			if strings.Contains(stack, marker) {
@@ -56,6 +57,7 @@ func TestOptionalResourcesStopAndRestartTenTimes(t *testing.T) {
 		enableShare(t, a, iface, true, "生命周期测试")
 		waitCondition(t, "published", func() bool { return a.discoveryStatus().State == discovery.StatusPublished })
 		a.openLANDiscovery()
+		waitLANBrowse(t, a)
 		a.closeLANDiscovery()
 		if !a.lanShare.View().Enabled {
 			t.Fatal("closing the browser stopped sharing")

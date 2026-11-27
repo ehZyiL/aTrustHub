@@ -208,7 +208,7 @@ func (r *DiscoveryRuntime) ensure() error {
 		}
 		if !r.verified {
 			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-			probe := exec.CommandContext(ctx, r.executable, "--protocol-version")
+			probe := newCommandContext(ctx, r.executable, "--protocol-version")
 			out, err := probe.Output()
 			cancel()
 			if err != nil || strings.TrimSpace(string(out)) != ProtocolVersion {
@@ -217,7 +217,7 @@ func (r *DiscoveryRuntime) ensure() error {
 			}
 			r.verified = true
 		}
-		cmd := exec.Command(r.executable)
+		cmd := newCommand(r.executable)
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			r.mu.Unlock()

@@ -45,6 +45,7 @@ func TestOptionalResourceBaseline(t *testing.T) {
 	runtime.GC()
 	sample("panel-after-gc", 0)
 	a.openLANDiscovery()
+	waitLANBrowse(t, a)
 	sample("browsing", 0)
 	a.closeLANDiscovery()
 	for i := 0; i < 10; i++ {

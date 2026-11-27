@@ -32,14 +32,16 @@ type relayImportDraft struct {
 // openRelayImport opens the import panel. It does not read the clipboard: that is
 // a separate opt-in feature.
 func (a *app) openRelayImport() {
-	// Discovery needs at least one LAN interface; without it the dialog opens
-	// on the paste form, which is the only path that can work there.
+	// Interface enumeration and optional component startup run after the dialog
+	// opens. The result switches to paste when no browsing interface is available.
 	tab := 0
-	if a.lanDisc == nil || len(a.browseInterfaces("")) == 0 {
+	if a.lanDisc == nil {
 		tab = 1
 	}
 	a.relayImport = relayImportDraft{open: true, tab: tab}
-	a.openLANDiscovery()
+	if tab == 0 {
+		a.openLANDiscovery()
+	}
 	a.invalidate()
 }
 

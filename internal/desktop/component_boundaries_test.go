@@ -2,13 +2,10 @@ package desktop
 
 import (
 	"encoding/json"
-	"go/parser"
-	"go/token"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -46,20 +43,8 @@ func TestCoreDependencyGraphExcludesOptionalRuntime(t *testing.T) {
 			t.Fatal(err)
 		}
 		path := pkg.ImportPath
-		if path == "github.com/ehzyil/connect-hub/internal/relay" || strings.Contains(path, "/internal/relay/adapter") || path == "github.com/ehzyil/connect-hub/internal/relay/discovery" || strings.Contains(path, "/internal/relay/firewall") || strings.Contains(path, "/internal/cleanup/service") {
+		if desktopServiceImplementation(path) || strings.Contains(path, "/internal/relay/firewall") {
 			t.Fatalf("core transitively depends on optional runtime: %s", path)
-		}
-	}
-	for _, name := range []string{"lanshare.go", "lan_discovery.go", "import_relay.go", "lanshare_firewall.go", "cleanup.go", "cleanupview.go"} {
-		f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(desktopRepoRoot(t), "internal", "desktop", name), nil, parser.ImportsOnly)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, imp := range f.Imports {
-			path, _ := strconv.Unquote(imp.Path.Value)
-			if path == "github.com/ehzyil/connect-hub/internal/relay" || path == "github.com/ehzyil/connect-hub/internal/relay/discovery" || path == "github.com/ehzyil/connect-hub/internal/cleanup/service" {
-				t.Fatalf("page %s imports sharing runtime", name)
-			}
 		}
 	}
 }

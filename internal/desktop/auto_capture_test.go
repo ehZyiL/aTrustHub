@@ -10,6 +10,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/ehzyil/connect-hub/internal/localapps"
+	"github.com/ehzyil/connect-hub/internal/localapps/takeover"
 	"github.com/ehzyil/connect-hub/internal/model"
 )
 
@@ -66,15 +67,15 @@ func setAutoRestoreSetting(t *testing.T, a *app, on bool) {
 	a.autoCapture.mu.Unlock()
 }
 
-func autoTestController(a *app, start func(context.Context, []localapps.CaptureConfig) (localapps.SystemCapture, error)) *resourceTUNController {
-	var c *resourceTUNController
-	c = &resourceTUNController{
-		configs: func() ([]localapps.CaptureConfig, error) { return nil, nil },
-		start:   start,
-		suspendProxy: func() (func() error, error) {
+func autoTestController(a *app, start func(context.Context, []localapps.CaptureConfig) (localapps.SystemCapture, error)) *takeover.Controller {
+	var c *takeover.Controller
+	c = &takeover.Controller{
+		Configs:      func() ([]localapps.CaptureConfig, error) { return nil, nil },
+		StartCapture: start,
+		SuspendProxy: func() (func() error, error) {
 			return func() error { return nil }, nil
 		},
-		change: func() {
+		Changed: func() {
 			a.noteAutoCaptureResult(c.View())
 		},
 	}
@@ -208,7 +209,9 @@ func TestAutoCaptureLazyArmKeepsRunningPhase(t *testing.T) {
 	setAutoRestoreSetting(t, a, true)
 	// Simulate a controller that was manually started before the first tick.
 	r := &controllerRuntime{done: make(chan struct{})}
-	a.resourceTUN = &resourceTUNController{current: r, status: resourceTUNStatus{Running: true}}
+	c := autoTestController(a, func(context.Context, []localapps.CaptureConfig) (localapps.SystemCapture, error) { return r, nil })
+	c.Start()
+	waitController(t, c, func(s resourceTUNStatus) bool { return s.Running })
 	t.Cleanup(func() { _ = a.resourceTUN.Close() })
 	stubAutoCaptureReady(t, "A#1")
 
@@ -754,15 +757,15 @@ func onlineGatewayApp(t *testing.T) *app {
 }
 
 // stampResourceTUN 装一个假的应用接管控制器，避免测试真的去拉起提权助手。
-func stampResourceTUN(t *testing.T, a *app) *resourceTUNController {
+func stampResourceTUN(t *testing.T, a *app) *takeover.Controller {
 	t.Helper()
 	r := &controllerRuntime{done: make(chan struct{})}
-	a.resourceTUN = &resourceTUNController{
-		configs: func() ([]localapps.CaptureConfig, error) { return nil, nil },
-		start: func(context.Context, []localapps.CaptureConfig) (localapps.SystemCapture, error) {
+	a.resourceTUN = &takeover.Controller{
+		Configs: func() ([]localapps.CaptureConfig, error) { return nil, nil },
+		StartCapture: func(context.Context, []localapps.CaptureConfig) (localapps.SystemCapture, error) {
 			return r, nil
 		},
-		suspendProxy: func() (func() error, error) { return func() error { return nil }, nil },
+		SuspendProxy: func() (func() error, error) { return func() error { return nil }, nil },
 	}
 	t.Cleanup(func() { a.resourceTUN.Close() })
 	return a.resourceTUN

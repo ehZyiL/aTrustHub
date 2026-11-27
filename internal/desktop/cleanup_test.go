@@ -33,7 +33,7 @@ func TestMaintenanceConfirmationSelectionAndResult(t *testing.T) {
 	a := testApp(t)
 	a.settings.open, a.settings.section = true, settingMaintenance
 	runner := &cleanupPageRunner{requests: make(chan contract.Request, 1)}
-	a.cleanup.runner = runner
+	a.cleanup.task = cleanupclient.NewTaskController(runner, nil)
 	a.cleanup.scanDir = "fixture-scan"
 	a.cleanup.selected = map[string]bool{"normal": true, "deep": false}
 	a.cleanup.view.Findings = []contract.Finding{{ID: "normal", Title: "普通残留"}, {ID: "deep", Title: "深度残留", Deep: true}}
@@ -64,7 +64,11 @@ func TestMaintenanceConfirmationSelectionAndResult(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("confirmed task not launched")
 	}
-	a.drainCleanup()
+	deadline := time.Now().Add(time.Second)
+	for a.cleanup.busy && time.Now().Before(deadline) {
+		a.drainCleanup()
+		time.Sleep(time.Millisecond)
+	}
 	tt.Frame()
 	text := strings.Join(tt.Texts(), "|")
 	for _, want := range []string{"成功 1 项", "已不存在/跳过 1 项", "重启生效 1 项"} {
@@ -80,7 +84,7 @@ func TestMaintenanceConfirmationSelectionAndResult(t *testing.T) {
 func TestMaintenancePageDoesNotStartOptionalWork(t *testing.T) {
 	a := testApp(t)
 	stub := &cleanupStub{}
-	a.cleanup.runner = stub
+	a.cleanup.task = cleanupclient.NewTaskController(stub, nil)
 	a.settings.open = true
 	a.settings.section = settingMaintenance
 	ui.NewTester(a.maintenanceSection, 1120, 800).Texts()
@@ -117,25 +121,36 @@ func TestCleanupClosingPageCancelsOnlyReadonlyTask(t *testing.T) {
 		a := testApp(t)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		a.cleanup.cancel = cancel
+		entered := make(chan context.Context, 1)
+		a.cleanup.task = cleanupclient.NewTaskController(cleanupBlockingRunner{entered: entered}, nil)
+		a.cleanup.task.Start(ctx, contract.Request{})
+		taskContext := <-entered
 		a.cleanup.busy = true
 		a.cleanup.view.Operation = op
 		a.drainCleanup()
 		readonly := op == contract.Scan || op == contract.List
-		if (ctx.Err() != nil) != readonly {
-			t.Fatalf("page close cancellation for %s: %v", op, ctx.Err())
+		if (taskContext.Err() != nil) != readonly {
+			t.Fatalf("page close cancellation for %s: %v", op, taskContext.Err())
 		}
 		a.shutdownCleanup()
-		if ctx.Err() == nil {
+		if taskContext.Err() == nil {
 			t.Fatal("shutdown did not request safe stop")
 		}
 	}
 }
 
+type cleanupBlockingRunner struct{ entered chan context.Context }
+
+func (r cleanupBlockingRunner) Run(ctx context.Context, _ contract.Request, _ func(cleanupclient.Snapshot)) cleanupclient.Snapshot {
+	r.entered <- ctx
+	<-ctx.Done()
+	return cleanupclient.Snapshot{Done: true}
+}
+
 func TestCleanupMutationBlockedWhileNetworkActive(t *testing.T) {
 	a := testApp(t)
 	stub := &cleanupStub{}
-	a.cleanup.runner = stub
+	a.cleanup.task = cleanupclient.NewTaskController(stub, nil)
 	a.tunOn.Store(true)
 	a.startCleanup(contract.Request{Request: components.Request{Operation: contract.Restore}, BackupID: "fixture"})
 	if a.cleanup.busy || stub.calls != 0 || !strings.Contains(a.cleanup.view.Component.Detail, "断开") {

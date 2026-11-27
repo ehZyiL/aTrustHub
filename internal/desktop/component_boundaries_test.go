@@ -77,6 +77,51 @@ func TestDesktopDoesNotLinkCleanupService(t *testing.T) {
 	}
 }
 
+func TestDesktopLivesBehindCmdEntryPoint(t *testing.T) {
+	root := desktopRepoRoot(t)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".go") {
+			t.Fatalf("Go source remains at repository root: %s", entry.Name())
+		}
+	}
+
+	var config struct {
+		Main string `json:"main"`
+	}
+	data, err := os.ReadFile(filepath.Join(root, "mygo.json"))
+	if err != nil || json.Unmarshal(data, &config) != nil {
+		t.Fatalf("read MyGo entry configuration: %v", err)
+	}
+	if config.Main != "cmd/connect-hub" {
+		t.Fatalf("MyGo main = %q", config.Main)
+	}
+	cmd := exec.Command("go", "list", "-mod=readonly", "-f", "{{.Imports}}", "./cmd/connect-hub")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("list GUI entry: %v", err)
+	}
+	if !strings.Contains(string(out), "github.com/ehzyil/connect-hub/internal/desktop") {
+		t.Fatalf("GUI entry does not invoke desktop package: %s", out)
+	}
+
+	cmd = exec.Command("go", "list", "-mod=readonly", "-deps", "./internal/localapps/takeover", "./internal/cleanup/client")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	out, err = cmd.Output()
+	if err != nil {
+		t.Fatalf("list extracted controller dependencies: %v", err)
+	}
+	if strings.Contains(string(out), "github.com/egoist/mygo") {
+		t.Fatal("extracted controllers depend on MyGo")
+	}
+}
+
 type sharePageStub struct {
 	relayclient.Share
 	view contract.View

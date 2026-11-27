@@ -12,6 +12,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/ehzyil/connect-hub/internal/dnsmapping"
 	"github.com/ehzyil/connect-hub/internal/localapps"
+	"github.com/ehzyil/connect-hub/internal/localapps/takeover"
 	"github.com/ehzyil/connect-hub/internal/model"
 	"github.com/ehzyil/connect-hub/internal/vpn"
 	"github.com/ehzyil/connect-hub/internal/workeripc"
@@ -31,8 +32,8 @@ func (a *app) setupResourceTUN() {
 	}
 	var notifyMu sync.Mutex
 	lastMessage := ""
-	a.resourceTUN = &resourceTUNController{configs: a.resourceCaptureConfigs,
-		start: func(ctx context.Context, configs []localapps.CaptureConfig) (localapps.SystemCapture, error) {
+	a.resourceTUN = &takeover.Controller{Configs: a.resourceCaptureConfigs,
+		StartCapture: func(ctx context.Context, configs []localapps.CaptureConfig) (localapps.SystemCapture, error) {
 			return a.local.StartSystemCapture(ctx, configs, func(ctx context.Context, network, address string) (net.Conn, error) {
 				if network == "udp4" {
 					return a.mgr.DialCapturedUDP(ctx, address)
@@ -40,7 +41,7 @@ func (a *app) setupResourceTUN() {
 				return a.mgr.DialCaptured(ctx, network, address)
 			})
 		},
-		suspendProxy: func() (func() error, error) {
+		SuspendProxy: func() (func() error, error) {
 			_, port, err := net.SplitHostPort(a.mgr.Aggregate().Addr)
 			if err != nil {
 				port = "0"
@@ -50,7 +51,7 @@ func (a *app) setupResourceTUN() {
 					a.bus.Add("app", message)
 				}
 			})
-		}, change: func() {
+		}, Changed: func() {
 			view := a.resourceTUN.View()
 			message := view.Error
 			if message == "" && view.Running {
@@ -166,18 +167,12 @@ func (a *app) resourceCaptureConfigs() ([]localapps.CaptureConfig, error) {
 	if len(skipped) > 0 {
 		// The controller starts the capture and shows the reason; it does not
 		// treat the whole takeover as failed.
-		return result, partialCaptureError{reasons: skipped}
+		return result, takeover.PartialError{Reasons: skipped}
 	}
 	return result, nil
 }
 
-// partialCaptureError means some gateways could not be captured while others
-// can. The controller keeps the usable subset and reports the rest.
-type partialCaptureError struct{ reasons []string }
-
-func (e partialCaptureError) Error() string {
-	return "部分网关未接管：" + strings.Join(e.reasons, "；")
-}
+type resourceTUNStatus = takeover.Status
 
 func supportsResourceTUN() bool { return runtime.GOOS == "windows" || runtime.GOOS == "linux" }
 

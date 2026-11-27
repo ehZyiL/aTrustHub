@@ -3,30 +3,21 @@ package desktop
 import (
 	"context"
 	"runtime"
-	"sync"
 
 	cleanupclient "github.com/ehzyil/connect-hub/internal/cleanup/client"
 	"github.com/ehzyil/connect-hub/internal/cleanup/contract"
 	"github.com/ehzyil/connect-hub/internal/components"
 )
 
-type cleanupRunner interface {
-	Run(context.Context, contract.Request, func(cleanupclient.Snapshot)) cleanupclient.Snapshot
-}
 type cleanupState struct {
-	mu         sync.Mutex // Only the mailbox, cancel handle and generation cross threads.
-	pending    *cleanupclient.Snapshot
-	cancel     context.CancelFunc
-	generation uint64
-	closed     bool
-	runner     cleanupRunner
-	view       cleanupclient.Snapshot // Below this line: UI-thread owned.
-	busy       bool
-	selected   map[string]bool
-	scanDir    string
-	confirm    string
-	backupID   string
-	visible    bool
+	task     *cleanupclient.TaskController
+	view     cleanupclient.Snapshot // Below this line: UI-thread owned.
+	busy     bool
+	selected map[string]bool
+	scanDir  string
+	confirm  string
+	backupID string
+	visible  bool
 }
 
 func supportsCleanup() bool { return runtime.GOOS == "windows" }
@@ -40,8 +31,8 @@ func (a *app) startCleanup(request contract.Request) {
 		s.view.Component.Detail = "请先断开 VPN 并关闭网络接管，再执行清理或恢复"
 		return
 	}
-	if s.runner == nil {
-		s.runner = cleanupclient.New(cleanupclient.Options{DataDir: a.dir})
+	if s.task == nil {
+		s.task = cleanupclient.NewTaskController(cleanupclient.New(cleanupclient.Options{DataDir: a.dir}), a.invalidateCoalesced)
 	}
 	if request.Operation == contract.Apply {
 		request.ScanDir = s.scanDir
@@ -59,52 +50,20 @@ func (a *app) startCleanup(request contract.Request) {
 		_ = cleanupclient.Discard(s.scanDir)
 		s.scanDir = ""
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		cancel()
+	if !s.task.Start(context.Background(), request) {
 		return
 	}
-	s.generation++
-	generation := s.generation
-	s.cancel = cancel
-	s.pending = nil
-	s.mu.Unlock()
 	s.busy = true
 	s.selected = nil
 	s.view = cleanupclient.Snapshot{Operation: request.Operation, Component: components.Snapshot{Availability: components.Ready, State: components.Starting, Detail: "正在启动清理组件"}}
-	runner := s.runner
-	go func() {
-		defer cancel()
-		publish := func(v cleanupclient.Snapshot) {
-			s.mu.Lock()
-			if !s.closed && s.generation == generation {
-				copy := v
-				s.pending = &copy
-			}
-			s.mu.Unlock()
-			a.invalidateCoalesced()
-		}
-		result := runner.Run(ctx, request, publish)
-		s.mu.Lock()
-		closed := s.closed
-		if s.generation == generation {
-			s.cancel = nil
-		}
-		s.mu.Unlock()
-		if closed && result.Operation == contract.Scan {
-			_ = cleanupclient.Discard(result.TaskDir)
-		}
-	}()
 }
 
 func (a *app) drainCleanup() {
 	s := &a.cleanup
-	s.mu.Lock()
-	next := s.pending
-	s.pending = nil
-	s.mu.Unlock()
+	var next *cleanupclient.Snapshot
+	if s.task != nil {
+		next = s.task.Drain()
+	}
 	if next != nil {
 		s.view = *next
 		if next.Done {
@@ -149,24 +108,15 @@ func (a *app) releaseCleanupDetails() {
 }
 
 func (a *app) cancelCleanup() {
-	s := &a.cleanup
-	s.mu.Lock()
-	cancel := s.cancel
-	s.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	if a.cleanup.task != nil {
+		a.cleanup.task.Cancel()
 	}
 }
 
 func (a *app) shutdownCleanup() {
 	s := &a.cleanup
-	s.mu.Lock()
-	s.closed = true
-	s.pending = nil
-	cancel := s.cancel
-	s.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	if s.task != nil {
+		s.task.Close()
 	}
 	// An active component owns its directory until it exits. If Hub itself
 	// crashes its lease expires and it stops at the same safe checkpoint.

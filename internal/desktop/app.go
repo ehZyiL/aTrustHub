@@ -23,6 +23,7 @@ import (
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 	"github.com/ehzyil/connect-hub/internal/localapps"
+	"github.com/ehzyil/connect-hub/internal/localapps/takeover"
 	"github.com/ehzyil/connect-hub/internal/model"
 	relayclient "github.com/ehzyil/connect-hub/internal/relay/client"
 	relaycontract "github.com/ehzyil/connect-hub/internal/relay/contract"
@@ -93,7 +94,7 @@ type app struct {
 	// queued snapshot could overwrite an edit the user saved in the meantime.
 	cfgReload    atomic.Bool
 	local        *localapps.Manager
-	resourceTUN  *resourceTUNController
+	resourceTUN  *takeover.Controller
 	localEditor  localAppDraft
 	localCatalog installedAppsCatalog
 	localDelete  string

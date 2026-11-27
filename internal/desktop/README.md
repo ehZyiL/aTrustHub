@@ -21,7 +21,11 @@
 | 本机应用与路由展示 | `localapps.go`、`installedapps*.go`、`routeview.go`、`resource_tun.go` |
 | 接管模式切换与启动/退出恢复 | `capture_mode.go`、`capture_restore.go` |
 | 网络接管及自动恢复装配 | `capture_chip.go`、`auto_capture.go`、`resource_proxy*.go`、`globaltun.go` |
-| 分享、发现及导入页面 | `lanshare.go`、`lan_discovery.go`、`import_relay.go`、`lanshare_firewall.go` |
+| 分享生命周期、结果消费与页面 | `lanshare.go`、`lanshare_view.go` |
+| 发现生命周期与页面 | `lan_discovery.go`、`lan_discovery_view.go` |
+| LAN 网卡筛选、推荐与缓存 | `lan_interfaces.go` |
+| 分享历史保护、节点详情与诊断 | `relay_history.go`、`relay_details.go` |
+| 分享导入与防火墙装配 | `import_relay.go`、`lanshare_firewall.go` |
 | 清理页面与选择/确认状态 | `cleanupview.go`、`cleanup.go` |
 | 托盘、关闭、主题及重绘 | `tray_*.go`、`quitclose*.go`、`theme_soft.go`、`redraw.go`、`state_ticker.go` |
 | 系统代理及退出恢复 | `systemproxy*.go` |
@@ -47,5 +51,7 @@ GOWORK=off go test -mod=readonly ./internal/desktop
 GOWORK=off go test -mod=readonly ./internal/cleanup/client ./internal/localapps/takeover
 ```
 
-结构与依赖门禁见 `component_boundaries_test.go`。主动渲染截图需设置 `EASYCONNECT_SHOTS=1`，
+结构与依赖门禁见 `component_boundaries_test.go`、`desktop_imports_test.go`；直接导入检查
+遍历所有非测试 Go 文件（包含其他平台），仅为现有装配位置保留精确例外。
+主动渲染截图需设置 `EASYCONNECT_SHOTS=1`，
 输出仍在产品根目录的 `build/shots`。完整开发与配套组件构建见 [开发手册](../../docs/DEVELOPMENT.md)。

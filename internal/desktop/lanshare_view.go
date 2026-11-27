@@ -136,6 +136,7 @@ func lanShareStateColor(t *ui.Theme, view relay.View) ui.Color {
 func (a *app) lanShareView(c *ui.Context) {
 	d := &a.lanShareUI
 	if !d.open {
+		a.stopPairManage()
 		return
 	}
 	a.drainLANShareResults()
@@ -225,6 +226,7 @@ func (a *app) lanShareView(c *ui.Context) {
 		})
 	})
 	if !d.open {
+		a.stopPairManage()
 		// Closing the panel keeps a running share running; it never cancels a
 		// saved enable intent. Only dropping an in-flight first enable was a
 		// cancellation, and that path is not entered from here.

@@ -16,7 +16,6 @@ import (
 // instead of being written from a worker goroutine, so the UI thread stays the
 // only writer of the draft.
 type lanShareResult struct {
-	pair   *relay.PairView
 	action string
 	err    error
 	notice string
@@ -32,6 +31,8 @@ type lanShareDraft struct {
 	pairPIN        string
 	pairBusy       bool
 	pairAt         time.Time
+	pairResults    chan pairManageResult
+	pairCancel     context.CancelFunc
 	pairConfirmAll bool
 	open           bool
 	// pointID is the single shared access point. There is no resource list.
@@ -114,6 +115,7 @@ func (a *app) lanShareEnabled() bool {
 // openLANShare prepares the panel from the real controller state. Opening it
 // never starts a listener.
 func (a *app) openLANShare() {
+	a.stopPairManage()
 	d := &a.lanShareUI
 	d.open = true
 	d.pairPIN = ""
@@ -219,26 +221,13 @@ func (a *app) lanShareCode() (string, error) {
 
 // drainLANShareResults applies finished async actions on the UI thread.
 func (a *app) drainLANShareResults() {
+	a.drainPairManageResults()
 	d := &a.lanShareUI
 	for {
 		select {
 		case res := <-d.results:
-			if res.action == "pairing" {
-				d.pairBusy = false
-				if res.pair != nil {
-					if res.pair.PIN != "" {
-						d.pairPIN = res.pair.PIN
-					}
-					if res.pair.Invitation == nil || (d.pair.Invitation != nil && d.pair.Invitation.ID != res.pair.Invitation.ID && res.pair.PIN == "") {
-						d.pairPIN = ""
-					}
-					d.pair = *res.pair
-					d.pair.PIN = ""
-				}
-				if res.err != nil {
-					d.err = res.err.Error()
-				}
-				continue
+			if res.action == "pause" {
+				d.pairAt = time.Time{}
 			}
 			d.busy = false
 			d.busyAction = ""
@@ -330,6 +319,7 @@ func (a *app) disableLANShare() {
 	if a.lanShare == nil {
 		return
 	}
+	a.stopPairManage()
 	d.busy, d.busyAction = true, "disable"
 	d.err, d.notice = "", ""
 	go func() {

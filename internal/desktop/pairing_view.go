@@ -10,47 +10,110 @@ import (
 	relay "github.com/ehzyil/connect-hub/internal/relay/contract"
 )
 
+type pairManageResult struct {
+	view relay.PairView
+	err  error
+}
+
+// Each request owns its mailbox. An explicit action can replace a passive
+// refresh without letting that refresh's late snapshot overwrite the action.
+func (a *app) stopPairManage() {
+	d := &a.lanShareUI
+	d.pairResults = nil
+	if d.pairCancel != nil {
+		d.pairCancel()
+		d.pairCancel = nil
+	}
+	d.pairBusy = false
+}
+
 func (a *app) pairManageAction(operation, id string) {
 	d := &a.lanShareUI
-	if d.pairBusy || a.lanShare == nil {
+	if d.pairBusy || d.busy || a.lanShare == nil {
 		return
 	}
-	d.pairBusy = true
+	if operation == "list" && d.pairResults != nil {
+		return
+	}
+	a.stopPairManage()
+	d.pairBusy = operation != "list"
 	d.pairAt = time.Now()
 	if operation != "list" {
 		d.err = ""
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	d.pairCancel = cancel
+	results := make(chan pairManageResult, 1)
+	d.pairResults = results
 	control := a.lanShare
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		v, err := control.PairControl(ctx, relay.PairCommand{Operation: operation, ID: id})
-		a.postLANShareResult(lanShareResult{action: "pairing", pair: &v, err: err})
+		results <- pairManageResult{view: v, err: err}
+		if operation == "list" {
+			a.invalidateCoalesced()
+		} else {
+			a.invalidate()
+		}
 	}()
+}
+
+func (a *app) drainPairManageResults() {
+	d := &a.lanShareUI
+	select {
+	case res := <-d.pairResults:
+		a.stopPairManage()
+		if res.err != nil {
+			d.err = res.err.Error()
+			return
+		}
+		v := res.view
+		if v.PIN != "" {
+			d.pairPIN = v.PIN
+		}
+		if v.Invitation == nil || v.Invitation.Cancelled || (d.pair.Invitation != nil && d.pair.Invitation.ID != v.Invitation.ID && v.PIN == "") {
+			d.pairPIN = ""
+		}
+		d.pair = v
+		d.pair.PIN = ""
+	default:
+	}
 }
 
 func (a *app) pairingManageView(c *ui.Context, view relay.View) {
 	d := &a.lanShareUI
 	t := c.Theme()
-	if !d.pairBusy && time.Since(d.pairAt) >= time.Second {
-		a.pairManageAction("list", "")
-		time.AfterFunc(time.Second, a.invalidateCoalesced)
+	if view.Paused {
+		d.pairPIN = ""
+		d.pair.Invitation = nil
+		d.pair.Requests = nil
 	}
+	if a.windowVisible() {
+		if !d.busy && !d.pairBusy && d.pairResults == nil && time.Since(d.pairAt) >= time.Second {
+			a.pairManageAction("list", "")
+		}
+		// Keep the next frame armed even when an action reset pairAt or a slow
+		// refresh is still running. Hidden or closed panels stop scheduling.
+		c.After(time.Second)
+	}
+	busy := d.busy || d.pairBusy
+	inv := d.pair.Invitation
+	activeInvite := inv != nil && !inv.Cancelled && time.Now().Before(inv.ExpiresAt) && inv.Approved < inv.Capacity
 	ui.Column(c).Gap(6).Children(func() {
 		ui.Text(c, "邀请码与设备授权").FontSize(13).Bold()
 		ui.Row(c).Gap(8).Children(func() {
-			if ui.Button(c, "生成邀请码").Disabled(d.pairBusy || view.State != relay.StateRunning).Clicked() {
+			if ui.Button(c, "生成邀请码").Disabled(busy || view.State != relay.StateRunning).Clicked() {
 				a.pairManageAction("create", "")
 			}
-			if ui.Button(c, "取消邀请码").Disabled(d.pairBusy || d.pair.Invitation == nil).Clicked() {
-				d.pairPIN = ""
+			if ui.Button(c, "取消邀请码").Disabled(busy || !activeInvite).Clicked() {
 				a.pairManageAction("cancel", "")
 			}
 			label := "暂停共享"
 			if view.Paused {
 				label = "恢复共享"
 			}
-			if ui.Button(c, label).Disabled(d.busy).Clicked() {
+			if ui.Button(c, label).Disabled(busy).Clicked() {
+				a.stopPairManage()
 				d.busy = true
 				control := a.lanShare
 				paused := view.Paused
@@ -91,10 +154,10 @@ func (a *app) pairingManageView(c *ui.Context, view relay.View) {
 				ui.Text(c, "校验码 "+r.Verification+" · 设备 "+r.DeviceID).Font("monospace").FontSize(10).Wrap()
 				if r.State == "pending" {
 					ui.Row(c).Gap(8).Children(func() {
-						if ui.Button(c, "批准").Label("批准 " + r.ID).Disabled(d.pairBusy).Clicked() {
+						if ui.Button(c, "批准").Label("批准 " + r.ID).Disabled(busy).Clicked() {
 							a.pairManageAction("approve", r.ID)
 						}
-						if ui.Button(c, "拒绝").Label("拒绝 " + r.ID).Disabled(d.pairBusy).Clicked() {
+						if ui.Button(c, "拒绝").Label("拒绝 " + r.ID).Disabled(busy).Clicked() {
 							a.pairManageAction("reject", r.ID)
 						}
 					})
@@ -106,24 +169,24 @@ func (a *app) pairingManageView(c *ui.Context, view relay.View) {
 			device := device
 			ui.Column(c).Key("device:" + device.ID).Gap(3).Children(func() {
 				ui.Text(c, device.Name+" · "+device.ID).FontSize(11).Wrap()
-				if ui.Button(c, "撤销此设备").Label("撤销 " + device.ID).Disabled(d.pairBusy).Clicked() {
+				if ui.Button(c, "撤销此设备").Label("撤销 " + device.ID).Disabled(busy).Clicked() {
 					a.pairManageAction("revoke", device.ID)
 				}
 			})
 		}
 		if d.pairConfirmAll {
 			ui.Text(c, "将断开并撤销全部 v2 设备；旧 v1 完整口令仍有效。要让所有口令失效请使用关闭共享。").FontSize(11).TextColor(t.Warning).Wrap()
-			if ui.Button(c, "确认撤销全部设备").Disabled(d.pairBusy).Clicked() {
+			if ui.Button(c, "确认撤销全部设备").Disabled(busy).Clicked() {
 				d.pairConfirmAll = false
 				a.pairManageAction("revoke-all", "")
 			}
 			if ui.Button(c, "取消撤销").Clicked() {
 				d.pairConfirmAll = false
 			}
-		} else if ui.Button(c, "撤销全部已配对设备…").Disabled(d.pairBusy || len(d.pair.Devices) == 0).Clicked() {
+		} else if ui.Button(c, "撤销全部已配对设备…").Disabled(busy || len(d.pair.Devices) == 0).Clicked() {
 			d.pairConfirmAll = true
 		}
-		ui.Text(c, "暂停共享保留授权；重新打开后设备免输邀请码。旧 v1 完整口令属于共享授权，无法单独识别或撤销其中一台设备；关闭共享会销毁主机身份并使全部口令和授权失效。").FontSize(11).TextColor(t.TextMuted).Wrap()
+		ui.Text(c, "暂停共享保留已配对设备授权，但当前邀请码和临时配对请求会失效；恢复共享后已配对设备免输邀请码，新设备需重新生成邀请码。旧 v1 完整口令属于共享授权，无法单独识别或撤销其中一台设备；关闭共享会销毁主机身份并使全部口令和授权失效。").FontSize(11).TextColor(t.TextMuted).Wrap()
 	})
 }
 

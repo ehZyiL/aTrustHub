@@ -50,6 +50,10 @@ func TestPairPauseRestartResumePreservesDevicesAndLegacyDisable(t *testing.T) {
 	if !persist.ShareSettings().Paused || !persist.ShareSettings().Enabled {
 		t.Fatal("pause destroyed share intent")
 	}
+	paused, err := controller.PairControl(ctx, contract.PairCommand{Operation: "list"})
+	if err != nil || len(paused.Devices) != 1 || len(paused.Requests) != 0 || paused.Invitation != nil {
+		t.Fatal("pause without restart lost grant or retained ephemeral state", err)
+	}
 	if err = controller.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +70,10 @@ func TestPairPauseRestartResumePreservesDevicesAndLegacyDisable(t *testing.T) {
 	}
 	if err = controller.ResumeSharing(ctx); err != nil {
 		t.Fatal(err)
+	}
+	resumed, err := controller.PairControl(ctx, contract.PairCommand{Operation: "list"})
+	if err != nil || len(resumed.Devices) != 1 || len(resumed.Requests) != 0 || resumed.Invitation != nil {
+		t.Fatal("resume restored an old invitation or request", err)
 	}
 	if restored, err := controller.ShareCode(); err != nil || restored != legacy {
 		t.Fatal("resume rotated legacy identity", err)

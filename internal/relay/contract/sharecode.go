@@ -69,6 +69,10 @@ func (c ShareCode) DisplayName() string {
 // String rebuilds the canonical share code. It is used for copy and for the
 // QR payload, so both carry exactly the same text.
 func (c ShareCode) String() string {
+	// Device private keys are never exportable as legacy shared bearer codes.
+	if c.Version != ShareVersion {
+		return ""
+	}
 	payload := struct {
 		V     int    `json:"v"`
 		H     string `json:"h"`

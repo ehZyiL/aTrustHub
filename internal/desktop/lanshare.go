@@ -16,6 +16,7 @@ import (
 // instead of being written from a worker goroutine, so the UI thread stays the
 // only writer of the draft.
 type lanShareResult struct {
+	pair   *relay.PairView
 	action string
 	err    error
 	notice string
@@ -24,10 +25,15 @@ type lanShareResult struct {
 	saveFailed bool
 }
 
-// lanShareDraft is the 局域网分享 panel state. It holds no credential: the share
-// code is read from the controller only while it is running.
+// lanShareDraft is the 局域网分享 panel state. Only the explicit create response
+// supplies a temporary PIN; long-lived share credentials stay in the controller.
 type lanShareDraft struct {
-	open bool
+	pair           relay.PairView
+	pairPIN        string
+	pairBusy       bool
+	pairAt         time.Time
+	pairConfirmAll bool
+	open           bool
 	// pointID is the single shared access point. There is no resource list.
 	pointID       string
 	interfaceName string
@@ -110,6 +116,8 @@ func (a *app) lanShareEnabled() bool {
 func (a *app) openLANShare() {
 	d := &a.lanShareUI
 	d.open = true
+	d.pairPIN = ""
+	d.pairAt = time.Time{}
 	d.err, d.notice = "", ""
 	d.confirmClose = false
 	d.showCode = false
@@ -215,6 +223,23 @@ func (a *app) drainLANShareResults() {
 	for {
 		select {
 		case res := <-d.results:
+			if res.action == "pairing" {
+				d.pairBusy = false
+				if res.pair != nil {
+					if res.pair.PIN != "" {
+						d.pairPIN = res.pair.PIN
+					}
+					if res.pair.Invitation == nil || (d.pair.Invitation != nil && d.pair.Invitation.ID != res.pair.Invitation.ID && res.pair.PIN == "") {
+						d.pairPIN = ""
+					}
+					d.pair = *res.pair
+					d.pair.PIN = ""
+				}
+				if res.err != nil {
+					d.err = res.err.Error()
+				}
+				continue
+			}
 			d.busy = false
 			d.busyAction = ""
 			if res.action == "discovery" || res.action == "discovery-name" ||

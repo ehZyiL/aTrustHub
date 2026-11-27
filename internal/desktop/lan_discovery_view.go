@@ -61,7 +61,7 @@ func (a *app) lanShareDiscoveryView(c *ui.Context, view relay.View) {
 				}
 			}
 		})
-		ui.Text(c, "同一网络的其他设备可以看到该名称和连接地址；加入仍需分享口令。发现不会开启共享、VPN 或系统代理。").
+		ui.Text(c, "同一网络的其他设备可以看到该名称和连接地址；新设备可用限时邀请码申请，旧版本仍需完整分享口令。发现本身不授予信任。").
 			FontSize(11).TextColor(t.TextMuted).Wrap()
 		ui.Text(c, "同事收不到时：确认双方在同一网段，且系统防火墙允许本程序接收 5353/UDP 组播"+
 			"（Windows：专用网络并开启「网络发现」）。").
@@ -246,6 +246,20 @@ func (a *app) relayDiscoveryAction(c *ui.Context, d *relayImportDraft, cand disc
 				go a.mgr.Connect(existing.ID)
 				a.toast = "正在连接「" + existing.Name + "」"
 			}
+			if cand.Pairing && existing.Relay.PairingUnconfirmed {
+				if ui.Button(c, "重新配对").FontSize(11).Clicked() {
+					a.stopPairImport()
+					d.pinned = cand
+					d.pinnedKey = cand.Key()
+					d.tab = 2
+					d.deviceName = "我的设备"
+					d.pairProgress = relay.PairProgress{}
+					d.pairStoredID = ""
+					d.err = ""
+					a.closeLANDiscovery()
+					a.invalidate()
+				}
+			}
 			return
 		}
 		ui.Text(c, "地址不同，需新口令核对").FontSize(11).TextColor(t.Warning)
@@ -255,6 +269,10 @@ func (a *app) relayDiscoveryAction(c *ui.Context, d *relayImportDraft, cand disc
 		d.pinned = cand
 		d.pinnedKey = cand.Key()
 		d.tab = 1
+		if cand.Pairing {
+			d.tab = 2
+			d.deviceName = "我的设备"
+		}
 		d.err = ""
 		a.closeLANDiscovery()
 		a.invalidate()

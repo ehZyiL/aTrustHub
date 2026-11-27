@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -11,11 +12,20 @@ import (
 )
 
 // relayImportDraft is the 同事分享 import panel. Preview is local: parsing and
-// rendering never touch the network. Only "添加并连接" contacts the host.
+// rendering never touch the network. Only an explicit connect or pair action
+// contacts the host.
 type relayImportDraft struct {
-	open bool
-	// tab is 0 for 发现局域网分享 and 1 for 粘贴口令. The two entries are
-	// independent: discovery never becomes a prerequisite for a code.
+	pin          string
+	deviceName   string
+	pairAttempt  relay.PairAttempt
+	pairCancel   context.CancelFunc
+	pairStarts   chan pairStartResult
+	pairProgress relay.PairProgress
+	pairStoredID string
+	pairAck      chan error
+	open         bool
+	// tab is 0 for discovery, 1 for a v1 code, and 2 for an explicitly selected
+	// v2 pairing target. Authentication errors never switch it back to v1.
 	tab  int
 	text string
 	code relay.ShareCode
@@ -32,6 +42,7 @@ type relayImportDraft struct {
 // openRelayImport opens the import panel. It does not read the clipboard: that is
 // a separate opt-in feature.
 func (a *app) openRelayImport() {
+	a.stopPairImport()
 	// Interface enumeration and optional component startup run after the dialog
 	// opens. The result switches to paste when no browsing interface is available.
 	tab := 0
@@ -48,6 +59,7 @@ func (a *app) openRelayImport() {
 // closeRelayImport stops browsing: a closed dialog must not keep a socket or a
 // callback alive.
 func (a *app) closeRelayImport() {
+	a.stopPairImport()
 	a.relayImport.open = false
 	a.closeLANDiscovery()
 	a.invalidate()
@@ -58,12 +70,14 @@ func (a *app) relayImportView(c *ui.Context) {
 	if !d.open {
 		return
 	}
+	a.drainPairImport()
 	t := c.Theme()
 	ui.Modal(c, &d.open, func() {
 		if !d.open {
 			// Closing through the modal's own close control must stop browsing
 			// too; the explicit button below does the same on purpose.
 			a.closeLANDiscovery()
+			a.stopPairImport()
 		}
 		ui.Column(c).Width(dialogRegular).Gap(10).Children(func() {
 			dialogHeader(c, "同事分享", "两边的设备需要在同一个局域网里")
@@ -77,12 +91,18 @@ func (a *app) relayImportView(c *ui.Context) {
 				}
 				if ui.Button(c, disc).FontSize(11).Clicked() {
 					if d.tab != 0 {
+						a.stopPairImport()
 						d.tab = 0
 						a.openLANDiscovery()
 					}
 					a.invalidate()
 				}
 				if ui.Button(c, codeLabel).FontSize(11).Clicked() {
+					a.stopPairImport()
+					if d.tab == 2 {
+						d.pinnedKey = ""
+						d.pinned = discovery.Candidate{}
+					}
 					d.tab = 1
 					a.closeLANDiscovery()
 					a.invalidate()
@@ -93,6 +113,8 @@ func (a *app) relayImportView(c *ui.Context) {
 				ui.Column(c).Padding(0, 14, 8, 0).Gap(10).Children(func() {
 					if d.tab == 0 {
 						a.relayDiscoveryBody(c, d)
+					} else if d.tab == 2 {
+						a.pairImportView(c, d)
 					} else {
 						a.relayCodeBody(c, d)
 					}
@@ -115,6 +137,9 @@ func (a *app) relayImportView(c *ui.Context) {
 			})
 		})
 	})
+	if !d.open {
+		a.stopPairImport()
+	}
 }
 
 // relayCodeBody is the paste-a-code form. Pasting is not replaced by discovery:

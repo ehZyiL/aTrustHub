@@ -100,6 +100,11 @@ EOF
 install -m 0644 "$app_root/LICENSE" "$bundle/LICENSES/aTrustHub-AGPL-3.0.txt"
 install -m 0644 "$worker_root/LICENSE" "$bundle/LICENSES/ZJU-Connect-AGPL-3.0.txt"
 install -m 0644 "$worker_root/third_party/utls/LICENSE" "$bundle/LICENSES/uTLS.txt"
+for module in github.com/bytemare/opaque github.com/bytemare/ecc github.com/bytemare/hash github.com/bytemare/hash2curve github.com/bytemare/ksf github.com/bytemare/secp256k1 github.com/gtank/ristretto255 filippo.io/edwards25519 filippo.io/nistec; do
+  module_dir=$(cd "$app_root" && "$go_tool" list -m -f '{{.Dir}}' "$module")
+  module_name=${module##*/}
+  install -m 0644 "$module_dir/LICENSE" "$bundle/LICENSES/$module_name.txt"
+done
 
 cat > "$bundle/COMPONENTS.txt" <<EOF
 Connect Hub macOS bundle

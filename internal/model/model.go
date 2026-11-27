@@ -137,9 +137,10 @@ const (
 // It is metadata only: the token stays in the secret store and the rules come
 // from the sharing host after authentication.
 type RelayPointOptions struct {
-	Version           int    `json:"version"`
-	ShareID           string `json:"shareId"`
-	CertificateSHA256 string `json:"certificateSHA256"`
+	PairingUnconfirmed bool   `json:"pairingUnconfirmed,omitempty"`
+	Version            int    `json:"version"`
+	ShareID            string `json:"shareId"`
+	CertificateSHA256  string `json:"certificateSHA256"`
 	// HistoryInitialized records that a first verified snapshot was persisted
 	// for this node. The cache itself is never an authorization source.
 	HistoryInitialized bool `json:"historyInitialized,omitempty"`
@@ -199,6 +200,7 @@ type AccessPoint struct {
 // absence of the whole object means "never enabled", so a first install and an
 // upgraded configuration both start switched off.
 type LANShareSettings struct {
+	Paused  bool `json:"paused,omitempty"`
 	Enabled bool `json:"enabled"`
 	// PointID is the single access point shared by this host. Nothing else is
 	// scoped: the whole point is shared.
@@ -232,7 +234,7 @@ type LANShareSettings struct {
 // compiles but a configuration holding only discovery=false would stop looking
 // empty and would silently skip Settings.Normalize's default backfill.
 func (s LANShareSettings) IsZero() bool {
-	return s.Enabled == false && s.PointID == "" && s.InterfaceName == "" &&
+	return s.Enabled == false && !s.Paused && s.PointID == "" && s.InterfaceName == "" &&
 		s.PreferredIPv4 == "" && s.Port == 0 && s.BoundPort == 0 &&
 		s.ShareID == "" && s.CertificateSHA256 == "" &&
 		s.DiscoveryEnabled == nil && s.DiscoveryName == ""
@@ -979,7 +981,7 @@ func (p *AccessPoint) validateRelay() error {
 	if p.Relay == nil {
 		return errors.New("缺少分享身份信息，请重新导入分享口令")
 	}
-	if p.Relay.Version != 1 {
+	if p.Relay.Version != 1 && p.Relay.Version != 2 {
 		return errors.New("分享协议版本不受支持")
 	}
 	if !ValidShareID(p.Relay.ShareID) {

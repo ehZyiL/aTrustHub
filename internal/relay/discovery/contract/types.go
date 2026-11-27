@@ -83,6 +83,7 @@ func (i Interface) String() string {
 // no share code: a colleague learns an address and a name, never an
 // authorization.
 type Announcement struct {
+	Pairing bool
 	// Generation changes whenever the sharing instance changes, so a
 	// registration that finishes late can be recognised and revoked.
 	Generation uint64
@@ -141,8 +142,9 @@ func (a Announcement) Validate() error {
 }
 
 // Candidate is one share a colleague can see. It is unverified: nothing here
-// proves the remote identity, which is why joining still needs a share code.
+// proves the remote identity. Joining needs PAKE or an explicitly pasted v1 code.
 type Candidate struct {
+	Pairing         bool
 	Instance        string
 	ShareID         string
 	Name            string

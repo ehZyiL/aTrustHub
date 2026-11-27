@@ -50,6 +50,7 @@ func shareIDFromLabel(label string) (string, bool) {
 // txtFields is the parsed content of one TXT record. Unknown keys are ignored
 // but counted, so the field budget still bounds a hostile record.
 type txtFields struct {
+	Pairing         bool
 	DraftVersion    int
 	ProtocolVersion int
 	ShareID         string
@@ -57,14 +58,18 @@ type txtFields struct {
 	Unknown         int
 }
 
-// BuildTXT serialises the four keys this version publishes.
+// BuildTXT serialises the legacy fields and an optional pairing capability.
 func BuildTXT(a Announcement) []string {
-	return []string{
+	fields := []string{
 		"dv=" + strconv.Itoa(DraftVersion),
 		"pv=" + strconv.Itoa(a.ProtocolVersion),
 		"sid=" + a.ShareID,
 		"name=" + a.Name,
 	}
+	if a.Pairing {
+		fields = append(fields, "pair=opaque-ed25519-v2")
+	}
+	return fields
 }
 
 // ParseTXT validates a received TXT record. Required keys are dv, pv and sid;
@@ -109,6 +114,8 @@ func ParseTXT(parts []string) (txtFields, error) {
 		}
 		seen[key] = true
 		switch key {
+		case "pair":
+			out.Pairing = value == "opaque-ed25519-v2"
 		case "dv":
 			v, err := strconv.Atoi(value)
 			if err != nil {

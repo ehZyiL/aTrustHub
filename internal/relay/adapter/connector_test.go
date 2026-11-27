@@ -39,3 +39,10 @@ func TestFriendlyRelayErrorKeepsTerminalClassification(t *testing.T) {
 		t.Fatal("plain errors must stay reconnectable")
 	}
 }
+
+func TestPairedDeviceFailureKeepsClassificationAndPairingGuidance(t *testing.T) {
+	err := friendlyRelayErrorForVersion(relay.NewError(relay.CodeInvalidCredentials, "raw"), 2)
+	if reconnectable(err) || !strings.Contains(err.Error(), "重新配对") || strings.Contains(err.Error(), "新口令") {
+		t.Fatal("v2 failure lost terminal classification or used v1 recovery", err)
+	}
+}

@@ -101,6 +101,8 @@ func (c *Controller) View() View {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	view := View{
+		Pairing:        supportsPairing(c.server) || (c.settings.Paused && deviceStore(c.persist) != nil),
+		Paused:         c.settings.Paused,
 		Enabled:        c.settings.Enabled,
 		State:          c.state,
 		Operation:      c.opID,
@@ -152,6 +154,7 @@ func (c *Controller) DiscoverySnapshot() (DiscoveryAnnouncement, bool) {
 	// The alias may be empty here: the app fills the default from the share ID
 	// before publishing, so this package stays independent of model.
 	return DiscoveryAnnouncement{
+		Pairing:         supportsPairing(c.server),
 		Generation:      c.opID,
 		ShareID:         c.settings.ShareID,
 		Name:            c.settings.DiscoveryName,
@@ -266,6 +269,7 @@ func (c *Controller) Enable(ctx context.Context, opts EnableOptions) error {
 	}
 	c.opID++
 	c.settings.Enabled = true
+	c.settings.Paused = false
 	c.settings.PointID = opts.PointID
 	c.settings.InterfaceName = opts.InterfaceName
 	if opts.PreferredIPv4 != "" {
@@ -337,6 +341,7 @@ func (c *Controller) Disable(ctx context.Context) error {
 	c.opID++
 	c.restoreSuppressed = true
 	c.settings.Enabled = false
+	c.settings.Paused = false
 	c.state = StateStopping
 	c.publishLocked()
 	server, source := c.detachInstanceLocked()
@@ -592,7 +597,7 @@ func (c *Controller) loop(ctx context.Context, done chan struct{}, kick <-chan s
 // down first so a late connection can never cross into the new generation.
 func (c *Controller) reconcileTick(ctx context.Context) {
 	c.mu.Lock()
-	if ctx.Err() != nil || c.closed || !c.settings.Enabled || c.restoreSuppressed {
+	if ctx.Err() != nil || c.closed || !c.settings.Enabled || c.settings.Paused || c.restoreSuppressed {
 		c.mu.Unlock()
 		return
 	}
@@ -643,7 +648,7 @@ func (c *Controller) reconcileTick(ctx context.Context) {
 // first is true only for a manual first enable, which rolls back instead of
 // entering Blocked.
 func (c *Controller) reconcileLocked(ctx context.Context, first bool) error {
-	if c.closed || !c.settings.Enabled || c.restoreSuppressed {
+	if c.closed || !c.settings.Enabled || c.settings.Paused || c.restoreSuppressed {
 		return nil
 	}
 	if c.state == StateRunning && c.server != nil {
@@ -729,6 +734,7 @@ func (c *Controller) reconcileLocked(ctx context.Context, first bool) error {
 		port = s.Port
 	}
 	server, err := c.serverFactory(ServerOptions{
+		DeviceStore:      deviceStore(c.persist),
 		Identity:         identity,
 		Source:           src,
 		Token:            token,

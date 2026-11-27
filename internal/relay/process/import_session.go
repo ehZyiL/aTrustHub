@@ -56,10 +56,13 @@ var (
 // or mismatched component is a hard error; the Hub never reconnects directly.
 func NewConnector(executable string, saveSnapshot func(string, contract.RelaySnapshotSource, *workeripc.ResourceSnapshot) error) vpncontract.Connector {
 	return func(ctx context.Context, point model.AccessPoint, creds vpncontract.Credentials) (vpncontract.Session, error) {
-		if point.Protocol != model.ProtocolLANRelay || point.Relay == nil || point.Relay.Version != 1 {
+		if point.Protocol != model.ProtocolLANRelay || point.Relay == nil || (point.Relay.Version != 1 && point.Relay.Version != 2) {
 			return nil, errors.New("分享接入点身份无效或版本不受支持")
 		}
 		if creds.Login == "" {
+			if point.Relay.Version == 2 {
+				return nil, errors.New("设备凭据缺失，请删除此节点后从发现列表重新配对")
+			}
 			return nil, errors.New("分享口令缺失，请重新导入")
 		}
 		if executable == "" {

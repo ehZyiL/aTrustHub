@@ -80,7 +80,7 @@ install -m 0644 "$worker_root/LICENSE" "$bundle/LICENSES/ZJU-Connect-AGPL-3.0.tx
 install -m 0644 "$worker_root/third_party/utls/LICENSE" "$bundle/LICENSES/uTLS.txt"
 install -m 0644 "$worker_root/third_party/utls/dicttls/LICENSE" "$bundle/LICENSES/uTLS-dicttls.txt"
 install -m 0644 "$worker_root/third_party/utls/EASYCONNECT_PATCH.md" "$bundle/LICENSES/uTLS-PATCH.md"
-for module in github.com/egoist/mygo github.com/mythologyli/sing-tun github.com/metacubex/gvisor github.com/sagernet/sing golang.org/x/sys; do
+for module in github.com/egoist/mygo github.com/mythologyli/sing-tun github.com/metacubex/gvisor github.com/sagernet/sing golang.org/x/sys github.com/bytemare/opaque github.com/bytemare/ecc github.com/bytemare/hash github.com/bytemare/hash2curve github.com/bytemare/ksf github.com/bytemare/secp256k1 github.com/gtank/ristretto255 filippo.io/edwards25519 filippo.io/nistec; do
   module_dir=$(cd "$app_root" && "$go_tool" list -m -f '{{.Dir}}' "$module")
   module_name=${module##*/}
   install -m 0644 "$module_dir/LICENSE" "$bundle/LICENSES/$module_name.txt"

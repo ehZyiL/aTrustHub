@@ -37,10 +37,13 @@ func connectRelay(ctx context.Context, opts Options, point model.AccessPoint, cr
 	if point.Relay == nil {
 		return nil, errors.New("分享节点缺少身份信息，请重新导入分享口令")
 	}
-	if point.Relay.Version != 1 {
+	if point.Relay.Version != 1 && point.Relay.Version != 2 {
 		return nil, fmt.Errorf("分享协议版本 %d 不受支持", point.Relay.Version)
 	}
 	if creds.Login == "" {
+		if point.Relay.Version == 2 {
+			return nil, errors.New("设备凭据缺失，请删除此节点后从发现列表重新配对")
+		}
 		return nil, errors.New("分享口令缺失，请重新导入")
 	}
 	code := relay.ShareCode{
@@ -64,7 +67,7 @@ func connectRelay(ctx context.Context, opts Options, point model.AccessPoint, cr
 	cancel()
 	if err != nil {
 		client.Close()
-		return nil, friendlyRelayError(err)
+		return nil, friendlyRelayErrorForVersion(err, point.Relay.Version)
 	}
 	raw := workerResources(state.Resources)
 	source := relaycontract.RelaySnapshotSource{ShareID: point.Relay.ShareID, Fingerprint: point.Relay.CertificateSHA256}
@@ -117,6 +120,14 @@ func display(err error, msg string) error {
 
 // friendlyRelayError maps protocol failures to the words the card shows. It never
 // says "VPN 密码错误": a share token is a different credential.
+func friendlyRelayErrorForVersion(err error, version int) error {
+	var re *relay.Error
+	if version == 2 && errors.As(err, &re) && re.Code == relay.CodeInvalidCredentials {
+		return display(err, "设备授权尚未批准或已撤销，请向主机确认；如需重新配对，请删除此节点后从发现列表加入")
+	}
+	return friendlyRelayError(err)
+}
+
 func friendlyRelayError(err error) error {
 	var re *relay.Error
 	if errors.As(err, &re) {
@@ -227,7 +238,7 @@ func (s *relaySession) DialVPN(ctx context.Context, network, addr string) (net.C
 		}
 	}
 	if err != nil {
-		return nil, friendlyRelayError(err)
+		return nil, friendlyRelayErrorForVersion(err, s.client.Code().Version)
 	}
 	return conn, nil
 }
@@ -358,7 +369,7 @@ func (s *relaySession) heartbeat() {
 			}
 			var re *relay.Error
 			if errors.As(err, &re) && re.Code.Terminal() {
-				s.fail(friendlyRelayError(err))
+				s.fail(friendlyRelayErrorForVersion(err, s.client.Code().Version))
 				return
 			}
 			// A transient network failure gets a bounded budget instead of an
@@ -382,7 +393,7 @@ func (s *relaySession) heartbeat() {
 		if err := s.refresh(status); err != nil {
 			var re *relay.Error
 			if errors.As(err, &re) && re.Code.Terminal() {
-				s.fail(friendlyRelayError(err))
+				s.fail(friendlyRelayErrorForVersion(err, s.client.Code().Version))
 				return
 			}
 			// A bad snapshot is refused rather than published: the old

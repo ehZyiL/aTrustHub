@@ -26,6 +26,7 @@ func (a RelayShareStore) ShareSettings() relay.Settings {
 		discovery = &enabled
 	}
 	return relay.Settings{
+		Paused:           share.Paused,
 		Enabled:          share.Enabled,
 		PointID:          share.PointID,
 		InterfaceName:    share.InterfaceName,
@@ -49,6 +50,7 @@ func (a RelayShareStore) SaveShareSettings(s relay.Settings) error {
 			discovery = &enabled
 		}
 		cfg.Settings.LANShare = model.LANShareSettings{
+			Paused:            s.Paused,
 			Enabled:           s.Enabled,
 			PointID:           s.PointID,
 			InterfaceName:     s.InterfaceName,

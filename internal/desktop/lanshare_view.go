@@ -90,6 +90,9 @@ func (a *app) lanShareSection(c *ui.Context) {
 }
 
 func lanShareStateText(view relay.View) string {
+	if view.Paused {
+		return "共享已暂停 · 设备授权已保留"
+	}
 	if view.FailureCode == "unavailable" {
 		return "分享组件不可用：" + view.Failure
 	}
@@ -226,6 +229,7 @@ func (a *app) lanShareView(c *ui.Context) {
 		// saved enable intent. Only dropping an in-flight first enable was a
 		// cancellation, and that path is not entered from here.
 		d.confirmClose = false
+		d.pairPIN = ""
 	}
 }
 
@@ -301,7 +305,7 @@ func (a *app) lanShareEnableForm(c *ui.Context, d *lanShareDraft) {
 	}
 	ui.Column(c).Gap(4).Children(func() {
 		ui.Checkbox(c, &d.discovery, "允许同一网络的同事发现")
-		ui.Text(c, "同一网络的其他设备可以看到公开名称和连接地址；加入仍需分享口令。").
+		ui.Text(c, "同一网络的其他设备可以看到公开名称和连接地址；加入仍需邀请码配对或完整分享口令。").
 			FontSize(11).TextColor(c.Theme().TextMuted).Wrap()
 		if d.discovery {
 			ui.Field(c, "公开名称", func() {
@@ -369,6 +373,9 @@ func (a *app) lanShareManageBody(c *ui.Context, d *lanShareDraft, view relay.Vie
 		ui.Text(c, "原因："+view.Failure).FontSize(12).TextColor(t.Danger).Wrap()
 	}
 	a.lanShareDiscoveryView(c, view)
+	if view.Pairing {
+		a.pairingManageView(c, view)
+	}
 	if view.State == relay.StateRunning {
 		info := relayfirewall.FirewallInfo()
 		ui.Column(c).Gap(3).Children(func() {

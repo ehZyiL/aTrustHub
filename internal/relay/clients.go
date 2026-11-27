@@ -154,6 +154,19 @@ func (r *clientRegistry) remove(token string) {
 	}
 }
 
+// removeID revokes the current lease for one authenticated device identity.
+func (r *clientRegistry) removeID(id string) {
+	r.mu.Lock()
+	c := r.byID[id]
+	if c != nil {
+		r.evictLocked(c)
+	}
+	r.mu.Unlock()
+	if c != nil {
+		r.revoke([]*client{c})
+	}
+}
+
 // removeAll revokes every client, which is what switching a share off does.
 func (r *clientRegistry) removeAll() {
 	r.mu.Lock()
@@ -447,14 +460,9 @@ func (r *rateLimiter) allow(ip string) bool {
 	if r.global == nil {
 		r.global = &bucket{tokens: r.burst, last: now}
 	}
-	if !take(r.global, r.rate/60, r.burst, now) {
-		return false
-	}
 	b := r.perIP[ip]
 	if b == nil {
-		b = &bucket{tokens: r.perBurst, last: now}
-		r.perIP[ip] = b
-		if len(r.perIP) > 4096 {
+		if len(r.perIP) >= 4096 {
 			// Bound the map: drop stale sources rather than grow forever.
 			for key, old := range r.perIP {
 				if now.Sub(old.last) > 10*time.Minute {
@@ -462,8 +470,16 @@ func (r *rateLimiter) allow(ip string) bool {
 				}
 			}
 		}
+		if len(r.perIP) >= 4096 {
+			return false
+		}
+		b = &bucket{tokens: r.perBurst, last: now}
+		r.perIP[ip] = b
 	}
-	return take(b, r.perRate/60, r.perBurst, now)
+	if !take(b, r.perRate/60, r.perBurst, now) {
+		return false
+	}
+	return take(r.global, r.rate/60, r.burst, now)
 }
 
 func take(b *bucket, ratePerSecond, burst float64, now time.Time) bool {

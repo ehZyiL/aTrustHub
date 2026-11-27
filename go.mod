@@ -3,6 +3,7 @@ module github.com/ehzyil/connect-hub
 go 1.27.3
 
 require (
+	github.com/bytemare/opaque v0.18.0
 	github.com/egoist/mygo v0.7.3
 	github.com/go-ole/go-ole v1.3.0
 	github.com/gorilla/websocket v1.5.3
@@ -18,13 +19,21 @@ require (
 )
 
 require (
+	filippo.io/edwards25519 v1.2.0 // indirect
+	filippo.io/nistec v0.0.4 // indirect
 	github.com/andybalholm/brotli v1.2.1 // indirect
 	github.com/beevik/etree v1.6.0 // indirect
 	github.com/boombuler/barcode v1.1.0 // indirect
+	github.com/bytemare/ecc v0.9.0 // indirect
+	github.com/bytemare/hash v0.6.2 // indirect
+	github.com/bytemare/hash2curve v0.5.4 // indirect
+	github.com/bytemare/ksf v0.5.0 // indirect
+	github.com/bytemare/secp256k1 v0.3.0 // indirect
 	github.com/ebitengine/purego v0.11.1 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/go-text/typesetting v0.3.5 // indirect
 	github.com/google/btree v1.1.3 // indirect
+	github.com/gtank/ristretto255 v0.2.0 // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect

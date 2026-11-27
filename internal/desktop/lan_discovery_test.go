@@ -1082,7 +1082,7 @@ func TestAcceptanceEnableFormHasNoDuplicateDiscoveryLabel(t *testing.T) {
 	if got := strings.Count(joined, "允许同一网络的同事发现"); got != 1 {
 		t.Fatalf("勾选项文字出现 %d 次：%s", got, joined)
 	}
-	if !strings.Contains(joined, "加入仍需分享口令") {
+	if !strings.Contains(joined, "加入仍需邀请码配对或完整分享口令") {
 		t.Fatalf("缺少公开范围说明：%s", joined)
 	}
 	if !strings.Contains(joined, "不会使用 VPN 名称") {

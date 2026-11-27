@@ -453,5 +453,5 @@ func sameAnnouncement(a, b Announcement) bool {
 	return a.ShareID == b.ShareID && a.Name == b.Name && a.Port == b.Port &&
 		a.Address == b.Address && a.Interface.Name == b.Interface.Name &&
 		a.Interface.IPv4 == b.Interface.IPv4 &&
-		a.ProtocolVersion == b.ProtocolVersion && a.Generation == b.Generation
+		a.ProtocolVersion == b.ProtocolVersion && a.Generation == b.Generation && a.Pairing == b.Pairing
 }

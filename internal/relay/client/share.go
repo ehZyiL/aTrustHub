@@ -29,6 +29,9 @@ type Share interface {
 
 type Controller interface {
 	Share
+	contract.PairControl
+	PauseSharing(context.Context) error
+	ResumeSharing(context.Context) error
 	Component() components.Snapshot
 }
 
@@ -39,6 +42,25 @@ type Control struct {
 	instance     string
 	availability components.Availability
 	detail       string
+}
+
+func (c *Control) PairControl(ctx context.Context, cmd contract.PairCommand) (contract.PairView, error) {
+	if p, ok := c.Share.(contract.PairControl); ok {
+		return p.PairControl(ctx, cmd)
+	}
+	return contract.PairView{}, errors.New("pairing_unsupported: 分享组件不支持设备配对")
+}
+func (c *Control) PauseSharing(ctx context.Context) error {
+	if p, ok := c.Share.(interface{ PauseSharing(context.Context) error }); ok {
+		return p.PauseSharing(ctx)
+	}
+	return errors.New("分享组件不支持暂停")
+}
+func (c *Control) ResumeSharing(ctx context.Context) error {
+	if p, ok := c.Share.(interface{ ResumeSharing(context.Context) error }); ok {
+		return p.ResumeSharing(ctx)
+	}
+	return errors.New("分享组件不支持恢复")
 }
 
 func NewLocal(share Share) *Control {

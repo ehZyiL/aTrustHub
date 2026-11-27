@@ -8,6 +8,7 @@ import (
 	"github.com/ehzyil/connect-hub/internal/relay"
 	relayadapter "github.com/ehzyil/connect-hub/internal/relay/adapter"
 	relayclient "github.com/ehzyil/connect-hub/internal/relay/client"
+	relaycontract "github.com/ehzyil/connect-hub/internal/relay/contract"
 	relayprocess "github.com/ehzyil/connect-hub/internal/relay/process"
 	"github.com/ehzyil/connect-hub/internal/store"
 	"github.com/ehzyil/connect-hub/internal/vpn"
@@ -44,6 +45,9 @@ func (a *app) setupLANShare() {
 		return relay.FormatReport(relay.Diagnose(ctx, code, relay.DiagnoseOptions{})), nil
 	}
 	a.lanShareUI.results = make(chan lanShareResult, 4)
+	a.pairStart = func(ctx context.Context, target relaycontract.PairTarget, pin string) (relaycontract.PairAttempt, error) {
+		return relayprocess.StartPairing(ctx, executable, target, pin)
+	}
 	a.setupLANDiscovery()
 }
 

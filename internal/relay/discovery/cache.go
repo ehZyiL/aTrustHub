@@ -277,6 +277,7 @@ func (c *cache) candidate(s *instanceState, now time.Time) (Candidate, bool) {
 		return Candidate{}, false
 	}
 	cand := Candidate{
+		Pairing:         s.txt.Pairing,
 		Instance:        s.instance,
 		ShareID:         s.txt.ShareID,
 		Name:            s.txt.Name,
@@ -353,7 +354,7 @@ func truncate(s string, n int) string {
 func sameCandidate(a, b Candidate) bool {
 	return a.ShareID == b.ShareID && a.Name == b.Name && a.Address == b.Address &&
 		a.Port == b.Port && a.Interface == b.Interface &&
-		a.ProtocolVersion == b.ProtocolVersion && a.DraftVersion == b.DraftVersion
+		a.ProtocolVersion == b.ProtocolVersion && a.DraftVersion == b.DraftVersion && a.Pairing == b.Pairing
 }
 
 // expire removes records whose TTL ran out and reports the candidates that

@@ -48,6 +48,7 @@ type app struct {
 	lanShare      relayclient.Controller
 	lanShareUI    lanShareDraft
 	relayImport   relayImportDraft
+	pairStart     func(context.Context, relaycontract.PairTarget, string) (relaycontract.PairAttempt, error)
 	relayDiagnose relayDiagnoseDraft
 	relayCheck    func(context.Context, relaycontract.ShareCode) ([]string, error)
 	relayPoint    relayPointDraft

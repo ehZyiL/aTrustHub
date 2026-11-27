@@ -22,6 +22,7 @@ const (
 // Settings is the persisted share intent and identity, mirrored from
 // model.LANShareSettings by the persistence adapter.
 type Settings struct {
+	Paused        bool
 	Enabled       bool
 	PointID       string
 	InterfaceName string
@@ -87,6 +88,8 @@ type EnableOptions struct {
 
 // View is an immutable snapshot for the UI. It carries no token.
 type View struct {
+	Pairing     bool
+	Paused      bool
 	Enabled     bool
 	State       State
 	Operation   uint64
@@ -114,6 +117,7 @@ type View struct {
 // blocked instance never advertises an endpoint that cannot be used, and it
 // cannot carry a token: the code that builds it has no access to one.
 type DiscoveryAnnouncement struct {
+	Pairing bool
 	// Generation changes whenever the share instance changes. A registration
 	// that finishes after a generation change is revoked instead of published.
 	Generation      uint64

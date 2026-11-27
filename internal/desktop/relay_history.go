@@ -54,11 +54,13 @@ func (a *app) saveRelaySnapshot(pointID string, ident vpn.RelaySnapshotSource, r
 	// The marker check reads the store, not a.cfg: this goroutine must not touch
 	// the UI-thread copy of the configuration.
 	initialized := false
+	pairingUnconfirmed := false
 	persisted := a.store.Config()
 	if p := persisted.Find(pointID); p != nil && p.Relay != nil {
 		initialized = p.Relay.HistoryInitialized
+		pairingUnconfirmed = p.Relay.Version == 2 && p.Relay.PairingUnconfirmed
 	}
-	if !initialized {
+	if !initialized || pairingUnconfirmed {
 		if err := a.store.SetRelayHistoryInitialized(pointID); err != nil {
 			// The protective cache exists, so the marker can be retried later;
 			// the snapshot must not be published as authorized until both steps

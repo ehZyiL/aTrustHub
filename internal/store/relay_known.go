@@ -280,6 +280,11 @@ func (s *Store) SetRelayHistoryInitialized(pointID string) error {
 			return fmt.Errorf("接入点 %s 不是局域网中继节点", pointID)
 		}
 		point.Relay.HistoryInitialized = true
+		// A verified business snapshot also confirms a grant whose pairing
+		// receipt was lost. Future imports must not overwrite this device key.
+		if point.Relay.Version == 2 {
+			point.Relay.PairingUnconfirmed = false
+		}
 		return nil
 	})
 	if err != nil {

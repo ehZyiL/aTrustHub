@@ -65,7 +65,7 @@ func TestRelayPointValidation(t *testing.T) {
 		func(p *AccessPoint) { p.Server = "nas.local" },
 		func(p *AccessPoint) { p.Port = 0 },
 		func(p *AccessPoint) { p.Relay = nil },
-		func(p *AccessPoint) { p.Relay.Version = 2 },
+		func(p *AccessPoint) { p.Relay.Version = 3 },
 		func(p *AccessPoint) { p.Relay.ShareID = "short" },
 		func(p *AccessPoint) { p.Relay.CertificateSHA256 = "abc" },
 	}

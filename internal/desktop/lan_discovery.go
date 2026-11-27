@@ -202,6 +202,7 @@ func (a *app) syncLANDiscovery() {
 		ShareID:         view.ShareID,
 		Name:            name,
 		ProtocolVersion: view.ProtocolVersion,
+		Pairing:         view.Pairing,
 		Interface: discovery.Interface{
 			Name: view.InterfaceName,
 			IPv4: view.Address,

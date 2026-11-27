@@ -36,35 +36,41 @@ const ProtocolVersion = "relay-process-v1"
 const maxBrokerMessage = contract.MaxSnapshotBytes + (64 << 10)
 
 type startup struct {
-	Version       string            `json:"version"`
-	Mode          string            `json:"mode"`
-	BrokerAddress string            `json:"brokerAddress"`
-	BrokerToken   string            `json:"brokerToken"`
-	Identity      string            `json:"identity"`
-	Token         string            `json:"token"`
-	ShareID       string            `json:"shareId"`
-	InstanceID    string            `json:"instanceId"`
-	Port          int               `json:"port"`
-	Point         model.AccessPoint `json:"point,omitempty"`
+	Pairing       bool                 `json:"pairing,omitempty"`
+	PairTarget    *contract.PairTarget `json:"pairTarget,omitempty"`
+	Version       string               `json:"version"`
+	Mode          string               `json:"mode"`
+	BrokerAddress string               `json:"brokerAddress"`
+	BrokerToken   string               `json:"brokerToken"`
+	Identity      string               `json:"identity"`
+	Token         string               `json:"token"`
+	ShareID       string               `json:"shareId"`
+	InstanceID    string               `json:"instanceId"`
+	Port          int                  `json:"port"`
+	Point         model.AccessPoint    `json:"point,omitempty"`
 }
 
 type event struct {
-	Kind     string                   `json:"kind"`
-	Address  string                   `json:"address,omitempty"`
-	Port     int                      `json:"port,omitempty"`
-	Token    string                   `json:"token,omitempty"`
-	Clients  int                      `json:"clients,omitempty"`
-	Error    string                   `json:"error,omitempty"`
-	Epoch    uint64                   `json:"epoch,omitempty"`
-	Revision string                   `json:"revision,omitempty"`
-	Info     *vpncontract.SessionInfo `json:"info,omitempty"`
-	Sequence uint64                   `json:"sequence,omitempty"`
-	ID       uint64                   `json:"id,omitempty"`
-	Snapshot *discovery.Snapshot      `json:"snapshot,omitempty"`
-	Status   *discovery.Status        `json:"status,omitempty"`
+	Pairing      bool                     `json:"pairing,omitempty"`
+	PairView     *contract.PairView       `json:"pairView,omitempty"`
+	PairProgress *contract.PairProgress   `json:"pairProgress,omitempty"`
+	Kind         string                   `json:"kind"`
+	Address      string                   `json:"address,omitempty"`
+	Port         int                      `json:"port,omitempty"`
+	Token        string                   `json:"token,omitempty"`
+	Clients      int                      `json:"clients,omitempty"`
+	Error        string                   `json:"error,omitempty"`
+	Epoch        uint64                   `json:"epoch,omitempty"`
+	Revision     string                   `json:"revision,omitempty"`
+	Info         *vpncontract.SessionInfo `json:"info,omitempty"`
+	Sequence     uint64                   `json:"sequence,omitempty"`
+	ID           uint64                   `json:"id,omitempty"`
+	Snapshot     *discovery.Snapshot      `json:"snapshot,omitempty"`
+	Status       *discovery.Status        `json:"status,omitempty"`
 }
 
 type command struct {
+	PairCommand  *contract.PairCommand   `json:"pairCommand,omitempty"`
 	Operation    string                  `json:"operation"`
 	ID           uint64                  `json:"id,omitempty"`
 	Announcement *discovery.Announcement `json:"announcement,omitempty"`
@@ -72,6 +78,10 @@ type command struct {
 }
 
 type processServer struct {
+	pairing bool
+	rpcMu   sync.Mutex
+	rpc     map[uint64]chan event
+	seq     atomic.Uint64
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
 	broker  *broker
@@ -146,6 +156,8 @@ func start(opts relay.ServerOptions, executable string) (*processServer, error) 
 	}
 	token := base64.RawURLEncoding.EncodeToString(secret)
 	b := newBroker(listener, token, opts.Source)
+	b.devices = opts.DeviceStore
+	b.shareID = opts.ShareID
 	identity, err := relay.EncodeIdentity(opts.Identity)
 	if err != nil {
 		_ = b.Close()
@@ -155,7 +167,7 @@ func start(opts relay.ServerOptions, executable string) (*processServer, error) 
 	if instance == "" {
 		instance = "relay"
 	}
-	start := startup{Version: ProtocolVersion, Mode: "share", BrokerAddress: listener.Addr().String(), BrokerToken: token,
+	start := startup{Version: ProtocolVersion, Mode: "share", BrokerAddress: listener.Addr().String(), BrokerToken: token, Pairing: opts.DeviceStore != nil,
 		Identity: identity, Token: opts.Token, ShareID: opts.ShareID, InstanceID: instance, Port: opts.Port}
 	cmd := newCommand(executable)
 	stdin, err := cmd.StdinPipe()
@@ -173,7 +185,7 @@ func start(opts relay.ServerOptions, executable string) (*processServer, error) 
 		_ = b.Close()
 		return nil, fmt.Errorf("局域网分享组件无法启动：%w", err)
 	}
-	ps := &processServer{cmd: cmd, stdin: stdin, broker: b, events: make(chan event, 8), done: make(chan struct{})}
+	ps := &processServer{cmd: cmd, stdin: stdin, broker: b, events: make(chan event, 8), done: make(chan struct{}), rpc: make(map[uint64]chan event)}
 	go ps.readEvents(stdout)
 	go ps.wait()
 	if err := json.NewEncoder(stdin).Encode(start); err != nil {
@@ -190,6 +202,7 @@ func start(opts relay.ServerOptions, executable string) (*processServer, error) 
 			return nil, errors.New("局域网分享组件返回无效握手")
 		}
 		ps.port = e.Port
+		ps.pairing = e.Pairing
 		return ps, nil
 	case <-ps.done:
 		ps.waitMu.RLock()
@@ -205,7 +218,7 @@ func start(opts relay.ServerOptions, executable string) (*processServer, error) 
 
 func (p *processServer) readEvents(r io.Reader) {
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 1024), 16<<10)
+	scanner.Buffer(make([]byte, 1024), 256<<10)
 	for scanner.Scan() {
 		var e event
 		if json.Unmarshal(scanner.Bytes(), &e) != nil {
@@ -213,6 +226,18 @@ func (p *processServer) readEvents(r io.Reader) {
 		}
 		if e.Kind == "clients" {
 			p.clients.Store(int64(e.Clients))
+		}
+		if e.Kind == "pair-result" {
+			p.rpcMu.Lock()
+			ch := p.rpc[e.ID]
+			p.rpcMu.Unlock()
+			if ch != nil {
+				select {
+				case ch <- e:
+				default:
+				}
+			}
+			continue
 		}
 		select {
 		case p.events <- e:
@@ -296,6 +321,9 @@ func ChildMain(in io.Reader, out io.Writer) error {
 	if cfg.Mode == "import" {
 		return runImportedChild(cfg, scanner, out)
 	}
+	if cfg.Mode == "pair" {
+		return runPairChild(cfg, scanner, out)
+	}
 	if cfg.Mode == "discovery" {
 		return runDiscoveryChild(scanner, out)
 	}
@@ -311,13 +339,17 @@ func ChildMain(in io.Reader, out io.Writer) error {
 	}
 	source := newRemoteSource(cfg.BrokerAddress, cfg.BrokerToken)
 	defer source.Close()
+	var devices contract.DeviceStore
+	if cfg.Pairing {
+		devices = remoteDeviceStore{source, cfg.ShareID}
+	}
 	server, err := relay.StartServer(relay.ServerOptions{Identity: identity, Source: source,
-		Token: cfg.Token, ShareID: cfg.ShareID, ServerInstanceID: cfg.InstanceID, Port: cfg.Port})
+		Token: cfg.Token, ShareID: cfg.ShareID, ServerInstanceID: cfg.InstanceID, Port: cfg.Port, DeviceStore: devices})
 	if err != nil {
 		return err
 	}
 	write := func(e event) error { return json.NewEncoder(out).Encode(e) }
-	if err := write(event{Kind: "ready", Address: server.ListenAddress(), Port: server.Port()}); err != nil {
+	if err := write(event{Kind: "ready", Address: server.ListenAddress(), Port: server.Port(), Pairing: server.PairingSupported()}); err != nil {
 		_ = server.Close(context.Background())
 		return err
 	}
@@ -326,10 +358,7 @@ func ChildMain(in io.Reader, out io.Writer) error {
 		for scanner.Scan() {
 			var c command
 			if json.Unmarshal(scanner.Bytes(), &c) == nil {
-				select {
-				case stop <- c:
-				default:
-				}
+				stop <- c
 			}
 		}
 		select {
@@ -343,6 +372,21 @@ func ChildMain(in io.Reader, out io.Writer) error {
 		select {
 		case c := <-stop:
 			switch c.Operation {
+			case "pair-control":
+				if c.PairCommand == nil {
+					continue
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+				v, err := server.PairControl(ctx, *c.PairCommand)
+				cancel()
+				e := event{Kind: "pair-result", ID: c.ID, PairView: &v}
+				if err != nil {
+					e.Error = err.Error()
+				}
+				if write(e) != nil {
+					_ = server.Close(context.Background())
+					return errors.New("pair control channel closed")
+				}
 			case "revoke":
 				server.RevokeAll()
 			case "stop":
@@ -366,6 +410,8 @@ func ChildMain(in io.Reader, out io.Writer) error {
 }
 
 type broker struct {
+	devices contract.DeviceStore
+	shareID string
 	server  *http.Server
 	ln      net.Listener
 	token   string
@@ -383,6 +429,7 @@ func newBroker(ln net.Listener, token string, source contract.Source) *broker {
 	mux.HandleFunc("/snapshot", b.snapshot)
 	mux.HandleFunc("/dns", b.dns)
 	mux.HandleFunc("/dial", b.dial)
+	mux.HandleFunc("/devices", b.deviceRecords)
 	b.server = &http.Server{Handler: mux, ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 8 * time.Second, WriteTimeout: 8 * time.Second, IdleTimeout: time.Second, MaxHeaderBytes: 8 << 10,
 		BaseContext: func(net.Listener) context.Context { return ctx }}
 	go func() { _ = b.server.Serve(ln) }()
@@ -630,6 +677,11 @@ func (s *remoteSource) DialVPN(ctx context.Context, revision, target string) (ne
 	if err != nil {
 		return nil, err
 	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
 	request := "CONNECT /dial HTTP/1.1\r\nHost: " + s.address + "\r\nAuthorization: Bearer " + s.token + "\r\nX-Resource-Revision: " + revision + "\r\nX-Relay-Target: " + target + "\r\n\r\n"
 	if _, err := io.WriteString(conn, request); err != nil {
 		_ = conn.Close()
@@ -645,6 +697,11 @@ func (s *remoteSource) DialVPN(ctx context.Context, revision, target string) (ne
 		_ = conn.Close()
 		return nil, fmt.Errorf("strict dial refused: %s", resp.Status)
 	}
+	if err := ctx.Err(); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Time{})
 	if br.Buffered() > 0 {
 		return &prefixConn{Conn: conn, r: br}, nil
 	}

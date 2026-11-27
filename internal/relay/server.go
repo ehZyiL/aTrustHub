@@ -16,10 +16,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ehzyil/connect-hub/internal/relay/contract"
 )
 
 // ServerOptions configures one running share instance.
 type ServerOptions struct {
+	DeviceStore      contract.DeviceStore
 	Identity         *Identity
 	Source           Source
 	Token            string
@@ -66,11 +69,14 @@ type Server struct {
 	root   context.Context
 	cancel context.CancelFunc
 
-	clients  *clientRegistry
-	conns    *connTable
-	dnsSlots *slotLimiter
-	auth     *rateLimiter
-	tokenSHA string
+	clients   *clientRegistry
+	conns     *connTable
+	dnsSlots  *slotLimiter
+	auth      *rateLimiter
+	tokenSHA  string
+	pairing   *pairingState
+	pairSlots chan struct{}
+	pairRate  *rateLimiter
 
 	snapMu sync.Mutex
 	// snapErrMu guards the last reported snapshot failure, so a share that
@@ -142,7 +148,18 @@ func StartServer(opts ServerOptions) (*Server, error) {
 		c.cancel()
 		s.conns.stopClient(c.token)
 	}
+	s.pairing, err = newPairingState(root, opts.DeviceStore, opts.ShareID, opts.Identity.Fingerprint, func(id string) {
+		s.clients.removeID("device:" + id)
+	})
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	s.pairSlots = make(chan struct{}, contract.MaxPairHandshakes)
+	s.pairRate = newRateLimiter(contract.PairRatePerIP, contract.PairBurstPerIP, contract.PairRateGlobal, contract.PairBurstGlobal)
 	s.mux = http.NewServeMux()
+	s.mux.HandleFunc("/v2/pair/start", s.handlePairStart)
+	s.mux.HandleFunc("/v2/sessions", s.handleDeviceSession)
 	s.mux.HandleFunc("/v1/sessions", s.handleSessions)
 	s.mux.HandleFunc("/v1/sessions/current", s.handleSessionCurrent)
 	s.mux.HandleFunc("/v1/status", s.handleStatus)
@@ -276,7 +293,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if !validClientID(req.ClientID) {
+	if !validClientID(req.ClientID) || strings.HasPrefix(req.ClientID, "device:") {
 		writeError(w, NewError(CodeInvalidRequest, "客户端实例 ID 无效"))
 		return
 	}

@@ -55,7 +55,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if opts.Code.Host == "" || opts.Code.Port == 0 {
 		return nil, errors.New("分享地址无效")
 	}
-	if opts.Code.Version != ShareVersion {
+	if opts.Code.Version != ShareVersion && opts.Code.Version != 2 {
 		return nil, NewError(CodeProtocolUnsupported, "分享协议版本 %d 不受支持", opts.Code.Version)
 	}
 	dial := opts.Dial
@@ -134,8 +134,14 @@ func decodeError(status int, data []byte) error {
 func (c *Client) authenticate(ctx context.Context) (*SessionState, string, error) {
 	req := SessionRequest{ClientID: c.clientID, Name: c.name}
 	var resp SessionResponse
-	if _, err := c.controlWithToken(ctx, http.MethodPost, "/v1/sessions", req, &resp, c.code.Token); err != nil {
-		return nil, "", err
+	var authErr error
+	if c.code.Version == 2 {
+		resp, authErr = c.deviceSession(ctx)
+	} else {
+		_, authErr = c.controlWithToken(ctx, http.MethodPost, "/v1/sessions", req, &resp, c.code.Token)
+	}
+	if authErr != nil {
+		return nil, "", authErr
 	}
 	if resp.Version != ProtocolVersion {
 		return nil, "", NewError(CodeProtocolUnsupported, "分享协议版本 %d 不受支持", resp.Version)

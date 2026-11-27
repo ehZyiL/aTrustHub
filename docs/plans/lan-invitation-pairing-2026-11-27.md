@@ -2,6 +2,8 @@
 
 日期：2026-11-27。分支：`refactor/component-boundaries`。状态：**needs_review**，等待用户跨机验收与安全复核。未推送、发布或启动额外 Hub。
 
+实现提交：`4950d7737f37d03549a9e947914f04428715c2f9`（49 个文件，16 个新建、33 个修改）。原有 `go.work`、`go.work.sum` 不在提交中。
+
 ## 结果与兼容性
 
 发现支持配对的主机后，用户输入短码，双方核对会话校验码及公钥派生设备标识，主机逐台批准，客户端确认领取后自动连接。每台客户端自行生成独立 Ed25519 私钥，主机只保留公钥验证表示。后续重连无需邀请码。
@@ -79,6 +81,22 @@
 | `bash -n scripts/package-{linux,windows,mac}.sh` | 语法检查通过；未发布或制作发行包 |
 | 新增 9 个模块许可文件定位 | 全部 `go list -m` 定位并确认存在 `LICENSE` |
 
+提交后曾在全量测试与构建并发运行时遇到一次既有 `TestWorkerDNSConcurrentRepliesBypassLoginQueue` 的启动超时，失败发生在 `internal/vpn/dns_test.go:34` 的 1 秒测试进程启动期限内。随后该用例 `-count=20` 单独复测通过，停止并发构建后的最后一次相同全量测试命令也全部通过（desktop 27.118 秒、relay/process 23.109 秒、vpn 9.262 秒）。没有更改该测试或放宽期限；资源竞争只是可能原因，未把它当作已证明的根因。
+
+关键验证命令（PowerShell 7）：
+
+```powershell
+$env:GOWORK='off'
+go test -mod=readonly ./... -count=1
+go vet -mod=readonly ./...
+go run ./scripts/buildtool -development -out build/pairing-review
+git diff --check
+wsl --cd /mnt/d/Programming/Projects/Go/easy-connect/aTrustHub --exec env PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin GOWORK=off CGO_ENABLED=1 /usr/local/go/bin/go test -race -mod=readonly ./internal/relay/... ./internal/store ./internal/model ./internal/desktop -count=1
+wsl --cd /mnt/d/Programming/Projects/Go/easy-connect/aTrustHub --exec env PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin GOWORK=off CGO_ENABLED=1 /usr/local/go/bin/go test -race -mod=readonly ./internal/desktop -run 'TestPair|TestDiscoveryPairing|TestCoreDependencyGraphExcludesOptionalRuntime|TestDesktopDoesNotLinkCleanupService|TestDesktopLivesBehindCmdEntryPoint|TestSharePageAcceptsClientAndShowsUnavailableState|TestAcceptanceEnableFormHasNoDuplicateDiscoveryLabel' -count=1
+```
+
+第一条 WSL 命令整体 exit 1（下述两项桌面失败），第二条定向命令 exit 0。不要把两者合并成完整 race 通过。
+
 主要新增验证：16 条并发审批只有 5 次成功；重复批准与落盘后响应丢失协调；邀请、请求、重启生命周期；两同名设备独立身份；领取响应完全丢失后使用检查点重连；凭据/配置保存失败不发送 KE3；未确认节点重试替换和已确认节点保护；领取成功触发连接；请求 16 与握手 8、在线 10、邀请 5、业务额度独立；在线满额仍可持久化新设备，旧设备重连不占新位；撤销失败隔离、撤销全部、v1 兼容。
 
 安全测试实测 TLS 终结代理改写主机指纹和设备公钥、转发真实 KE1/KE2 仍无法通过 PAKE；跨 TLS 连接重放 Ed25519 证明被端点拒绝；冒用已配对设备公钥但无私钥被拒绝；HMAC 方向/序号重放被拒绝；错码不创建请求、不耗业务额度、不泄漏秘密；公网监听不存在本地管理路由。真实 sidecar 测试还覆盖父进程持久化故障、重启重连、取消检查点回收进程、撤销取消父 broker 挂起拨号及其他设备隔离。
@@ -101,6 +119,8 @@
 尚未手动启动真实 Hub/VPN、操作系统凭据库、改变防火墙或做跨机网络体验；macOS/Linux 只有交叉构建，跨机发现、多播权限、证书到期和真实业务负载仍需用户验收。覆盖率百分比未测量，不宣称达到 80%。
 
 ## 文件清单
+
+核心代码引用：`internal/relay/contract/pairing.go:9` 的集中策略；`internal/relay/pairing_wire.go:87` 的 exporter/身份绑定、`:295` 的 KE3 前持久化检查点；`internal/relay/pairing_state.go:147` 的本地管理、批准事务与单设备撤销；`internal/relay/device_auth.go:37` 的设备授权检查和租约创建互斥；`internal/relay/process/pairing.go:256` 的专用配对子进程；`internal/desktop/pairing_view.go:332` 的客户端安全保存与回滚；`internal/relay/pairing_security_test.go:113` 的实际中间人转发测试；`internal/relay/process/pairing_test.go:204` 的跨进程挂起拨号撤销测试。
 
 ### 新建
 

@@ -72,7 +72,7 @@ jobs:
         shell: bash
         run: |
           cd connect-hub
-          go test ./internal/vpn ./internal/workeripc ./scripts/buildtool ./tests/e2e
+          go test ./internal/vpn ./internal/workeripc ./internal/desktop ./internal/cleanup/client ./internal/localapps/takeover ./scripts/buildtool ./tests/e2e
           go -C third_party/zju-connect test ./...
 
       - name: 校验代码格式（gofmt）
@@ -173,7 +173,7 @@ jobs:
         shell: bash
         run: |
           cd connect-hub
-          go test ./internal/vpn ./internal/workeripc ./scripts/buildtool ./tests/e2e
+          go test ./internal/vpn ./internal/workeripc ./internal/desktop ./internal/cleanup/client ./internal/localapps/takeover ./scripts/buildtool ./tests/e2e
           go -C third_party/zju-connect test ./...
 
       - name: 校验代码格式（gofmt）

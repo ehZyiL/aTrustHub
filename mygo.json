@@ -3,7 +3,7 @@
   "identifier": "app.connect.hub",
   "version": "0.1.0",
   "copyright": "Connect Hub",
-  "main": "cmd/connect-hub",
+  "main": "./cmd/connect-hub",
   "out": "build",
   "macos": {
     "infoPlist": {

@@ -157,3 +157,12 @@ func TestCleanupMutationBlockedWhileNetworkActive(t *testing.T) {
 		t.Fatal("cleanup allowed with active capture")
 	}
 }
+
+func TestCleanupCannotStartAfterShutdownWithoutPreviousTask(t *testing.T) {
+	a := testApp(t)
+	a.shutdownCleanup()
+	a.startCleanup(contract.Request{Request: components.Request{Operation: contract.List}})
+	if a.cleanup.busy || a.cleanup.task.Drain() != nil {
+		t.Fatal("shutdown allowed a previously unused cleanup task to start")
+	}
+}

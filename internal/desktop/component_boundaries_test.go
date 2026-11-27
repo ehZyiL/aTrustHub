@@ -96,10 +96,10 @@ func TestDesktopLivesBehindCmdEntryPoint(t *testing.T) {
 	if err != nil || json.Unmarshal(data, &config) != nil {
 		t.Fatalf("read MyGo entry configuration: %v", err)
 	}
-	if config.Main != "cmd/connect-hub" {
+	if config.Main != "./cmd/connect-hub" {
 		t.Fatalf("MyGo main = %q", config.Main)
 	}
-	cmd := exec.Command("go", "list", "-mod=readonly", "-f", "{{.Imports}}", "./cmd/connect-hub")
+	cmd := exec.Command("go", "list", "-mod=readonly", "-f", "{{.Imports}}", config.Main)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	out, err := cmd.Output()

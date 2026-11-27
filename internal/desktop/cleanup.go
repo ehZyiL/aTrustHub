@@ -115,9 +115,10 @@ func (a *app) cancelCleanup() {
 
 func (a *app) shutdownCleanup() {
 	s := &a.cleanup
-	if s.task != nil {
-		s.task.Close()
+	if s.task == nil {
+		s.task = cleanupclient.NewTaskController(nil, nil)
 	}
+	s.task.Close()
 	// An active component owns its directory until it exits. If Hub itself
 	// crashes its lease expires and it stops at the same safe checkpoint.
 	if !s.busy {

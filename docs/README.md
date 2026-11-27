@@ -1,7 +1,7 @@
 # Connect Hub 文档（核实版）
 
 现状文档只收**已对源码逐条核实的结论**，不收历史过程记录。
-`plans/` 单独保存尚未实施的方案与验收门禁；其中的目标结构和任务不能作为已实现能力引用。
+`plans/` 单独保存方案、验收门禁及阶段实施记录；其中未完成的目标结构和任务不能作为已实现能力引用。
 
 历史过程记录（19 份带日期的验收/实施记录）仍留在仓库外的 `easy-connect/docs/`，
 它们没有搬进来，原因是：内容大量互相覆盖、协议版本号已过期、部分结论与当前代码相反。
@@ -44,10 +44,13 @@ docs/
 │   └── lan-relay-discovery-2026-11-24.md             局域网分享自动发现：协议/缓存/生命周期（已实现）
 ├── review/
 │   └── errata.md        旧文档勘误 —— 回答“旧说法哪里不对”
-├── plans/               待实施方案 —— 回答“接下来怎么改、如何验收”
+├── plans/               方案与阶段记录 —— 回答“接下来怎么改、如何验收”
 │   ├── component-boundaries-2026-11-26.md  项目结构与可选组件重构方案
 │   ├── p5-relay-process-2026-11-27.md       Relay 子进程边界与验证记录
-│   └── p6-desktop-layout-2026-11-27.md      桌面包与根目录整理方案及验收
+│   ├── p6-desktop-layout-2026-11-27.md      桌面包与根目录整理方案及验收
+│   ├── p6-desktop-followup-2026-11-27.md    桌面主文件职责拆分
+│   ├── p6-lan-desktop-followup-2026-11-27.md LAN 职责整理与依赖检查
+│   └── p6-resource-validation-2026-11-27.md 当前版本配套构建与资源复测
 ├── roadmap.md           未完成事项 —— 回答“还差什么”（拆成代码可判定 / 待实机）
 └── assets/              README 引用的 4 张界面截图
 ```
@@ -75,10 +78,13 @@ docs/
 | [plans/p0-baseline-2026-11-26.md](plans/p0-baseline-2026-11-26.md) | 统一构建入口、固定来源、首次内存对照、生命周期反馈与后续预算（阶段性证据） |
 | [plans/p1-lifecycle-2026-11-26.md](plans/p1-lifecycle-2026-11-26.md) | 按需启停、取消与任务退出、十轮回归、P1 内存复测及平台限制 |
 | [plans/p5-relay-process-2026-11-27.md](plans/p5-relay-process-2026-11-27.md) | Relay 子进程边界、授权数据通道、按需发现生命周期与自动验证结果 |
+| [plans/p6-desktop-followup-2026-11-27.md](plans/p6-desktop-followup-2026-11-27.md) | 桌面主文件按职责拆分、声明等价与回归记录 |
+| [plans/p6-lan-desktop-followup-2026-11-27.md](plans/p6-lan-desktop-followup-2026-11-27.md) | LAN 页面、生命周期、网卡与历史保护职责及依赖检查 |
+| [plans/p6-resource-validation-2026-11-27.md](plans/p6-resource-validation-2026-11-27.md) | 当前版本配套构建、三轮空闲与十轮启停资源复测及限制 |
 
 ## 平台能力矩阵（已核实）
 
-判定来源：`platform_{windows,linux,darwin}.go`、`resource_tun.go`、`view.go` `captureSupported`。
+判定来源：`platform_{windows,linux,darwin}.go`、`resource_tun.go`、`capture_mode.go` `captureSupported`。
 
 | 能力 | Windows | Linux | macOS |
 |---|---|---|---|

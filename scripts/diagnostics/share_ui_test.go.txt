@@ -1,0 +1,149 @@
+package desktop
+
+import (
+	"context"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/egoist/mygo/ui"
+	"github.com/ehzyil/connect-hub/internal/model"
+	"github.com/ehzyil/connect-hub/internal/relay"
+)
+
+// Loaded into internal/desktop only by scripts/test-share-ui.ps1 using -overlay.
+// This diagnostic asserts desired behavior and intentionally reports a failure
+// while a slow component startup can block state reads or frames.
+type shareUIProbeServer struct {
+	entered chan struct{}
+	release chan struct{}
+	done    chan struct{}
+	once    sync.Once
+}
+
+func (s *shareUIProbeServer) Port() int             { return 23456 }
+func (s *shareUIProbeServer) ActiveClients() int    { return 0 }
+func (s *shareUIProbeServer) Done() <-chan struct{} { return s.done }
+func (s *shareUIProbeServer) RevokeAll()            {}
+func (s *shareUIProbeServer) Close(context.Context) error {
+	s.once.Do(func() {
+		close(s.entered)
+		<-s.release
+		close(s.done)
+	})
+	return nil
+}
+
+type shareUIProbe struct {
+	a            *app
+	ctrl         *relay.Controller
+	starting     chan struct{}
+	closing      chan struct{}
+	releaseStart func()
+	releaseClose func()
+}
+
+func newShareUIProbe(t *testing.T) shareUIProbe {
+	t.Helper()
+	a := testApp(t)
+	if _, err := a.store.Update(func(cfg *model.Config) error {
+		cfg.Add(model.AccessPoint{ID: "p1", Name: "Test VPN", Protocol: model.ProtocolATrust,
+			Server: "vpn.example.com", Port: 443})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.setConfig(a.store.Config())
+	a.mgr.Apply(a.cfg)
+	// Use the existing fake firewall executor even if an unrelated view starts
+	// reconciliation. The fixture never touches real network system settings.
+	installFirewall(t, a, &appFirewall{})
+	ctrl := installLANShare(t, a, &appTestSink{names: map[string]string{"p1": "Test VPN"}})
+	entered, resume := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(resume) }) }
+	server := &shareUIProbeServer{entered: make(chan struct{}), release: make(chan struct{}), done: make(chan struct{})}
+	var closeOnce sync.Once
+	releaseClose := func() { closeOnce.Do(func() { close(server.release) }) }
+	if err := ctrl.SetServerFactory(func(relay.ServerOptions) (relay.ServerInstance, error) {
+		close(entered)
+		<-resume
+		return server, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		release()
+		releaseClose()
+		waitCondition(t, "share enable result", func() bool {
+			a.drainLANShareResults()
+			return !a.lanShareUI.busy
+		})
+	})
+	a.openLANShare()
+	a.lanShareUI.discovery = false
+	return shareUIProbe{a: a, ctrl: ctrl, starting: entered, closing: server.entered, releaseStart: release, releaseClose: releaseClose}
+}
+
+func assertShareUIResponds(t *testing.T, name string, budget time.Duration, release func(), action func()) {
+	t.Helper()
+	returned := make(chan struct{})
+	started := time.Now()
+	go func() { action(); close(returned) }()
+	select {
+	case <-returned:
+		t.Logf("%s returned in %s", name, time.Since(started))
+	case <-time.After(budget):
+		buf := make([]byte, 1<<20)
+		n := runtime.Stack(buf, true)
+		for _, stack := range strings.Split(string(buf[:n]), "\n\n") {
+			if strings.Contains(stack, "assertShareUIResponds.func1") {
+				t.Logf("blocked action stack:\n%s", stack)
+			}
+		}
+		release()
+		<-returned
+		t.Errorf("%s did not return within %s while component I/O was pending", name, budget)
+	}
+}
+
+func awaitShareUIProbe(t *testing.T, name string, entered <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("%s was not reached", name)
+	}
+}
+
+func TestShareUIProbeStartupStateRead(t *testing.T) {
+	p := newShareUIProbe(t)
+	assertShareUIResponds(t, "enable button", 100*time.Millisecond, p.releaseStart, p.a.enableLANShare)
+	awaitShareUIProbe(t, "component startup", p.starting)
+	assertShareUIResponds(t, "Controller.View", 100*time.Millisecond, p.releaseStart, func() { p.ctrl.View() })
+}
+
+func TestShareUIProbeStartupFrame(t *testing.T) {
+	p := newShareUIProbe(t)
+	assertShareUIResponds(t, "enable button", 100*time.Millisecond, p.releaseStart, p.a.enableLANShare)
+	awaitShareUIProbe(t, "component startup", p.starting)
+	// The full frame includes native interface enumeration; allow a wider
+	// budget so that this probe specifically detects the held component lock.
+	assertShareUIResponds(t, "desktop frame", 500*time.Millisecond, p.releaseStart, func() { ui.NewTester(p.a.view, 1120, 800).Texts() })
+}
+
+func TestShareUIProbeShutdownFrame(t *testing.T) {
+	p := newShareUIProbe(t)
+	p.releaseStart()
+	p.a.enableLANShare()
+	waitCondition(t, "enable finished", func() bool {
+		p.a.drainLANShareResults()
+		return !p.a.lanShareUI.busy
+	})
+	assertShareUIResponds(t, "disable button", 100*time.Millisecond, p.releaseClose, p.a.disableLANShare)
+	awaitShareUIProbe(t, "component close", p.closing)
+	assertShareUIResponds(t, "Controller.View during close", 100*time.Millisecond, p.releaseClose, func() { p.ctrl.View() })
+	assertShareUIResponds(t, "desktop frame during close", 500*time.Millisecond, p.releaseClose, func() { ui.NewTester(p.a.view, 1120, 800).Texts() })
+}

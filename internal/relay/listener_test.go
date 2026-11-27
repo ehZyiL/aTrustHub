@@ -16,8 +16,8 @@ import (
 // All probes use this test's loopback listener, never a running share.
 func TestUnauthenticatedSocketsCannotBlockPairedReconnect(t *testing.T) {
 	s, target, invite, _ := pairFixture(t)
-	_, c, token := approvePair(t, s, target, invite.PIN)
-	_, other, otherToken := approvePair(t, s, target, invite.PIN)
+	pair, c, token := approvePair(t, s, target, invite.PIN)
+	otherPair, other, otherToken := approvePair(t, s, target, invite.PIN)
 	status, err := c.Status(context.Background(), token)
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +48,13 @@ func TestUnauthenticatedSocketsCannotBlockPairedReconnect(t *testing.T) {
 			t.Fatal(err)
 		}
 		raw = append(raw, conn)
+	}
+	// Both authenticated WebSockets must survive reclamation of raw sockets.
+	if _, err := pair.Poll(); err != nil {
+		t.Fatal("authenticated pairing channel reclaimed", err)
+	}
+	if _, err := otherPair.Poll(); err != nil {
+		t.Fatal("other pairing channel reclaimed", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

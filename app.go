@@ -65,6 +65,9 @@ type app struct {
 	// discoveryBackend is the platform seam: nil means real multicast DNS.
 	// Tests replace it with an in-memory one, the same way fwExec is replaced.
 	discoveryBackend discovery.Backend
+	// relayExecutable is an optional test override; production resolves the
+	// adjacent core/connect-hub-relay component.
+	relayExecutable string
 	// askingClearRelayHistory is the node whose protection the user is about to
 	// drop; it drives the confirmation dialog.
 	askingClearRelayHistory string

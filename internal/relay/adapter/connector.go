@@ -181,6 +181,14 @@ type relaySession struct {
 	updatesOnce sync.Once
 }
 
+// ResourceVersion lets a process boundary bind strict data requests to the
+// exact share generation represented by the latest SessionInfo snapshot.
+func (s *relaySession) ResourceVersion() (uint64, string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.Epoch, s.state.Revision
+}
+
 var (
 	_ session.Session        = (*relaySession)(nil)
 	_ session.StrictSession  = (*relaySession)(nil)

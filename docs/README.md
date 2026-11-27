@@ -42,7 +42,8 @@ docs/
 ├── review/
 │   └── errata.md        旧文档勘误 —— 回答“旧说法哪里不对”
 ├── plans/               待实施方案 —— 回答“接下来怎么改、如何验收”
-│   └── component-boundaries-2026-11-26.md  项目结构与可选组件重构方案
+│   ├── component-boundaries-2026-11-26.md  项目结构与可选组件重构方案
+│   └── p5-relay-process-2026-11-27.md       Relay 子进程边界与验证记录
 ├── roadmap.md           未完成事项 —— 回答“还差什么”（拆成代码可判定 / 待实机）
 └── assets/              README 引用的 4 张界面截图
 ```
@@ -66,6 +67,7 @@ docs/
 | [plans/component-boundaries-2026-11-26.md](plans/component-boundaries-2026-11-26.md) | 从分享分支推进结构重构的阶段、组件边界、资源预算和验收方式（P0/P1 已有实现，后续待实施） |
 | [plans/p0-baseline-2026-11-26.md](plans/p0-baseline-2026-11-26.md) | 统一构建入口、固定来源、首次内存对照、生命周期反馈与后续预算（阶段性证据） |
 | [plans/p1-lifecycle-2026-11-26.md](plans/p1-lifecycle-2026-11-26.md) | 按需启停、取消与任务退出、十轮回归、P1 内存复测及平台限制 |
+| [plans/p5-relay-process-2026-11-27.md](plans/p5-relay-process-2026-11-27.md) | Relay 子进程边界、授权数据通道、按需发现生命周期与自动验证结果 |
 
 ## 平台能力矩阵（已核实）
 

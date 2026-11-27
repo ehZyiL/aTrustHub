@@ -106,11 +106,12 @@ Connect Hub macOS bundle
 Architecture: $target_arch
 Worker IPC protocol: 7
 Worker source commit: $worker_commit
+Relay process protocol: relay-process-v1
 Scope: VPN tunnel, proxy and browser login on macOS.
-Layout: Connect Hub.app/Contents/MacOS/connect-hub with core/connect-hub-worker.
+Layout: Connect Hub.app/Contents/MacOS/connect-hub with core/connect-hub-worker and core/connect-hub-relay.
 EOF
 
-chmod +x "$macos_bin/connect-hub" "$macos_bin/core/connect-hub-worker"
+chmod +x "$macos_bin/connect-hub" "$macos_bin/core/connect-hub-worker" "$macos_bin/core/connect-hub-relay"
 
 # 如果在 macOS 环境且具备 codesign 工具，应用 Ad-hoc 自签名以兼容 Apple Silicon
 if command -v codesign >/dev/null 2>&1; then

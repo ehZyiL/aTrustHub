@@ -214,6 +214,7 @@ bash scripts/build.sh -development
 入口统一生成图标、Hub、Worker 与对应平台组件，输出模块清单及构建清单。
 正式打包不加 `-development`，要求产品和内核都干净；开发模式仅允许产品未提交修改。
 外部 `-worker` / `ZJU_CONNECT_ROOT` 路径会被拒绝，避免只更换 Worker。
+构建也会生成 `core/connect-hub-relay(.exe)`。它承载 LAN 分享、导入连接和 DNS-SD 发现；Hub 在任务开始时按需启动，空闲后退出。开发时可以将 `EASYCONNECT_RELAY` 指向另一个 relay 可执行文件进行组件协议联调。
 
 ### 6.4 修改内核
 
@@ -255,7 +256,12 @@ env GOWORK=off go run ./internal/workeripc/cmd/protogen -check \
 
 # 校验 Linux 助手协议版本 (当前预期为 11)
 ./core/connect-hub-capture --protocol-version
+
+# Relay 子进程协议
+./core/connect-hub-relay --protocol-version
 ```
+
+分享服务端与导入连接各自启动 relay 子进程；DNS-SD 发布和浏览共享一个按需子进程。Hub 仍拥有 VPN 会话和资源授权，relay 通过带临时令牌的 loopback 通道请求严格拨号与内部 DNS；数据流使用独立 TCP 通道。不得为恢复可用性回退到本机直连。
 
 ---
 

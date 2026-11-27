@@ -33,6 +33,21 @@ type ServerOptions struct {
 	Port int
 }
 
+// ServerInstance is the lifecycle boundary owned by Controller. A process
+// implementation can keep network connections outside the Hub while the
+// controller retains the authorized Source and persisted intent.
+type ServerInstance interface {
+	Port() int
+	ActiveClients() int
+	Done() <-chan struct{}
+	RevokeAll()
+	Close(context.Context) error
+}
+
+// ServerFactory creates one listener for a pinned Source. Production can
+// replace the in-process implementation with the optional relay process.
+type ServerFactory func(ServerOptions) (ServerInstance, error)
+
 // Server is one running LAN share: a TLS listener, the control API and the
 // CONNECT tunnels, all bound to one pinned Source.
 type Server struct {
@@ -65,10 +80,12 @@ type Server struct {
 	snap        SourceSnapshot
 	snapAt      time.Time
 
-	mu      sync.Mutex
-	stopped bool
-	wg      sync.WaitGroup
-	stopCh  chan struct{}
+	mu       sync.Mutex
+	stopped  bool
+	wg       sync.WaitGroup
+	stopCh   chan struct{}
+	done     chan struct{}
+	doneOnce sync.Once
 }
 
 // ListenAddress is the bound address, valid after Start.
@@ -117,6 +134,7 @@ func StartServer(opts ServerOptions) (*Server, error) {
 		auth:     newRateLimiter(AuthRatePerIP, AuthBurstPerIP, AuthRateGlobal, AuthBurstGlobal),
 		tokenSHA: tokenDigest(opts.Token),
 		stopCh:   make(chan struct{}),
+		done:     make(chan struct{}),
 	}
 	// A lease that stops being valid takes its client's tunnels and pending
 	// work with it, whichever path noticed the expiry.
@@ -159,7 +177,10 @@ func StartServer(opts ServerOptions) (*Server, error) {
 		// the app log at most, never on stderr.
 		ErrorLog: log.New(io.Discard, "", 0),
 	}
-	go s.http.Serve(tls.NewListener(s.ln, tlsConfig)) //nolint:errcheck // Serve returns on Close
+	go func() {
+		_ = s.http.Serve(tls.NewListener(s.ln, tlsConfig))
+		s.doneOnce.Do(func() { close(s.done) })
+	}()
 	go s.clients.sweep(s.stopCh)
 	s.wg.Add(1)
 	go s.watchChanges()
@@ -729,6 +750,9 @@ func (s *Server) writeRetiredError(w http.ResponseWriter) {
 
 // ActiveClients is the number of live client leases, not TCP connections.
 func (s *Server) ActiveClients() int { return s.clients.count(time.Now()) }
+
+// Done closes when the listener stops, including an unexpected Serve failure.
+func (s *Server) Done() <-chan struct{} { return s.done }
 
 // RevokeAll drops every client session and every accepted connection, and cancels
 // anything still in flight (pending dials and DNS queries) by ending the share's

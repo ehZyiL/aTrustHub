@@ -218,15 +218,16 @@ func buildBinaries(o options, goTool string, m *manifest) error {
 	if o.targetOS != "darwin" {
 		targets = append(targets, struct{ dir, pkg, name string }{o.root, "./cmd/app-helper", "core/connect-hub-capture"})
 	}
+	targets = append(targets, struct{ dir, pkg, name string }{o.root, "./cmd/app-relay", "core/connect-hub-relay"})
 	if o.targetOS == "windows" {
 		targets = append(targets, struct{ dir, pkg, name string }{o.root, "./cmd/app-cleanup", "core/connect-hub-cleanup"})
 	}
 	for _, target := range targets {
 		name := target.name + ext
 		targetFlags := ldflags
-		if target.pkg == "./cmd/app-cleanup" {
+		if target.pkg == "./cmd/app-cleanup" || target.pkg == "./cmd/app-relay" {
 			targetFlags = "-s -w"
-		} // CLI stays usable; Hub hides its child explicitly.
+		} // CLI stays usable; Hub hides optional children explicitly.
 		if m.ComponentFlags == nil {
 			m.ComponentFlags = make(map[string][]string)
 		}

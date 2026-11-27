@@ -42,10 +42,11 @@ type Controller struct {
 	address  string
 	port     int
 
-	source   Source
-	server   *Server
-	token    string
-	identity *Identity
+	source        Source
+	server        ServerInstance
+	serverFactory ServerFactory
+	token         string
+	identity      *Identity
 
 	// restoreSuppressed locks automatic restore for the rest of this run, used
 	// when the disable state could not be persisted.
@@ -65,18 +66,34 @@ func NewController(p Persistence, sink Sink, nets NetworkProvider, logf func(str
 		logf = func(string, ...any) {}
 	}
 	c := &Controller{
-		persist: p,
-		sink:    sink,
-		nets:    nets,
-		logf:    logf,
-		notify:  notify,
-		state:   StateOff,
+		persist:       p,
+		sink:          sink,
+		nets:          nets,
+		logf:          logf,
+		notify:        notify,
+		state:         StateOff,
+		serverFactory: func(opts ServerOptions) (ServerInstance, error) { return StartServer(opts) },
 	}
 	c.settings = p.ShareSettings()
 	if !c.settings.Enabled {
 		c.state = StateOff
 	}
 	return c
+}
+
+// SetServerFactory installs the optional process boundary before Restore or
+// Enable. A live server is never migrated in place.
+func (c *Controller) SetServerFactory(factory ServerFactory) error {
+	if factory == nil {
+		return errors.New("分享服务工厂缺失")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.server != nil || c.runDone != nil || c.closed {
+		return errors.New("分享服务已启动，不能更换组件")
+	}
+	c.serverFactory = factory
+	return nil
 }
 
 // View returns the current immutable view.
@@ -590,6 +607,15 @@ func (c *Controller) reconcileTick(ctx context.Context) {
 			c.mu.Unlock()
 			_ = closeInstance(context.Background(), server, source)
 			return
+		case <-c.server.Done():
+			c.logf("[局域网分享] 分享组件异常退出，VPN 会话保持不变")
+			server, source := c.detachInstanceLocked()
+			c.state = StateBlocked
+			c.failure, c.failCode = "分享组件异常退出，请检查安装并手动重试", "component-exited"
+			c.publishLocked()
+			c.mu.Unlock()
+			_ = closeInstance(context.Background(), server, source)
+			return
 		default:
 			c.mu.Unlock()
 			return
@@ -702,7 +728,7 @@ func (c *Controller) reconcileLocked(ctx context.Context, first bool) error {
 	if port == 0 {
 		port = s.Port
 	}
-	server, err := StartServer(ServerOptions{
+	server, err := c.serverFactory(ServerOptions{
 		Identity:         identity,
 		Source:           src,
 		Token:            token,
@@ -919,7 +945,7 @@ func (c *Controller) dropSecretsLocked(shareID string) {
 
 // detachInstanceLocked removes the running instance from the view and returns it
 // so it can be closed outside the lock.
-func (c *Controller) detachInstanceLocked() (*Server, Source) {
+func (c *Controller) detachInstanceLocked() (ServerInstance, Source) {
 	server, source := c.server, c.source
 	c.server, c.source = nil, nil
 	c.address = ""
@@ -934,7 +960,7 @@ func (c *Controller) detachInstanceLocked() (*Server, Source) {
 }
 
 // closeInstance revokes and stops one instance within the cleanup budget.
-func closeInstance(ctx context.Context, server *Server, source Source) error {
+func closeInstance(ctx context.Context, server ServerInstance, source Source) error {
 	var errs []error
 	if server != nil {
 		server.RevokeAll()

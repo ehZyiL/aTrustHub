@@ -60,6 +60,11 @@ if [[ "$cleanup_protocol" != 2 || "$cleanup_capability" != cleanup-task-v1 ]]; t
   printf 'Cleanup component protocol mismatch: %s / %s\n' "$cleanup_protocol" "$cleanup_capability" >&2
   exit 1
 fi
+relay_protocol=$("$bundle/core/connect-hub-relay.exe" --protocol-version)
+if [[ "$relay_protocol" != relay-process-v1 ]]; then
+  printf 'Relay component protocol mismatch: expected relay-process-v1, got %s\n' "$relay_protocol" >&2
+  exit 1
+fi
 if [[ "$bundle_profile" == test ]]; then
   env GOOS=windows GOARCH="$target_arch" CGO_ENABLED=0 "$go_tool" test -mod=readonly -trimpath -c -o "$bundle/windows-capture-tests.exe" ./internal/wincapture
   "$go_tool" list -m all > "$bundle/desktop-modules.txt"
@@ -95,15 +100,16 @@ Worker IPC protocol: 7
 Windows capture helper protocol: $helper_protocol
 Cleanup CLI protocol: $cleanup_protocol
 Cleanup task capability: $cleanup_capability
+Relay process protocol: $relay_protocol
 Source branch: $repo_branch
 Source commit: $repo_commit$repo_dirty
 Worker source commit: $worker_commit
 App build: ${app_build:-unknown}
 Scope: IPv4 TCP and DNS. System IPv4 UDP for eligible L3 sessions is experimental; IPv6 is unsupported.
-Layout: connect-hub.exe at the bundle root; connect-hub-worker.exe and
-connect-hub-capture.exe and connect-hub-cleanup.exe under core/. Launch connect-hub.exe;
-the programs in core/ start on demand. Cleanup is optional and Windows-only.
-GUI, worker, helper and cleanup are a matched build; do not mix files from other bundles.
+Layout: connect-hub.exe at the bundle root; worker, capture helper, cleanup and
+relay components under core/. Launch connect-hub.exe; optional programs start on demand.
+Cleanup and relay are optional runtime components; Windows cleanup is Windows-only.
+GUI, worker, helpers and optional components are a matched build; do not mix bundles.
 EOF
 if [[ "$bundle_profile" == test ]]; then
   install -m 0644 "$app_root/packaging/windows/test-capture.ps1" "$bundle/test-capture.ps1"

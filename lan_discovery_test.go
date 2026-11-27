@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -701,9 +702,18 @@ func TestLiveDiscoveryJoinEndToEnd(t *testing.T) {
 		t.Skip("短模式跳过真实组播端到端")
 	}
 	iface := localLANAddress(t)
+	relayExe := filepath.Join(t.TempDir(), "connect-hub-relay")
+	if runtime.GOOS == "windows" {
+		relayExe += ".exe"
+	}
+	build := exec.Command("go", "build", "-mod=readonly", "-o", relayExe, "./cmd/app-relay")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("构建 relay 子进程失败：%v\n%s", err, output)
+	}
 
 	// ---- A: the sharing host -------------------------------------------------
 	a := testApp(t)
+	a.relayExecutable = relayExe
 	echo, closeEcho := echoListenerForTest(t)
 	t.Cleanup(closeEcho)
 	installLANShareWith(t, a, &appTestSink{names: map[string]string{"p1": "公司 VPN"}, echo: echo}, lanAddresses{})
@@ -735,6 +745,7 @@ func TestLiveDiscoveryJoinEndToEnd(t *testing.T) {
 
 	// ---- B: the colleague ----------------------------------------------------
 	b := testApp(t)
+	b.relayExecutable = relayExe
 	b.mgr.Close()
 	b.mgr = vpn.NewManager(
 		vpn.NewProtocolConnector(vpn.ZJUOptions{

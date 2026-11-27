@@ -113,3 +113,67 @@ Windows 成品为根目录 `connect-hub.exe` 及 `core/connect-hub-{worker,captu
 没有开展 DS 指定的真实实测，没有跨机/真实 VPN、系统凭据库、macOS/Linux 运行验收。前次已作基线对照的 WSL 两项桌面全量失败不在本次重跑范围，不声称 WSL desktop 全量 race 通过。覆盖率未测量，不声称 80%。自动测试/复核不等于用户验收，本工单交付保持 needs_review，不标 done。
 
 Host 状态写入限制：执行者尝试 `tickets show` 与 `tickets update ... --status needs_review` 均被明确返回 `dispatch_worker_forbidden`（exit 1），不是成功回执。未绕过；本交付要求调度方保持 **needs_review**，不能宣称执行者已直接更新数据库状态。原实施工单、复核工单及 DS 工单均未改变。
+
+## 主机授权面板刷新后续修复（2026-11-27）
+
+用户报告“邀请码与设备授权”中的生成、取消和暂停等控件每秒刷新。本次代码与测试提交：`207f5b6db7539e6e7e4f3c969af700a1a7bb3cef`；只修复主机管理面板，不改变配对协议、设备授权格式或客户端每秒查询配对结果的策略。跨机及真实窗口验收仍待执行。
+
+本次相关文件：
+
+- `internal/desktop/pairing_view.go`：读取与显式操作分开计忙；每次请求拥有独立结果邮箱；显式操作取消后台读取，迟到结果无法覆盖当前状态；通过框架 `Context.After` 独立续订重绘，并检查窗口可见性。读取失败保留当前快照，取消失败保留仍有效的邀请码。暂停态清除邀请码和临时请求的显示，保留设备列表。
+- `internal/desktop/lanshare.go`：保存管理请求的邮箱与取消函数；在 UI 线程读取结果；重开面板、关闭共享及暂停操作完成时处理相应刷新生命周期。
+- `internal/desktop/lanshare_view.go`：面板关闭时取消并解除当前管理请求，关闭面板保持原有共享生命周期。
+- `internal/desktop/pairing_manage_test.go`（新增）：9 个测试函数、20 个场景，执行真实 UI 渲染、点击与结果处理。覆盖生成/取消后的持续刷新、后台读取期间的生成/取消/批准/拒绝/撤销/暂停、慢读取不重叠、迟到成功/错误、关闭重开、显式操作互斥、隐藏/最小化及恢复、取消失败、暂停后的设备展示。
+- `internal/relay/pairing_lifecycle_test.go`：补充不重启即暂停时清除临时状态、恢复后不恢复旧邀请/请求的断言，沿用真实 loopback 配对与持钥重连。
+- `docs/plans/lan-invitation-pairing-2026-11-27.md`：分别说明主机与客户端的两种轮询；明确暂停使当前邀请码和临时请求失效；补充面板刷新验收项。
+- `docs/plans/lan-invitation-pairing-fixes-2026-11-27.md`：本记录。
+
+参考现有 `internal/desktop/redraw{,_test}.go` 的可见性门控及可控时钟、`lan_discovery{,_async_test}.go` 的后台查询与迟到结果隔离、`import_relay.go` 与 `pairing_test.go` 的独立结果邮箱。另核对 `lanshare_view_test.go`、`app.go`、`state_ticker.go`、`window_lifecycle.go`、`view_test.go`，以及 `internal/relay/pairing_{controller,state,test}.go`、`process/pairing.go`、`client/share.go`、`contract/controller.go`、`go.mod` 与 `scripts/buildtool/main.go`。框架 API 以固定依赖 MyGo v0.7.3 的 `ui/{context,headless,runtime,window}.go` 和 `internal/raster/team.go` 为准。
+
+### 红测与根因
+
+在生产代码未修改时，使用 `testing/synctest` 与真实 `ui.Tester`，在初次读取后 500ms 点击生成/取消，再让原定时重绘在操作后不到一秒触发。已有定时器到期时，新的 `pairAt` 尚未满一秒，条件分支不再续订后续重绘；同时后台 `list` 与显式操作共用 `pairBusy`，使按钮随每秒读取反复禁用。
+
+红测命令（当时后台读取测试名为 `TestPairManageBackgroundRefreshAllowsInvitationActions`，扩展覆盖后改名为 `TestPairManageBackgroundRefreshAllowsActions`）：
+
+```powershell
+$env:GOWORK='off'
+go test -mod=readonly ./internal/desktop -run '^TestPairManage(PollingContinuesAfterInvitationAction|BackgroundRefreshAllowsInvitationActions)$' -count=1 -timeout=30s
+```
+
+实际 exit 1：生成、取消分别出现 `polling stopped after create/cancel: list calls = 1`；后台读取未完成时分别出现 `background refresh blocked create/cancel: action count = 0`。修复后同一反馈回路转绿。新增可见性回归还曾在托盘、最小化两个场景报 `hidden panel continued polling`；添加可见性检查后转绿。
+
+测试接缝最初遇到 MyGo 常驻光栅化线程不能归属虚拟时钟 bubble 的超时，以及原有 `stopPainting` 调用空取消回调的清理 panic；这两次都不是业务复现。测试局部使用 `GOMAXPROCS(1)` 并恢复原值，避免引入框架常驻线程；清理由该测试拥有的管理请求和可见性标志负责。没有修改框架或无关重绘实现。
+
+### 本次验证
+
+实际环境：Windows Go 1.27.4；race 使用现有 WSL Go 1.27.4 与 gcc。所有 Go 命令均为 `GOWORK=off -mod=readonly`，没有并发执行构建和全量测试。
+
+| 范围 | 结果 |
+| --- | --- |
+| Windows 主机面板与暂停生命周期定向回归 | 通过；desktop 0.279s，relay 0.395s |
+| Windows `go test ./... -count=1 -timeout=240s` | 全通过；desktop 26.587s，relay 12.367s，process 21.578s，vpn 9.009s，e2e 6.878s |
+| Windows `go vet ./...` | exit 0 |
+| WSL 定向 `go test -race`：主机面板、原 UI 展示及暂停/恢复生命周期 | 通过；desktop 1.514s，relay 1.622s，无 race 报告 |
+| 新测试对四个主机管理函数的语句覆盖率 | `stopPairManage` 100%；`pairManageAction` 90.9%；`drainPairManageResults` 100%；`pairingManageView` 96.2% |
+| Windows/amd64 全组件开发构建 | 通过；协议生成一致性及固定内核检查通过 |
+| 构建 manifest 的 SHA-256 校验 | 7/7 通过，包含 5 个可执行组件和 2 个模块清单 |
+| `git diff --check` | 通过 |
+
+覆盖率来自仅运行 `TestPairManage` 的定向命令；整个 desktop 包在该命令下是 2.8%，不能把上述函数覆盖率当成全包或全项目覆盖率。
+
+```powershell
+$env:GOWORK='off'
+go test -mod=readonly ./internal/desktop ./internal/relay -run '^TestPairManage|^TestPairPauseRestartResumePreservesDevicesAndLegacyDisable$' -count=1 -timeout=45s
+go test -mod=readonly ./... -count=1 -timeout=240s
+go vet -mod=readonly ./...
+go test -mod=readonly ./internal/desktop -run '^TestPairManage' -coverprofile=build/pairing-ui-refresh-20261127/validation/desktop-pair-manage.cover -count=1 -timeout=45s
+go run -mod=readonly ./scripts/buildtool -development -out build/pairing-ui-refresh-20261127
+```
+
+```powershell
+$wslGo='/home/ehzyil/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.4.linux-amd64/bin'
+wsl --cd /mnt/d/Programming/Projects/Go/easy-connect/aTrustHub --exec env GOWORK=off GOTOOLCHAIN=local CGO_ENABLED=1 "PATH=${wslGo}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "$wslGo/go" test -race -mod=readonly ./internal/desktop ./internal/relay -run '^TestPairManage|^TestPairingUIStateAndIndependentDeviceControls$|^TestPairPauseRestartResumePreservesDevicesAndLegacyDisable$' -count=1 -timeout=120s
+```
+
+产物：`build/pairing-ui-refresh-20261127/connect-hub.exe` 及相邻 `core/` 中四个组件。manifest 记录运行代码提交 `207f5b6`，Hub 和固定内核输入均无未提交源文件；后续仅补本文档。验证日志与覆盖率保存在同目录 `validation/`。本次没有启动成品、替换当前运行程序或操作用户的 VPN/共享/邀请码/凭据；`go.work`、`go.work.sum` 仍未跟踪，未纳入提交。本轮没有重新执行 WSL desktop 全量 race 或 macOS/Linux 运行验收。

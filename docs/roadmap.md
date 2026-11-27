@@ -67,7 +67,7 @@ tunWanted/quitRequested/tunPID` 全部改为 atomic；删掉了 `tunOnA/tunPendi
 
 ### A9. e2e 与测试基线 —— 部分修复（B5）
 
-`tests/e2e` 模块已建立并重新加入 `go.work`：黑盒驱动真实 worker，覆盖无效配置拒绝、版本不匹配拒绝、
+P4 将 `tests/e2e` 纳入产品模块（无需 `go.work`）：黑盒驱动真实 worker，覆盖无效配置拒绝、版本不匹配拒绝、
 未知消息类型拒绝（不需要网关/网络）。Hub 侧的跨包场景仍主要由 `internal/vpn` 的集成测试承担。
 `-race` 已在 WSL Debian（有 gcc）跑通：Hub 全模块 + tests/e2e 均无 DATA RACE。
 - 3 个 Windows 普通用户进程测试在管理员令牌下必失败，需普通桌面令牌执行。
@@ -76,8 +76,8 @@ tunWanted/quitRequested/tunPID` 全部改为 atomic；删掉了 `tunOnA/tunPendi
 ### A10. 仓库形态
 
 - `easy-connect/` 根目录（`go.work`、`docs/`、`README.md`）不在任何 git 仓库内。
-- 两个内核真源（`aTrustHub/third_party/zju-connect` 与 `zju-connect/`）并存且已漂移。
-- 两个 `go.work`（根 + `aTrustHub/go.work` 的 `use .`）导致"从哪个目录构建"决定依赖版本。
+- P4 已归并两份内核；产品固定 `third_party/zju-connect` 子模块，独立 fork 目录仅用于内核开发。
+- 正式及开发构建入口统一 `GOWORK=off`，不依赖外层工作区；验收记录见 `docs/plans/p4-kernel-2026-11-26.md`。
 
 ---
 

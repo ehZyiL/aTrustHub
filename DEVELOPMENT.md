@@ -1,11 +1,9 @@
 # Connect Hub 开发手册
 
-> 2026-11-26 构建更新：本地配套二进制使用 `./scripts/build.ps1 -development`
-> 或 `bash scripts/build.sh -development`；发行脚本与 CI 调用同一构建工具，
-> 固定 Go/Worker 输入见 `packaging/build-inputs.json`。
-> 入口显式使用 `GOWORK=off`，记录两侧模块清单并检查 uTLS 来源。
-> 下文的历史手工编译步骤不能替代这一入口的来源与版本检查。
-> 详见 [P0 构建与资源基线](docs/plans/p0-baseline-2026-11-26.md)。
+> 2026-11-26 P4 更新：Hub、Worker 和 patched uTLS 统一使用固定子模块。
+> 本地与 CI 共用 `scripts/build.ps1` / `scripts/build.sh`，显式 `GOWORK=off`。
+> 构建输入见 `packaging/build-inputs.json`，归并与验证记录见
+> [P4 内核归并](docs/plans/p4-kernel-2026-11-26.md)。
 
 本手册为 **Connect Hub** 桌面客户端及其底层 VPN 核心、特权网络助手的开发者提供全面的技术架构解析、开发环境搭建指南、本地编译调试方法与测试发布规范。
 
@@ -36,18 +34,20 @@ flowchart TB
         Config["配置与会话存储<br/>%APPDATA%/connect-hub 或 ~/.config/connect-hub"]
     end
 
-    subgraph Layer2 ["2. 协议核心层 (独立工作进程)"]
+    subgraph Layer2 ["2. 协议核心层"]
         Worker["VPN 协议核心 (connect-hub-worker)<br/>Stdio IPC v7 · 隔离运行 · 内存优化"]
-        aTrustProto["aTrust 协议栈<br/>(继承自上游，Fork 后未做实机测试)"]
+        aTrustProto["aTrust 协议栈<br/>(Hub 进程内；P4 未做网关实测)"]
         EasyConnectProto["EasyConnect 协议栈<br/>(L3/L4 封装、定制 uTLS)"]
     end
 
     subgraph Layer3 ["3. 操作系统网络捕获层 (特权辅助进程)"]
-        Helper["网络抓包助手 (connect-hub-capture)<br/>Windows: UAC 提权 / Named Pipe v7<br/>Linux: Root / Unix Socket v10"]
+        Helper["网络抓包助手 (connect-hub-capture)<br/>Windows: UAC 提权 / Named Pipe v7<br/>Linux: Root / Unix Socket v11"]
         WinNet["Windows 协议栈<br/>Job Object · Wintun · NRPT 表"]
         LinuxNet["Linux 协议栈<br/>cgroups · iptables · 原生 TUN"]
     end
 
+    GUI -->|"进程内调用"| aTrustProto
+    Worker --> EasyConnectProto
     GUI <-->|"Stdio JSON-RPC (v7)"| Worker
     GUI <-->|"命名管道 / 本地 Socket"| Helper
     Worker -->|"加密 TLS / UDP 隧道"| Gateways["远程网关 (aTrust / EasyConnect)"]
@@ -59,7 +59,7 @@ flowchart TB
 
 ### 核心设计原则
 
-1. **协议栈单一真源**：EasyConnect / aTrust 底层协议与特定网络栈（如修改版 uTLS、gVisor）集中在 `zju-connect` 中维护，桌面端通过标准 IPC 驱动，禁止在桌面端随意复制或打补丁。
+1. **协议栈单一真源**：EasyConnect / aTrust 底层协议与特定网络栈（如修改版 uTLS、gVisor）集中在 `third_party/zju-connect` 子模块中维护；aTrust 由 Hub 进程内调用，EasyConnect 由独立 Worker 通过 IPC 驱动，禁止在桌面端随意复制或打补丁。
 2. **最小权限与进程边界**：GUI 主程序全程以**普通用户权限**运行；涉及操作系统网络修改（创建虚拟网卡、配置路由、绑定 Job Object、修改系统 DNS）的操作由独立的特权辅助程序（`connect-hub-capture`）在用户授权后执行。
 3. **构建上下文严格隔离**：主程序与 Worker 独立编译，禁止混淆 `go.work` 依赖环境。
 
@@ -70,39 +70,21 @@ flowchart TB
 
 ## 2. 工作区与多模块拓扑
 
-根目录下通过 `go.work` 协调开发环境：
+产品仓库可单独检出，无需兄弟目录或外层工作区：
 
 ```text
-easy-connect/
-├── aTrustHub/                 # 模块: github.com/ehzyil/connect-hub
-├── zju-connect/               # 模块: github.com/mythologyli/zju-connect (独立仓库分支)
-│   └── third_party/utls/      # 模块: github.com/refraction-networking/utls (定制版)
-├── docs/                      # 架构提案与测试记录
-└── go.work                    # 工作区定义
+connect-hub/
+├── go.mod                         # 产品模块
+├── third_party/zju-connect/        # 固定 git 子模块：aTrust + EasyConnect + Worker
+│   └── third_party/utls/           # fork 内固定的局部证书解析补丁
+├── tests/e2e/                     # 属于产品模块，真实 Worker 黑盒测试
+└── packaging/build-inputs.json     # Go 版本、内核仓库及提交
 ```
 
-### `go.work` 的核心配置逻辑
-
-```go
-go 1.27.3
-
-use (
-	./aTrustHub
-	./tests/e2e
-)
-
-// 关键约束：独立 Worker 与 Hub 的 patched aTrust 共享了部分模块路径。
-// 在编译或测试 zju-connect 目录内的 connect-hub-worker 时，必须使用 GOWORK=off！
-
-replace (
-	github.com/refraction-networking/utls => ./zju-connect/third_party/utls
-	inet.af/netaddr => github.com/inetaf/netaddr v0.0.0-20230525184311-b8eac61e914a
-)
-```
-
-> [!IMPORTANT]
-> **切勿把 `./zju-connect` 加入根目录 `go.work` 的 `use` 块中！**
-> `zju-connect` 内含针对特定协议握手打过补丁的 `utls` 依赖。若在同一 Go Workspace 中混合解析，会导致构建链接错乱。编译 `zju-connect` 内的代码必须使用 `GOWORK=off`。
+Hub 的 `go.mod` 同时替换内核和 uTLS；Worker 的 `go.mod` 替换其本地 uTLS。
+构建工具核对 gitlink、子模块 HEAD、工作树、IPC 与两侧模块清单。
+缺少子模块会明确报错。所有构建与验收均设置 `GOWORK=off`；已有本地
+`go.work` 可保留供编辑器使用，但不能作为发行构建输入。
 
 ---
 
@@ -112,9 +94,9 @@ replace (
 
 - **载体**：标准输入输出（`stdin` / `stdout`），以单行 JSON 格式交互。
 - **两端代码**：
-  - 客户端主程序：[aTrustHub/internal/workeripc/protocol.go](file:///d:/Programming/Projects/Go/easy-connect/aTrustHub/internal/workeripc/protocol.go)
-  - Worker 侧：[zju-connect/internal/desktop/protocol.go](file:///d:/Programming/Projects/Go/easy-connect/zju-connect/internal/desktop/protocol.go)
-- **协议一致性硬约束**：打包脚本中强制执行 `diff`，两端协议定义必须完全一致。
+  - 客户端主程序：[internal/workeripc/protocol.go](internal/workeripc/protocol.go)
+  - Worker 侧：[third_party/zju-connect/internal/desktop/protocol.go](third_party/zju-connect/internal/desktop/protocol.go)
+- **协议一致性硬约束**：共用构建工具强制执行 `protogen -check`，两端协议定义必须完全一致。
 
 #### 交互流程：
 1. **启动与握手**：主程序拉起 `core/connect-hub-worker`，并监听其 stdout。
@@ -202,67 +184,43 @@ Connect Hub 在用户界面（顶栏胶囊下拉菜单与设置页）中将网�
 
 ## 6. 本地构建与调试工作流
 
-### 6.1 推荐的工作区布局
-确保两个仓库在同一工作区目录下保持并列结构：
-```text
-easy-connect/
-├── aTrustHub/       # (分支: dev-main)
-└── zju-connect/     # (分支: feat/desktop-worker)
-```
+### 6.1 初始化
 
-### 6.2 Windows 下的本地编译调试（PowerShell 7）
-
-在 `aTrustHub` 目录下执行以下步骤：
-
-```powershell
-# 1. 创建本地测试产物目录与内部 core/ 目录
-New-Item -ItemType Directory -Force .\build\debug\resources, .\build\debug\core | Out-Null
-
-# 2. 生成带图标的 Windows 资源对象并编译主程序
-go run .\cmd\appicon -icon resources\icon.png -arch amd64 -out .\appicon_windows_amd64.syso
-go build -mod=readonly -trimpath -ldflags="-H=windowsgui" -o .\build\debug\connect-hub.exe .
-Remove-Item .\appicon_windows_amd64.syso
-
-# 3. 编译特权抓包助手
-go build -mod=readonly -trimpath -ldflags="-H=windowsgui" -o .\build\debug\core\connect-hub-capture.exe .\cmd\app-helper
-
-# 4. 隔离编译协议核心 connect-hub-worker (必须切换 GOWORK=off)
-$prevGoWork = $env:GOWORK
-try {
-    $env:GOWORK = "off"
-    go -C ..\zju-connect build -mod=readonly -trimpath -ldflags="-H=windowsgui" -o ..\aTrustHub\build\debug\core\connect-hub-worker.exe .\cmd\connect-hub-worker
-} finally {
-    $env:GOWORK = $prevGoWork
-}
-
-# 5. 复制资源文件
-Copy-Item .\resources\icon.png .\build\debug\resources\icon.png -Force
-
-# 6. 直接运行测试
-.\build\debug\connect-hub.exe
-```
-
-### 6.3 Linux 下的本地编译调试（Bash）
-
-在 `aTrustHub` 目录下执行：
+安装 `packaging/build-inputs.json` 中指定的 Go（当前 1.27.4）。克隆产品仓库时加
+`--recurse-submodules`，或在已有仓库执行：
 
 ```bash
-# 1. 准备目录
-mkdir -p build/debug/resources build/debug/core
+git submodule update --init --recursive
+```
 
-# 2. 编译主程序与助手
-go build -mod=readonly -trimpath -o build/debug/connect-hub .
-go build -mod=readonly -trimpath -o build/debug/core/connect-hub-capture ./cmd/app-helper
+内核新提交须先推到 fork，再推引用该提交的产品分支，否则其他人无法初始化子模块。
+本地尚未推送时的复现方式与发布状态见 [P4 记录](docs/plans/p4-kernel-2026-11-26.md)。
 
-# 3. 编译独立 Worker (GOWORK=off)
-(cd ../zju-connect && env GOWORK=off go build -mod=readonly -trimpath -o ../aTrustHub/build/debug/core/connect-hub-worker ./cmd/connect-hub-worker)
+### 6.2 Windows（PowerShell 7）
 
-# 4. 拷贝静态资源
-cp resources/icon.png build/debug/resources/
+```powershell
+$env:GOWORK = 'off'
+./scripts/build.ps1 -development
+./build/debug/connect-hub.exe
+```
 
-# 5. 运行
+### 6.3 Linux / macOS（Bash）
+
+```bash
+bash scripts/build.sh -development
 ./build/debug/connect-hub
 ```
+
+入口统一生成图标、Hub、Worker 与对应平台组件，输出模块清单及构建清单。
+正式打包不加 `-development`，要求产品和内核都干净；开发模式仅允许产品未提交修改。
+外部 `-worker` / `ZJU_CONNECT_ROOT` 路径会被拒绝，避免只更换 Worker。
+
+### 6.4 修改内核
+
+在 `third_party/zju-connect` 新建分支，修改并运行内核测试后提交；也可在独立 fork
+工作树修改，再让子模块 fetch 并 checkout 该提交。同步更新
+`packaging/build-inputs.json` 的 `kernel_commit`，执行 `git add third_party/zju-connect`，
+再运行统一构建。无需修改用户的 `go.work`，不能复制内核文件回产品仓库。
 
 ---
 
@@ -272,9 +230,11 @@ cp resources/icon.png build/debug/resources/
 对内部网络栈、认证包、策略包执行测试：
 
 ```bash
-cd aTrustHub
-# 运行单元测试
+export GOWORK=off
+# 产品全量，包含 tests/e2e（会编译并驱动真实 Worker）
 go test -mod=readonly ./...
+# 内核是独立模块，需要另行执行
+go -C third_party/zju-connect test -mod=readonly ./...
 
 # 针对高频通信包运行竞态检测 (-race)
 go test -race ./internal/workeripc ./internal/vpn
@@ -284,8 +244,8 @@ go test -race ./internal/workeripc ./internal/vpn
 打包或提交前，确保两端的协议定义文件完全一致：
 
 ```bash
-diff -u <(sed -e 's/\r$//' -e 's/^package desktop$/package workeripc/' ../zju-connect/internal/desktop/protocol.go) \
-        <(sed 's/\r$//' ./internal/workeripc/protocol.go)
+env GOWORK=off go run ./internal/workeripc/cmd/protogen -check \
+  -src third_party/zju-connect/internal/desktop/protocol.go -out internal/workeripc/protocol.go
 ```
 
 ### 7.3 助手与核心协议版本校验
@@ -293,7 +253,7 @@ diff -u <(sed -e 's/\r$//' -e 's/^package desktop$/package workeripc/' ../zju-co
 # 校验 Windows 助手协议版本 (当前预期为 7)
 ./core/connect-hub-capture.exe --protocol-version
 
-# 校验 Linux 助手协议版本 (当前预期为 10)
+# 校验 Linux 助手协议版本 (当前预期为 11)
 ./core/connect-hub-capture --protocol-version
 ```
 

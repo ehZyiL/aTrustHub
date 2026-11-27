@@ -12,10 +12,7 @@ func TestWorkerProtocolContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := os.ReadFile(filepath.Join("..", "..", "..", "zju-connect", "internal", "desktop", "protocol.go"))
-	if os.IsNotExist(err) {
-		t.Skip("standalone Hub checkout: sibling worker contract is checked in the combined workspace")
-	}
+	worker, err := os.ReadFile(filepath.Join("..", "..", "third_party", "zju-connect", "internal", "desktop", "protocol.go"))
 	if err != nil {
 		t.Fatal(err)
 	}

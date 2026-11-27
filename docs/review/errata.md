@@ -15,7 +15,7 @@
 | `DEVELOPMENT.md` §1 架构图 | aTrust 与 EasyConnect 两条协议栈都在 `connect-hub-worker` 里 | aTrust 在 **GUI 进程内**直接 import（`internal/vpn/zju.go`）；worker 只做 EasyConnect，协议里无协议选择字段 |
 | `DEVELOPMENT.md` §4.3 | "Linux（Native TUN + Policy Routing）"属于全局 TUN 的一档 | Linux `supportsElevatedTUN() = false`，**没有**全局 TUN 这一档；Linux 只有"应用接管"（`supportsResourceTUN = true`） |
 | `DEVELOPMENT.md` §3.2 | Linux 助手 socket 在 `/run/connect-hub/helper.sock` | 实际 `/run/connect-hub-capture-<uid>/control.sock`（`capture.SocketPath`），0600 且 chown 到该 UID |
-| `DEVELOPMENT.md` §2 | `go.work` 的 `use` 含 `./tests/e2e` | 该目录**不存在**（曾导致根目录任何 go 命令失败，已修复）；`tests/e2e` 与 harness 已不在仓库 |
+| `DEVELOPMENT.md` §2 | `go.work` 的 `use` 含 `./tests/e2e` | P4 已将 Worker 黑盒测试迁入产品 `tests/e2e`，属于产品模块；历史 harness 仍不在仓库 |
 | `desktop-status-2026-11-19` | "新接入点默认 EasyConnect" | `model.AccessPoint.Normalize()` 默认 `protocol = atrust`，EasyConnect 必须显式填写 |
 | `desktop-status-2026-11-19` | "Linux 关闭窗口退出并清理连接" | 有托盘时关闭是**隐藏到托盘**（`quitclose.go`：linux + trayOK + 未勾选退出 → `closeHide`）；只有检测不到托盘才退出 |
 | `desktop-status-2026-11-19` | "未实现的 Linux 系统代理、TUN 不可用" | 系统代理仍不提供；但**应用接管（资源 TUN）在 Linux 可用** |
@@ -33,7 +33,7 @@
 | `greenfield-architecture` §2.4 缺陷 2 | "发布包缺 worker（CI 只编 multitun）" | **已修**：两个打包脚本都编 worker，并做空配置 IPC 自检 |
 | `greenfield-architecture` §7 | "三处授权判定并存" | **已收敛**：`internal/routing` 是唯一决策点；worker 侧 `ErrACLDenied` 降级为兜底 |
 | `greenfield-architecture` §2.6 | 根包 51 个非测试 `.go`、28 个平台后缀、326 KB | 现在 94 个文件 / ≈18.4k 行，其中 36 个平台后缀（结论"壳层过重"仍成立，数字需更新） |
-| `greenfield-architecture` §10 / `implementation-plan` §9 | `tests/e2e` 只有 `go.mod` | 目录已不存在 |
+| `greenfield-architecture` §10 / `implementation-plan` §9 | `tests/e2e` 只有 `go.mod` | P4 产品内含真实 Worker 黑盒测试，无独立 go.mod |
 | `gateway-validation` | "aTrustHub GUI 在 Fedora 构建失败，缺 redirectStderr / systemProxyEnabled / helperSuffix 等符号" | 已补齐（`stderr_linux.go`、`systemproxy_linux.go`、`helperpath_linux.go` 均在） |
 | `linux-capture-helper` 等 | "产品辅助服务、受认证的 GUI 控制、提权安装、启动屏障尚未实现" | 已实现（`internal/capture/service_linux.go`、`setup_linux.go`、`launch_linux.go`） |
 | `implementation-plan` §3 | "建议目录（新增路径尚未创建）" | 全部已创建 |

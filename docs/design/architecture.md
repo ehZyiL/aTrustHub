@@ -5,7 +5,7 @@
 ```
 普通用户权限
 ├── connect-hub（GUI 主程序，单实例）
-│   ├── aTrust 协议栈 —— 进程内（import vendor 化的 zju-connect）
+│   ├── aTrust 协议栈 —— 进程内（import 固定子模块内的 zju-connect）
 │   └── EasyConnect —— 子进程 core/connect-hub-worker，stdio JSON-RPC v7
 └── 经提权拉起的网络助手
     ├── Windows: core/connect-hub-capture.exe（UAC），命名管道 v7
@@ -14,7 +14,7 @@
 
 ### 需要纠正的一个长期误解
 
-`DEVELOPMENT.md` 画的图把 aTrust 与 EasyConnect 都放在 worker 里。**实际不是**：
+旧版开发手册曾把 aTrust 与 EasyConnect 都放在 worker 里；P4 已修正文档，当前模型是：
 
 - `internal/vpn/zju.go` 直接 `import` `client/atrust`、`stack/gvisor`、`resolve`、`dial`，在 GUI 进程内建立 aTrust 隧道；
 - `zju-connect/internal/desktop`（worker 侧）只处理 EasyConnect 类型，协议里没有协议选择字段。
@@ -28,25 +28,17 @@
 | 栈崩溃会带走 UI | `connectZJU` 只能靠 `recover()` 兜 |
 | 能力只在一侧实现 | `CheckAlive` / `ClientData` 只有进程内版本，worker 侧靠 `flow_prepare`、`ExchangeCaptureDNS` 等特化消息补齐 |
 
-## 2. 构建上下文：内核代码有两个真源
+## 2. 构建上下文：P4 统一内核来源
 
-这是本项目最容易被"在错误目录编译"坑到的地方。
+`third_party/zju-connect` 是固定提交的 Git 子模块，归并 Hub 的 aTrust 补丁与 Worker fork。
+Hub 和 Worker 独立编译，但内核及 patched uTLS 来自同一子模块。
+`scripts/buildtool` 核对 Go 版本、gitlink、锁文件、干净工作树、IPC 和模块清单；
+默认构建无需外层目录，拒绝外部 Worker 覆盖路径。全部命令显式 `GOWORK=off`。
 
-| 上下文 | 内容 | 谁在用 |
-|---|---|---|
-| `easy-connect/go.work` | `use ./aTrustHub`；`replace utls => ./zju-connect/third_party/utls` | 从仓库根执行的命令 |
-| `aTrustHub/go.work` | 仅 `use .` | **在 `aTrustHub/` 内执行的命令**（就近命中，屏蔽根 workspace 的 replace） |
-| `aTrustHub/go.mod` | `replace zju-connect => ./third_party/zju-connect` | Hub 自己的 aTrust 依赖（Fork A） |
-| `zju-connect/`（独立模块） | `GOWORK=off` 编译 worker | 打包脚本 `scripts/package-*.sh` |
+`tests/e2e` 已纳入产品模块，执行 `go test ./...` 会运行真实 Worker 的黑盒 IPC 测试；
+缺少子模块直接失败。旧的 multi_gateway_router / tier1 harness 未在本轮恢复。
 
-由此产生两个必须知道的后果：
-
-1. **同一 commit 从不同目录构建，链接到不同 uTLS**：根目录构建用 patched 版（`zju-connect/third_party/utls`），`aTrustHub/` 内构建用上游 `v1.8.2`。Hub 的 `wecom_quicklogin.go` 直接 import utls。
-2. **aTrust 内核有两份源码**：`aTrustHub/third_party/zju-connect`（随 Hub 提交，无独立 git）与 `zju-connect/`（独立仓库，worker 来源）。二者已相互漂移，谁都不是超集。
-
-worker 必须用 `GOWORK=off` 从 `zju-connect/` 构建，否则会解析到 Hub 的 patched 模块而链接失败或行为错乱。
-
-> 历史记录里"根 `go.work` 曾引用 `./tests/e2e` 导致根目录 go 命令全部失败"的问题已修复（该目录不存在，相关 e2e 模块与 harness 已不在仓库内）。`tests/e2e` 现在**不存在**，任何引用它的文档/脚本都失效。
+详见 [P4 归并及验收](../plans/p4-kernel-2026-11-26.md) 和子模块 `PATCHES.md`。
 
 ## 3. 模块边界
 
@@ -93,5 +85,5 @@ worker 必须用 `GOWORK=off` 从 `zju-connect/` 构建，否则会解析到 Hub
 见 [review/errata.md](../review/errata.md)。与本文件直接相关的三条：
 
 1. aTrust 不在 worker 内（旧架构图错）。
-2. "协议栈单一真源"目前**不成立**（两份 fork 并存）。
-3. `tests/e2e` 模块与 harness 已不存在（旧任务清单 §5/§7 引用了它们）。
+2. P4 已归并两份 fork，以固定子模块作为唯一默认源码来源。
+3. `tests/e2e` 已纳入产品模块；历史多网关 harness 仍不存在。

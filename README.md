@@ -60,7 +60,7 @@
 - 局域网分享（协议、生命周期、严格出口边界）：[docs/design/lan-relay-sharing-implementation-2026-11-24.md](docs/design/lan-relay-sharing-implementation-2026-11-24.md)
 - 局域网分享自动发现（DNS-SD、缓存上限、复审与实测记录）：[docs/design/lan-relay-discovery-2026-11-24.md](docs/design/lan-relay-discovery-2026-11-24.md)
 - 旧文档勘误（哪些旧说法已与代码不符）：[docs/review/errata.md](docs/review/errata.md)
-- 历史设计稿与架构演进记录：[docs/greenfield-architecture-2026-11-20.md](../docs/greenfield-architecture-2026-11-20.md)
+- 历史设计稿与架构演进记录：[组件边界重构方案](docs/plans/component-boundaries-2026-11-26.md)
 
 ---
 
@@ -68,15 +68,12 @@
 
 详细编译环境配置与调试流程，请查阅 **[DEVELOPMENT.md](DEVELOPMENT.md)**。
 
+安装 `packaging/build-inputs.json` 指定的 Go 版本后，在产品仓库执行：
+
 ```bash
-# 1. 编译特权助手
-go build -mod=readonly -trimpath -o build/core/connect-hub-capture ./cmd/app-helper
-
-# 2. 编译独立协议工作进程 (必须切换 GOWORK=off)
-(cd ../zju-connect && env GOWORK=off go build -mod=readonly -trimpath -o ../aTrustHub/build/core/connect-hub-worker ./cmd/connect-hub-worker)
-
-# 3. 编译桌面主程序
-go build -mod=readonly -trimpath -o build/connect-hub .
+git submodule update --init --recursive
+bash scripts/build.sh -development
+# 输出 build/debug/connect-hub 与 core/ 配套组件。
 ```
 
 ---

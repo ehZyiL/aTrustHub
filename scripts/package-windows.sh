@@ -5,9 +5,8 @@ export GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
 export GOWORK=off GOFLAGS=-mod=readonly GOTOOLCHAIN=local
 
 app_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-# 工作树里没有 zju-connect 兄弟目录，允许用环境变量指过去；
-# 默认仍是同级的 ../zju-connect。
-worker_root=${ZJU_CONNECT_ROOT:-$(cd -- "$app_root/../zju-connect" && pwd)}
+# Hub 与 Worker 共享固定子模块；构建门禁拒绝外部 Worker 路径。
+worker_root=${ZJU_CONNECT_ROOT:-"$app_root/third_party/zju-connect"}
 # 把来源写进包里：否则"这个包是哪份代码打的"只能靠猜。
 repo_branch=$(git -C "$app_root" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
 repo_commit=$(git -C "$app_root" rev-parse --short HEAD 2>/dev/null || echo unknown)

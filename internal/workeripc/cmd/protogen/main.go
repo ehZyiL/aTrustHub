@@ -1,6 +1,6 @@
 // Command protogen makes the worker protocol a single source of truth.
 //
-// The worker (../zju-connect/internal/desktop/protocol.go) and the desktop
+// The worker (third_party/zju-connect/internal/desktop/protocol.go) and the desktop
 // (aTrustHub/internal/workeripc/protocol.go) must be byte-identical apart from
 // the package clause. Hand-copying that file is what produced "the two sides
 // drifted and nobody noticed"; this tool copies it and rewrites only the one line

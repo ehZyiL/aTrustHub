@@ -106,13 +106,7 @@ func connectZJU(ctx context.Context, opts ZJUOptions, point model.AccessPoint, c
 		}
 	}()
 
-	// ZJU-Connect v1.3.1's Setup has no context of its own. Run it in a
-	// goroutine so that stopping an access point does not wait for a login
-	// that may take minutes; the goroutine is closed when Setup returns.
-	type setupResult struct {
-		data []byte
-		err  error
-	}
+	// The unified kernel binds login requests to the access point context.
 	// 登录卡在验证码上时由调用方弹窗询问；没有提供就只能走终端。
 	var promptCode auth.CodePrompter
 	if creds.PromptCode != nil {
@@ -124,53 +118,42 @@ func connectZJU(ctx context.Context, opts ZJUOptions, point model.AccessPoint, c
 			return creds.PromptCode(ctx, CodeRequest{Kind: kind, Tip: req.Tip})
 		}
 	}
-	done := make(chan setupResult, 1)
-	go func() {
-		data, err := client.Setup(atrustclient.SetupOptions{
+	authData, err := client.SetupContext(ctx, atrustclient.SetupOptions{
+		ServerAddress:            point.Server,
+		ServerPort:               point.Port,
+		LoginMethod:              loginMethod,
+		TOTPSecret:               creds.TOTP,
+		PromptCode:               promptCode,
+		BrowserCaptcha:           true,
+		ClientData:               clientData,
+		ResourceData:             resourceData,
+		BestNodesRefreshInterval: 90 * time.Second,
+	})
+	if err != nil && resumeSID != "" && ctx.Err() == nil {
+		// The saved session is stale: fall back to authenticating with the
+		// saved cookies, which still avoids a fresh QR code when possible.
+		zjuLog.Printf("[%s] 复用会话失败，改用已保存的凭据重新认证：%v", point.Name, err)
+		client.Close()
+		client = atrustclient.NewClient(atrustclient.ClientOptions{
+			Session:        atrustclient.SessionOptions{Username: point.Username},
+			UnderlayDialer: under,
+		})
+		authData, err = client.SetupContext(ctx, atrustclient.SetupOptions{
 			ServerAddress:            point.Server,
 			ServerPort:               point.Port,
 			LoginMethod:              loginMethod,
 			TOTPSecret:               creds.TOTP,
 			PromptCode:               promptCode,
+			BrowserCaptcha:           true,
 			ClientData:               clientData,
-			ResourceData:             resourceData,
 			BestNodesRefreshInterval: 90 * time.Second,
 		})
-		if err != nil && resumeSID != "" {
-			// The saved session is stale: fall back to authenticating with the
-			// saved cookies, which still avoids a fresh QR code when possible.
-			zjuLog.Printf("[%s] 复用会话失败，改用已保存的凭据重新认证：%v", point.Name, err)
-			client.Close()
-			client = atrustclient.NewClient(atrustclient.ClientOptions{
-				Session:        atrustclient.SessionOptions{Username: point.Username},
-				UnderlayDialer: under,
-			})
-			data, err = client.Setup(atrustclient.SetupOptions{
-				ServerAddress:            point.Server,
-				ServerPort:               point.Port,
-				LoginMethod:              loginMethod,
-				TOTPSecret:               creds.TOTP,
-				PromptCode:               promptCode,
-				ClientData:               clientData,
-				BestNodesRefreshInterval: 90 * time.Second,
-			})
-		}
-		done <- setupResult{data: data, err: err}
-	}()
-
-	var authData []byte
-	select {
-	case <-ctx.Done():
-		go func() {
-			<-done
-			client.Close()
-		}()
-		return nil, ctx.Err()
-	case res := <-done:
-		if res.err != nil {
-			return nil, loginErrorFor(point, res.err)
-		}
-		authData = res.data
+	}
+	if err != nil {
+		return nil, loginErrorFor(point, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	// Always keep the resource data: the global TUN helper resumes the
 	// session from it, without logging in again.
@@ -212,7 +195,8 @@ func connectZJU(ctx context.Context, opts ZJUOptions, point model.AccessPoint, c
 		domainResources, dnsResource, useRemoteDNS,
 	)
 	localDNS := service.NewDnsServer(resolver, []string{remoteDNS, secondary})
-	resolver.EnableSplitDNS(point.InternalDomains)
+	resolver.ConfigureInternalDomains(point.InternalDomains)
+	vpnStack.AllowTCPFallback = true
 	vpnStack.SetupResolve(localDNS)
 	vpnStack.SetupIPPool(resolver.IPPool)
 

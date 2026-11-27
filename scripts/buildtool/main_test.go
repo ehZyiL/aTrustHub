@@ -35,10 +35,12 @@ func TestBuildContextIgnoresAmbientWorkspaceAndTarget(t *testing.T) {
 }
 
 func TestWrongKernelAndUTLSAreRejected(t *testing.T) {
-	root, worker := t.TempDir(), t.TempDir()
+	root := t.TempDir()
+	worker := filepath.Join(root, "third_party", "zju-connect")
 	kernel := module{Path: "github.com/mythologyli/zju-connect", Replace: &module{Dir: filepath.Join(root, "third_party/zju-connect")}}
 	upstream := module{Path: "github.com/refraction-networking/utls", Version: "v1.8.2"}
 	patched := module{Path: upstream.Path, Replace: &module{Dir: filepath.Join(worker, "third_party/utls")}}
+	main := module{Path: kernel.Path, Dir: worker}
 	encode := func(ms ...module) []byte {
 		var data []byte
 		for _, m := range ms {
@@ -56,11 +58,12 @@ func TestWrongKernelAndUTLSAreRejected(t *testing.T) {
 		hub, work []byte
 		valid     bool
 	}{
-		{"explicit baseline", encode(kernel, upstream), encode(patched), true},
-		{"root workspace leaks patched TLS into Hub", encode(kernel, patched), encode(patched), false},
-		{"Hub workspace strips worker TLS patch", encode(kernel, upstream), encode(upstream), false},
-		{"Hub links a second external kernel", encode(module{Path: kernel.Path, Replace: &module{Dir: worker}}, upstream), encode(patched), false},
-		{"incomplete module list", encode(kernel), encode(patched), false},
+		{"unified kernel and TLS", encode(kernel, patched), encode(main, patched), true},
+		{"Hub uses upstream TLS", encode(kernel, upstream), encode(main, patched), false},
+		{"Worker loses TLS patch", encode(kernel, patched), encode(main, upstream), false},
+		{"Hub links external kernel", encode(module{Path: kernel.Path, Replace: &module{Dir: t.TempDir()}}, patched), encode(main, patched), false},
+		{"Worker links external kernel", encode(kernel, patched), encode(module{Path: kernel.Path, Dir: t.TempDir()}, patched), false},
+		{"incomplete module list", encode(kernel), encode(main, patched), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateModules(tc.hub, tc.work, root, worker)
@@ -99,5 +102,49 @@ func TestSourceIncludesUntrackedCodeButExcludesExplicitLocalWorkspace(t *testing
 	}
 	if len(worker.Dirty) != 3 {
 		t.Fatalf("Worker ignored an input: %+v", worker)
+	}
+}
+
+func TestKernelGateRejectsMissingOrMismatchedSubmodule(t *testing.T) {
+	root := t.TempDir()
+	kernel := filepath.Join(root, "third_party", "zju-connect")
+	lock := inputs{KernelCommit: strings.Repeat("a", 40), KernelRepository: "example/kernel"}
+	if err := validateKernelCheckout(root, kernel, lock); err == nil || !strings.Contains(err.Error(), "not initialized") {
+		t.Fatalf("missing submodule: %v", err)
+	}
+	if err := os.MkdirAll(kernel, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(kernel, ".git"), []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "--quiet"},
+		{"update-index", "--add", "--cacheinfo", "160000," + lock.KernelCommit + ",third_party/zju-connect"},
+		{"config", "-f", ".gitmodules", "submodule.third_party/zju-connect.url", "https://github.com/" + lock.KernelRepository + ".git"},
+	} {
+		if _, err := output(root, nil, "git", args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := validateKernelCheckout(root, kernel, lock); err != nil {
+		t.Fatal(err)
+	}
+	wrong := lock
+	wrong.KernelCommit = strings.Repeat("b", 40)
+	if err := validateKernelCheckout(root, kernel, wrong); err == nil {
+		t.Fatal("accepted mismatched gitlink")
+	}
+	wrong = lock
+	wrong.KernelRepository = "example/other"
+	if err := validateKernelCheckout(root, kernel, wrong); err == nil {
+		t.Fatal("accepted mismatched repository")
+	}
+}
+
+func TestExternalWorkerOverrideRejectedBeforeBuild(t *testing.T) {
+	err := run(options{root: t.TempDir(), worker: t.TempDir(), action: "check", targetOS: "windows", arch: "amd64", development: true})
+	if err == nil || !strings.Contains(err.Error(), "external -worker") {
+		t.Fatalf("override error: %v", err)
 	}
 }

@@ -1,0 +1,3 @@
+[submodule "third_party/zju-connect"]
+	path = third_party/zju-connect
+	url = https://github.com/ehZyiL/zju-connect.git

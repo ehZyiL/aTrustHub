@@ -55,4 +55,6 @@ tool github.com/egoist/mygo/cmd/mygo
 
 replace github.com/mythologyli/zju-connect => ./third_party/zju-connect
 
+replace github.com/refraction-networking/utls => ./third_party/zju-connect/third_party/utls
+
 replace inet.af/netaddr => github.com/inetaf/netaddr v0.0.0-20230525184311-b8eac61e914a

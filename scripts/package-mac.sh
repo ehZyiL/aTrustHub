@@ -5,7 +5,7 @@ export GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
 export GOWORK=off GOFLAGS=-mod=readonly GOTOOLCHAIN=local
 
 app_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-worker_root=${ZJU_CONNECT_ROOT:-$(cd -- "$app_root/../zju-connect" && pwd)}
+worker_root=${ZJU_CONNECT_ROOT:-"$app_root/third_party/zju-connect"}
 
 
 worker_commit=$(git -C "$worker_root" rev-parse --short HEAD 2>/dev/null || echo unknown)

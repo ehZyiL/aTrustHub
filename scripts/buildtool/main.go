@@ -1,6 +1,5 @@
 // Command buildtool is the common binary builder for local development and packaging.
-// It deliberately keeps Hub's upstream uTLS and Worker's patched uTLS separate
-// until the two kernel sources have been reconciled (plan P4).
+// Hub, Worker and patched uTLS all come from one pinned kernel submodule.
 package main
 
 import (
@@ -21,10 +20,9 @@ import (
 )
 
 type inputs struct {
-	Go                 string `json:"go"`
-	WorkerRepository   string `json:"worker_repository"`
-	WorkerCommit       string `json:"worker_commit"`
-	EmbeddedKernelTree string `json:"embedded_kernel_tree"`
+	Go               string `json:"go"`
+	KernelRepository string `json:"kernel_repository"`
+	KernelCommit     string `json:"kernel_commit"`
 }
 
 type options struct {
@@ -61,13 +59,13 @@ type module struct {
 func main() {
 	var o options
 	flag.StringVar(&o.root, "root", ".", "Hub source checkout")
-	flag.StringVar(&o.worker, "worker", "", "Worker checkout (default: ../zju-connect)")
+	flag.StringVar(&o.worker, "worker", "", "compatibility flag; must name third_party/zju-connect inside this checkout")
 	flag.StringVar(&o.out, "out", "build/debug", "output directory, relative to Hub root")
 	flag.StringVar(&o.inputPath, "inputs", "packaging/build-inputs.json", "locked build inputs, relative to Hub root")
 	flag.StringVar(&o.targetOS, "os", runtime.GOOS, "target OS")
 	flag.StringVar(&o.arch, "arch", runtime.GOARCH, "target architecture")
 	flag.StringVar(&o.action, "action", "build", "build or check (validate inputs and record module lists)")
-	flag.BoolVar(&o.development, "development", false, "allow and record dirty Hub sources; Worker must still match the lock")
+	flag.BoolVar(&o.development, "development", false, "allow and record dirty Hub sources; kernel submodule must still match the lock")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "build: unexpected positional arguments")
@@ -95,11 +93,14 @@ func run(o options) error {
 		return err
 	}
 	if o.worker == "" {
-		o.worker = filepath.Join(o.root, "..", "zju-connect")
+		o.worker = filepath.Join(o.root, "third_party", "zju-connect")
 	}
 	o.worker, err = filepath.Abs(o.worker)
 	if err != nil {
 		return err
+	}
+	if !samePath(o.worker, filepath.Join(o.root, "third_party", "zju-connect")) {
+		return errors.New("Hub and Worker must use the same third_party/zju-connect submodule; external -worker overrides are no longer supported")
 	}
 	o.out = fromRoot(o.root, o.out)
 	o.inputPath = fromRoot(o.root, o.inputPath)
@@ -111,8 +112,8 @@ func run(o options) error {
 	if err := json.Unmarshal(data, &lock); err != nil {
 		return err
 	}
-	if lock.Go == "" || !objectID(lock.WorkerCommit) || !objectID(lock.EmbeddedKernelTree) || lock.WorkerRepository == "" {
-		return errors.New("build inputs must pin Go, Worker repository/commit and embedded kernel tree")
+	if lock.Go == "" || !objectID(lock.KernelCommit) || lock.KernelRepository == "" {
+		return errors.New("build inputs must pin Go and kernel repository/commit")
 	}
 	goTool := os.Getenv("GO")
 	if goTool == "" {
@@ -129,6 +130,9 @@ func run(o options) error {
 	if err != nil {
 		return err
 	}
+	if err := validateKernelCheckout(o.root, o.worker, lock); err != nil {
+		return err
+	}
 	worker, err := inspectSource(o.worker, false)
 	if err != nil {
 		return err
@@ -136,15 +140,8 @@ func run(o options) error {
 	if !o.development && len(hub.Dirty) != 0 {
 		return fmt.Errorf("Hub has uncommitted inputs; commit them or use -development: %v", hub.Dirty)
 	}
-	if worker.Commit != lock.WorkerCommit || len(worker.Dirty) != 0 {
-		return fmt.Errorf("Worker must be clean at %s; found %s, dirty=%v", lock.WorkerCommit, worker.Commit, worker.Dirty)
-	}
-	embedded, err := output(o.root, nil, "git", "rev-parse", "HEAD:third_party/zju-connect")
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(string(embedded)) != lock.EmbeddedKernelTree {
-		return errors.New("embedded kernel tree differs from packaging/build-inputs.json")
+	if worker.Commit != lock.KernelCommit || len(worker.Dirty) != 0 {
+		return fmt.Errorf("kernel must be clean at %s; found %s, dirty=%v", lock.KernelCommit, worker.Commit, worker.Dirty)
 	}
 	if err := execute(o.root, hostEnv(), goTool, "run", "./internal/workeripc/cmd/protogen", "-check", "-src", filepath.Join(o.worker, "internal/desktop/protocol.go"), "-out", "./internal/workeripc/protocol.go"); err != nil {
 		return err
@@ -169,7 +166,7 @@ func run(o options) error {
 		return err
 	}
 	m := manifest{
-		Schema: 1, Inputs: lock, InputSHA256: digest(data), Hub: hub, Worker: worker,
+		Schema: 2, Inputs: lock, InputSHA256: digest(data), Hub: hub, Worker: worker,
 		Go: lock.Go, Target: o.targetOS + "/" + o.arch, GOWORK: "off", Development: o.development,
 		BuildFlags: []string{"-mod=readonly", "-trimpath", "-buildvcs=false"},
 		SHA256:     map[string]string{},
@@ -316,14 +313,38 @@ func validateModules(hubData, workerData []byte, root, worker string) error {
 	}
 	const utls = "github.com/refraction-networking/utls"
 	const kernel = "github.com/mythologyli/zju-connect"
-	if m, ok := hub[utls]; !ok || m.Version != "v1.8.2" || m.Replace != nil {
-		return errors.New("Hub must use upstream uTLS v1.8.2 for the current baseline")
+	if m, ok := hub[utls]; !ok || m.Replace == nil || !samePath(m.Replace.Dir, filepath.Join(worker, "third_party/utls")) {
+		return errors.New("Hub must use the kernel submodule's patched uTLS")
 	}
 	if m, ok := hub[kernel]; !ok || m.Replace == nil || !samePath(m.Replace.Dir, filepath.Join(root, "third_party/zju-connect")) {
-		return errors.New("Hub must use its embedded kernel")
+		return errors.New("Hub must use its kernel submodule")
 	}
 	if m, ok := work[utls]; !ok || m.Replace == nil || !samePath(m.Replace.Dir, filepath.Join(worker, "third_party/utls")) {
 		return errors.New("Worker must use its patched uTLS")
+	}
+	if m, ok := work[kernel]; !ok || m.Replace != nil || !samePath(m.Dir, worker) {
+		return errors.New("Worker main module must be the kernel submodule")
+	}
+	return nil
+}
+
+func validateKernelCheckout(root, kernel string, lock inputs) error {
+	if _, err := os.Stat(filepath.Join(kernel, ".git")); err != nil {
+		return errors.New("kernel submodule is not initialized; run git submodule update --init --recursive")
+	}
+	entry, err := output(root, nil, "git", "ls-files", "--stage", "--", "third_party/zju-connect")
+	if err != nil {
+		return err
+	}
+	if string(entry) != "160000 "+lock.KernelCommit+" 0\tthird_party/zju-connect\n" {
+		return errors.New("kernel gitlink differs from packaging/build-inputs.json")
+	}
+	repository, err := output(root, nil, "git", "config", "-f", ".gitmodules", "--get", "submodule.third_party/zju-connect.url")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(repository)) != "https://github.com/"+lock.KernelRepository+".git" {
+		return errors.New("kernel submodule repository differs from packaging/build-inputs.json")
 	}
 	return nil
 }

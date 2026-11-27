@@ -44,15 +44,15 @@ fmt:
 
 ## helpers: 本机用：只为 darwin-arm64 编译 TUN 辅助程序（最快）
 helpers:
-	cd third_party/zju-connect && GOOS=darwin GOARCH=arm64 $(GO) build -o ../../resources/darwin-arm64/zju-connect-multitun ./cmd/multitun
+	cd third_party/zju-connect && GOWORK=off GOOS=darwin GOARCH=arm64 $(GO) build -o ../../resources/darwin-arm64/zju-connect-multitun ./cmd/multitun
 
 ## helpers-all: 编译全部平台的辅助程序（发版用，CI 也会做）
 helpers-all:
-	cd third_party/zju-connect && GOOS=darwin GOARCH=arm64 $(GO) build -o ../../resources/darwin-arm64/zju-connect-multitun ./cmd/multitun
-	cd third_party/zju-connect && GOOS=darwin GOARCH=amd64 $(GO) build -o ../../resources/darwin-amd64/zju-connect-multitun ./cmd/multitun
-	cd third_party/zju-connect && GOOS=windows GOARCH=amd64 $(GO) build -ldflags "-H=windowsgui" -o ../../resources/windows-amd64/zju-connect-multitun.exe ./cmd/multitun
-	cd third_party/zju-connect && GOOS=windows GOARCH=386 $(GO) build -ldflags "-H=windowsgui" -o ../../resources/windows-386/zju-connect-multitun.exe ./cmd/multitun
-	cd third_party/zju-connect && GOOS=windows GOARCH=arm64 $(GO) build -ldflags "-H=windowsgui" -o ../../resources/windows-arm64/zju-connect-multitun.exe ./cmd/multitun
+	cd third_party/zju-connect && GOWORK=off GOOS=darwin GOARCH=arm64 $(GO) build -o ../../resources/darwin-arm64/zju-connect-multitun ./cmd/multitun
+	cd third_party/zju-connect && GOWORK=off GOOS=darwin GOARCH=amd64 $(GO) build -o ../../resources/darwin-amd64/zju-connect-multitun ./cmd/multitun
+	cd third_party/zju-connect && GOWORK=off GOOS=windows GOARCH=amd64 $(GO) build -ldflags "-H=windowsgui" -o ../../resources/windows-amd64/zju-connect-multitun.exe ./cmd/multitun
+	cd third_party/zju-connect && GOWORK=off GOOS=windows GOARCH=386 $(GO) build -ldflags "-H=windowsgui" -o ../../resources/windows-386/zju-connect-multitun.exe ./cmd/multitun
+	cd third_party/zju-connect && GOWORK=off GOOS=windows GOARCH=arm64 $(GO) build -ldflags "-H=windowsgui" -o ../../resources/windows-arm64/zju-connect-multitun.exe ./cmd/multitun
 
 ## build: 使用固定输入和统一入口构建本机开发二进制；发行包用 scripts/package-*.sh
 build:

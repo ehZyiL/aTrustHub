@@ -152,3 +152,49 @@ manifest 中五个 EXE 和两份模块清单的 SHA256 全部逐项匹配，IPC 
 原生点击观感、真实 VPN、跨机共享、提权及持续业务流量均未验收。
 测试不操作用户正在运行的程序，不改系统代理或清理环境。
 本轮交付为独立 worktree、可复现诊断、测试报告及配套构建；共享启动响应问题仍待后续修复。
+
+## 合并到原工作区后的复核（2026-11-27）
+
+已将 `test/share-lifecycle-20261127` 合并到原工作区分支 `refactor/component-boundaries`，
+合并提交为 `a6d5683`，共同基线为 `a2bc55f`。合并只新增本报告、
+`scripts/test-share-ui.ps1` 和 `scripts/diagnostics/share_ui_test.go.txt`，没有修改生产实现。
+原分支的配对面板刷新修复 `207f5b6` 及其文档提交 `c1e2cb7` 均保留。
+独立 worktree 和测试分支保持原样；未跟踪的 `go.work`、`go.work.sum` 未纳入提交。
+上文“原工作区当前另有未提交修改”描述的是独立 worktree 验证时的状态。
+
+两项问题属于同一共享功能，但触发条件与根因不同：
+
+| 问题 | 根因和代码位置 | 当前状态 |
+|---|---|---|
+| 配对管理控件随每秒读取反复禁用，生成/取消后可能停止刷新 | `internal/desktop/pairing_view.go` 中后台读取与操作共用忙状态，以及重绘续订依赖被操作重置的时间戳 | 已由 `207f5b6` 修复 |
+| 共享启动期间页面状态读取与绘制等待组件启动 | `internal/relay/controller.go` 的 `Enable` 持有 `c.mu`，经 `reconcileLocked` 调用 `serverFactory`；`Controller.View` 也需要该锁 | 尚未修复；合并后仍能复现 |
+
+本次直接使用已合并的脚本，不修改探针或生产实现：
+
+```powershell
+./scripts/test-share-ui.ps1 -Count 3
+
+$env:GOWORK = 'off'
+go test -mod=readonly ./internal/desktop ./internal/relay -count=1 -timeout=240s
+```
+
+| 检查 | 本次结果 |
+|---|---|
+| 启动状态读取探针 | 3/3 在组件启动被挂起时超过 100 ms；堆栈停在 `Controller.View` 的 `sync.Mutex.Lock` |
+| 启动页面绘制探针 | 3/3 超过 500 ms；路径为 `app.view` → `syncLanShareFirewallIfNeeded` → `lanShareViewState` → `Controller.View`，等待同一状态锁 |
+| 关闭对照 | 3/3 通过；关闭按钮及状态读取及时返回，页面绘制约 207–249 ms |
+| 上述诊断脚本退出码 | 1，表示报告中的未修复问题仍存在，并非此次合并引入的新回归 |
+| Windows desktop 包默认回归 | 通过，22.279s，包含配对面板刷新回归 |
+| Windows relay 包默认回归 | 通过，10.671s |
+
+本次日志位于原工作区 `build/share-lifecycle-checks/share-ui-probe.log` 和
+`build/share-lifecycle-checks/merged-regression.log`。原报告的 1,146 项通过、9 项跳过和
+构建结果仍仅对应其记录的独立 worktree 快照，不作为合并后重跑全量或重新构建的声明。
+
+本次另核对 `internal/desktop/pairing_view.go`、`lanshare_firewall.go`、`view.go`、
+`internal/relay/controller.go`，并参考 `internal/desktop/pairing_manage_test.go`、
+`lan_discovery_async_test.go` 和 `optional_lifecycle_test.go` 的回归模式。
+
+因此，两项工作可以合并并共同保留；合并诊断不会消除启动锁等待。
+后续修复需将组件启动等待移出状态锁的持有范围，并覆盖启动失败、并发关闭/退出和
+迟到启动结果的资源回收。本次没有修改运行中的程序，也没有开展原生窗口点击或跨机验收。

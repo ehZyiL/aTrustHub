@@ -177,3 +177,101 @@ wsl --cd /mnt/d/Programming/Projects/Go/easy-connect/aTrustHub --exec env GOWORK
 ```
 
 产物：`build/pairing-ui-refresh-20261127/connect-hub.exe` 及相邻 `core/` 中四个组件。manifest 记录运行代码提交 `207f5b6`，Hub 和固定内核输入均无未提交源文件；后续仅补本文档。验证日志与覆盖率保存在同目录 `validation/`。本次没有启动成品、替换当前运行程序或操作用户的 VPN/共享/邀请码/凭据；`go.work`、`go.work.sum` 仍未跟踪，未纳入提交。本轮没有重新执行 WSL desktop 全量 race 或 macOS/Linux 运行验收。
+
+## 共享生命周期与取消后续修复（2026-11-27）
+
+代码及测试提交：`594f8477390b00f63e4830c059b93adab3e544b3`。
+修复再次 review 的三个确认项：组件启动占用状态锁；取消请求仍排队并发送；
+发现结果与旧面板结果误结束暂停/恢复的忙状态或覆盖新面板。
+
+### 本次相关文件
+
+修改生产文件：
+
+- `internal/relay/controller.go`：保留生命周期串行，锁外准备运行实例；以克隆设置读取，提交时只更新运行相关字段；取消、失败与端口持久化失败均锁外回收资源。
+- `internal/relay/pairing_controller.go`：管理、暂停、恢复可取消等待操作锁，取锁后检查取消，不再执行已取消的排队请求。
+- `internal/relay/pairing_state.go`：配对状态锁可取消；修改邀请前检查上下文，避免取消后仍创建或取消邀请。
+- `internal/relay/process/process.go`：启动上下文贯穿版本探测、握手与初始化写入；取消后回收进程和 broker；IPC 写锁支持可取消等待，终止路径不再等待向阻塞管道写 stop。
+- `internal/relay/process/pairing.go`：管理 RPC 注册/发送前检查上下文，使用可取消写锁，退出时移除请求邮箱。
+- `internal/relay/server.go`：可选 `StartupContext` 仅控制初始化，设备读取/监听支持取消；已建立服务继续使用独立生命周期。
+- `internal/desktop/lanshare.go`：每次打开面板分配新结果邮箱，所有后台任务预先捕获邮箱；按操作归属清除忙状态，单独持有暂停/恢复取消函数。
+- `internal/desktop/pairing_view.go`：在 UI 线程创建暂停/恢复上下文和结果发送函数，操作结束重启状态读取。
+- `internal/desktop/lan_discovery_view.go`：发现开关、名称及保存重试也捕获当前面板邮箱。
+- `internal/desktop/lanshare_view.go`：关闭面板后取消并解除暂停/恢复请求。
+
+新增实现与回归：
+
+- `internal/relay/ctxlock/mutex.go`、`mutex_test.go`：零值可用的可取消互斥锁；等待取消不留下后台取锁任务，并验证互斥与复用。
+- `internal/relay/startup_responsiveness_test.go`：首次开启/恢复/暂停后恢复/自动重试 × 慢源/慢工厂；启动时保存发现偏好；失败清理、关闭/退出与迟到资源回收。
+- `internal/relay/pairing_cancellation_test.go`：真实邀请上的排队取消、配对状态锁等待取消，以及暂停/恢复排队取消后设置不变。
+- `internal/relay/process/pairing_cancellation_test.go`：已取消命令不发送；等待写锁时取消及时返回，不遗留 RPC 或迟到写入。
+- `internal/relay/process/startup_cancellation_test.go`：真实 sidecar 的握手/设备读取取消；成功启动后调用上下文取消不结束服务。
+- `internal/desktop/share_action_test.go`：真实 UI 点击暂停/恢复，穿插发现结果、关闭重开及迟到成功/错误。
+- `internal/desktop/pairing_manage_test.go`：复用真实页面与可控时钟接缝，补充恢复接口及暂停请求清理。
+- `docs/plans/lan-invitation-pairing-2026-11-27.md`、本文及 `share-lifecycle-worktree-validation-2026-11-27.md`：修复状态、验收项、来源与验证记录。
+
+核对且未修改的参考/复现文件：`internal/relay/{controller_test,optional_lifecycle_test,pairing_lifecycle_test}.go`、
+`internal/relay/contract/{controller,interfaces}.go`、`internal/relay/adapter/source.go`、
+`internal/relay/process/{process_test,pairing_test,discovery,command,command_windows,command_windows_test}.go`、
+`internal/desktop/{lan_discovery,lan_discovery_async_test,lan_discovery_test,lanshare_view_test,optional_lifecycle_test,resource_baseline_test,relay_assembly,view,lanshare_firewall}.go`、
+`go.mod`、`scripts/buildtool/main.go`、`scripts/test-share-ui.ps1` 和 `scripts/diagnostics/share_ui_test.go.txt`。
+沿用已有操作锁外关闭资源、可取消源获取、独立结果邮箱及真实 UI 可控时钟四种模式。
+独立 `aTrustHub-wt-share-lifecycle` 未修改；未跟踪的 `go.work`、`go.work.sum` 保留未提交。
+
+### 反馈回路与实现边界
+
+原始四项复现先纳入常规回归，修复前全部失败：取消管理请求仍等待操作锁，
+解锁后取消真实邀请；预先取消的管理 RPC 仍写入 81 字节；发现回包清除暂停忙状态并允许第二次暂停；
+旧暂停错误覆盖重开后的面板。新增启动测试在修复前的八个启动路径和两个取消场景均复现状态读取等待。
+修复后相同断言及原完整页面启动探针全部转绿。
+
+生命周期锁覆盖准备、提交及失败清理整个过程；运行实例准备及其失败清理阶段不持有状态锁，
+提交仍在状态锁内完成，启动期间保存的发现偏好不会被旧快照覆盖。生产工厂失败返回真正的 nil 接口，避免失败回收访问空指针。
+启动上下文不会成为已建立服务的根上下文。取消只保证取消前尚在排队/尚未发送的工作不再派发，
+不会撤销已经发送且发生后端副作用的操作；面板结果隔离独立保证旧回包不污染新页面。
+
+初次全量命令还扫描到此前置于忽略目录的三份不同包 `.go` overlay 源，导致测试目录 setup 失败。
+已将这些自建诊断源改为 `.go.txt` 并同步原复现脚本；四项原始复现仍可运行，
+全量随后重跑通过。这些仅位于 `build/share-review-20261127/`，未纳入源码提交。
+原共享 UI 诊断脚本及探针没有修改，继续作为独立反馈回路使用。
+
+### 验证结果
+
+环境：Windows Go 1.27.4；WSL Debian Go 1.27.4 + gcc。Go 命令均显式 `GOWORK=off -mod=readonly`。
+
+| 验证 | 结果 |
+| --- | --- |
+| 原共享 UI 探针，三轮 | 9/9 通过；状态读取未触发 100 ms 超时；启动页面 46–65 ms，关闭对照 193–217 ms |
+| 再次 review 的原四项 overlay 复现，三轮 | 12/12 通过；结果注入仅适配到捕获邮箱的新接口 |
+| 新增回归 | 14 个测试函数；定向回归分批通过，并包含三轮重复验证 |
+| Windows `go test ./... -count=1 -timeout=240s` | 1,201 项通过、9 项跳过、0 项失败；统计包含测试与子测试事件 |
+| 关键包耗时 | desktop 27.656s；relay 12.435s；process 22.866s；vpn 9.380s；e2e 7.506s |
+| Windows `go vet ./...` | exit 0，无输出 |
+| WSL 定向 race | relay 1.982s、process 14.104s、ctxlock 1.020s、desktop 2.312s；无 race 报告 |
+| 十轮资源启停与并发启停 | 包含于 Windows 全量及 WSL 定向 race，通过；没有新增常驻锁等待任务 |
+| Windows/amd64 全组件构建 | 通过，协议生成检查和固定内核校验通过 |
+| manifest 哈希 | 5 个 EXE、2 份模块清单，7/7 SHA256 匹配 |
+| `git diff --check` | 通过 |
+
+```powershell
+$env:GOWORK='off'
+./scripts/test-share-ui.ps1 -Count 3
+./build/share-review-20261127/review.ps1 -Count 3
+go test -mod=readonly ./internal/desktop ./internal/relay ./internal/relay/process ./internal/relay/ctxlock -count=1 -timeout=180s
+go test -mod=readonly ./... -count=1 -timeout=240s -json
+go vet -mod=readonly ./...
+go run -mod=readonly ./scripts/buildtool -development -out build/share-lifecycle-fix-20261127
+```
+
+```powershell
+$taskGoBin='/home/ehzyil/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.4.linux-amd64/bin'
+wsl -d Debian --cd /mnt/d/Programming/Projects/Go/easy-connect/aTrustHub --exec env GOWORK=off GOTOOLCHAIN=local CGO_ENABLED=1 "PATH=${taskGoBin}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "$taskGoBin/go" test -race -mod=readonly ./internal/relay ./internal/relay/process ./internal/relay/ctxlock ./internal/desktop -run '^TestShareRegression|^TestControllerStartup|^TestControllerCancelledStartup|^TestPairControlCancelledWhile|^TestCancelled|^TestRelayStartupContext|^TestMutex|^TestResumeReply|^TestOldPanel|^TestPairManage|^TestPairPauseRestartResume|^TestDisableCancelsAcquire|^TestConcurrentControllerOperations|^TestOptionalResourcesStopAndRestartTenTimes$' -count=1 -timeout=180s
+```
+
+新成品位于 `build/share-lifecycle-fix-20261127/connect-hub.exe`，必须保留相邻 `core/` 中四个组件。
+manifest 的 Hub 来源为 `594f847`，内核仍为 `5929e30fd988f7e3efd3fbbbfffc7a7087e26f44`，两者无 dirty 条目；
+随后仅补充三份文档。日志副本集中在成品目录的 `validation/`，包含全量 JSON、vet 退出记录、
+WSL race、原共享探针、原 review 反馈回路及构建日志。临时图标 `.syso` 已移除。
+
+本次没有启动成品、替换运行程序或操作真实 VPN、防火墙、凭据及邀请码。
+原生窗口点击、跨机体验和真实持续业务流量仍未验收；本轮没有全包覆盖率测量或 WSL desktop 全量 race 声明。

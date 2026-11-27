@@ -56,7 +56,9 @@ Hub 和 Worker 独立编译，但内核及 patched uTLS 来自同一子模块。
 | `internal/splitdns` | 本地回环 DNS 入口（UDP/TCP）+ 缓存 |
 | `internal/dnsmapping` | 会话级 DNS 映射池（合成地址）与别名生命周期 |
 | `internal/netpolicy` | 地址区间基础操作（合并、容量、冲突判定） |
-| `internal/localapps` | 本机软件：启动、代理浏览器、TCP 转发、系统接管编排 |
+| `internal/localapps` | 本机软件：启动、代理浏览器、TCP 转发与接管 runtime |
+| `internal/localapps/takeover` | 资源 TUN 生命周期控制、状态与系统代理恢复；不依赖桌面 UI |
+| `internal/cleanup/client` | 清理进程客户端及任务控制器；不依赖桌面 UI |
 | `internal/capture` | Linux 提权助手（systemd 服务）+ GUI 侧客户端 |
 | `internal/wincapture` | Windows 提权助手（引擎/协议/NRPT/路由/恢复） |
 | `internal/resolved` | Linux systemd-resolved 集成（route-only domain 所有权） |
@@ -64,9 +66,11 @@ Hub 和 Worker 独立编译，但内核及 patched uTLS 来自同一子模块。
 | `internal/cdp` | Chromium DevTools Protocol（浏览器登录回取回调地址） |
 | `cmd/app-helper` | 提权助手入口（Windows/Linux 共用一个 main，平台文件分离） |
 | `cmd/easyconnect-check` | 无 GUI 的 worker 连通性自检工具 |
+| `cmd/connect-hub` | MyGo 桌面应用薄入口，调用 `internal/desktop.Run` |
+| `internal/desktop` | 桌面窗口、页面、UI 状态及既有功能装配 |
 
-根 `main` 包是 UI 与胶水层，**不在**上表内：非测试源码 94 个文件 / ≈18.4k 行，
-其中 36 个带 `_{windows,linux,darwin}.go` 平台后缀，`view.go` 单文件近 100 KB。
+桌面 UI 由 `internal/desktop` 按一个包维护，页面与仍使用 `app` 私有状态的集成测试在同包；
+进程入口保持在 `cmd/connect-hub`。独立控制器只接收回调和领域接口，不导入 MyGo。
 
 ## 4. 运行时约定
 

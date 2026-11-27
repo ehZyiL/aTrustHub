@@ -53,10 +53,10 @@
 
 ## 相关文档索引
 
-- 开发者完整手册：[DEVELOPMENT.md](DEVELOPMENT.md)
-- Windows 快速入门手册：[WINDOWS-QUICKSTART.md](WINDOWS-QUICKSTART.md)
-- Linux 快速入门手册：[LINUX-QUICKSTART.md](LINUX-QUICKSTART.md)
-- Windows 底层技术实现白皮书：[WINDOWS-IMPLEMENTATION.md](WINDOWS-IMPLEMENTATION.md)
+- 开发者完整手册：[DEVELOPMENT.md](docs/DEVELOPMENT.md)
+- Windows 快速入门手册：[WINDOWS-QUICKSTART.md](docs/WINDOWS-QUICKSTART.md)
+- Linux 快速入门手册：[LINUX-QUICKSTART.md](docs/LINUX-QUICKSTART.md)
+- Windows 底层技术实现白皮书：[WINDOWS-IMPLEMENTATION.md](docs/WINDOWS-IMPLEMENTATION.md)
 - 局域网分享（协议、生命周期、严格出口边界）：[docs/design/lan-relay-sharing-implementation-2026-11-24.md](docs/design/lan-relay-sharing-implementation-2026-11-24.md)
 - 局域网分享自动发现（DNS-SD、缓存上限、复审与实测记录）：[docs/design/lan-relay-discovery-2026-11-24.md](docs/design/lan-relay-discovery-2026-11-24.md)
 - 旧文档勘误（哪些旧说法已与代码不符）：[docs/review/errata.md](docs/review/errata.md)
@@ -66,7 +66,11 @@
 
 ## 本地编译与运行简述
 
-详细编译环境配置与调试流程，请查阅 **[DEVELOPMENT.md](DEVELOPMENT.md)**。
+桌面启动入口在 `cmd/connect-hub`，窗口、页面与装配在 `internal/desktop`；
+清理任务和资源接管控制器分别在 `internal/cleanup/client`、`internal/localapps/takeover`。
+根目录只保留模块与构建配置，所有下列命令均从根目录执行。
+
+详细编译环境配置与调试流程，请查阅 **[DEVELOPMENT.md](docs/DEVELOPMENT.md)**。
 
 安装 `packaging/build-inputs.json` 指定的 Go 版本后，在产品仓库执行：
 

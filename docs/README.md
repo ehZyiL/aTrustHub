@@ -18,7 +18,7 @@
 | 局域网分享协议 | **v1** | `internal/relay/protocol.go` `ProtocolVersion = 1` |
 | 局域网发现草案 | **v1** | `internal/relay/discovery/types.go` `DraftVersion = 1` |
 | Hub 模块 | `GO 1.27.3` | `aTrustHub/go.mod` |
-| 应用构建标识 | `0.2.0` | `app.go` `version` / `appBuild` |
+| 应用构建标识 | `0.2.0` | `internal/desktop/app.go` `version` / `appBuild` |
 
 任何给出不同协议号的文档（v3/v4/v5/v8/v9 等）都已过期，不要据此排障。
 
@@ -32,6 +32,9 @@
 ```text
 docs/
 ├── README.md            本文件：索引、核实基线、平台能力矩阵
+├── DEVELOPMENT.md       开发、测试与打包手册
+├── WINDOWS-QUICKSTART.md / LINUX-QUICKSTART.md  平台入门（同时装入发行包）
+├── WINDOWS-IMPLEMENTATION.md  Windows 技术实现说明
 ├── design/              设计（已核实）—— 回答“具体怎么实现的”
 │   ├── architecture.md  进程模型、构建上下文、模块边界、运行时约定
 │   ├── networking.md    四种接管方式、路由与 DNS 归属、范围边界
@@ -43,7 +46,8 @@ docs/
 │   └── errata.md        旧文档勘误 —— 回答“旧说法哪里不对”
 ├── plans/               待实施方案 —— 回答“接下来怎么改、如何验收”
 │   ├── component-boundaries-2026-11-26.md  项目结构与可选组件重构方案
-│   └── p5-relay-process-2026-11-27.md       Relay 子进程边界与验证记录
+│   ├── p5-relay-process-2026-11-27.md       Relay 子进程边界与验证记录
+│   └── p6-desktop-layout-2026-11-27.md      桌面包与根目录整理方案及验收
 ├── roadmap.md           未完成事项 —— 回答“还差什么”（拆成代码可判定 / 待实机）
 └── assets/              README 引用的 4 张界面截图
 ```
@@ -54,6 +58,9 @@ docs/
 
 | 文档 | 回答什么问题 |
 |---|---|
+| [DEVELOPMENT.md](DEVELOPMENT.md) | 如何开发、测试和打包；所有命令在产品根目录执行 |
+| [WINDOWS-QUICKSTART.md](WINDOWS-QUICKSTART.md) / [LINUX-QUICKSTART.md](LINUX-QUICKSTART.md) | 如何安装与使用 |
+| [WINDOWS-IMPLEMENTATION.md](WINDOWS-IMPLEMENTATION.md) | Windows 平台底层实现 |
 | [design/architecture.md](design/architecture.md) | 进程怎么分、谁提权、内核源码有几个真源、模块边界、平台能力 |
 | [design/networking.md](design/networking.md) | 四种网络接管方式各自怎么实现、路由与 DNS 归属怎么判、范围边界到哪 |
 | [design/recovery.md](design/recovery.md) | 正常退出与硬杀分别会清理什么、事务日志在哪、还剩哪些洞 |

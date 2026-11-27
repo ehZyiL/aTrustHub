@@ -2,7 +2,7 @@
 
 日期：2026-11-26。
 
-状态：P0 构建入口与受控基线、P1 按需生命周期、P2 契约与装配边界、P3 独立清理任务、P4 内核归并和 P5 relay 进程隔离已实现；P6 发行组合仍待完成。详见 [P0 基线记录](p0-baseline-2026-11-26.md)、[P1 验证记录](p1-lifecycle-2026-11-26.md)、[P2 验证记录](p2-contracts-2026-11-26.md)、[P3 验证记录](p3-cleanup-2026-11-26.md)、[P4 归并记录](p4-kernel-2026-11-26.md) 和 [P5 relay 记录](p5-relay-process-2026-11-27.md)。未勾选的任务不代表已经完成或性能已经改善，实机验证限制分别记录。
+状态：P0 构建入口与受控基线、P1 按需生命周期、P2 契约与装配边界、P3 独立清理任务、P4 内核归并和 P5 relay 进程隔离已实现；P6 已调整为桌面包与根目录整理，正在实施；发行组合暂缓。详见 [P0 基线记录](p0-baseline-2026-11-26.md)、[P1 验证记录](p1-lifecycle-2026-11-26.md)、[P2 验证记录](p2-contracts-2026-11-26.md)、[P3 验证记录](p3-cleanup-2026-11-26.md)、[P4 归并记录](p4-kernel-2026-11-26.md) 和 [P5 relay 记录](p5-relay-process-2026-11-27.md)。未勾选的任务不代表已经完成或性能已经改善，实机验证限制分别记录。
 
 ## 1. 基线与工作范围
 
@@ -29,8 +29,8 @@ aTrust 迁移到 Worker、Worker 入口迁出 fork、协议栈重写以及自动
 | Hub 使用内置内核，Worker 使用兄弟仓库 | [go.mod](../../go.mod)、[Windows 打包脚本](../../scripts/package-windows.sh) | 先核对两边补丁，再统一源码来源 |
 | 根工作区与 Hub 工作区配置不同 | 工作区根 `go.work`、Hub 的未跟踪 `go.work` | 构建脚本必须显式选择上下文 |
 | CI 已构建 Worker，但默认引用可移动分支 | [build.yml](../../.github/workflows/build.yml) 的 `WORKER_REF` | 沿用现有流程，增加可追溯的固定输入 |
-| Hub 启动时配置分享，构造控制器会启动循环 | [app.go](../../app.go)、[lanshare.go](../../lanshare.go)、[controller.go](../../internal/relay/controller.go) | 修正未使用时的后台开销 |
-| 发现协调器和发布器也有后台任务 | [lan_discovery.go](../../lan_discovery.go)、[publisher.go](../../internal/relay/discovery/publisher.go) | 分享、发布、浏览分别定义启停条件 |
+| Hub 启动时配置分享，构造控制器会启动循环 | [app.go](../../internal/desktop/app.go)、[lanshare.go](../../internal/desktop/lanshare.go)、[controller.go](../../internal/relay/controller.go) | 修正未使用时的后台开销 |
+| 发现协调器和发布器也有后台任务 | [lan_discovery.go](../../internal/desktop/lan_discovery.go)、[publisher.go](../../internal/relay/discovery/publisher.go) | 分享、发布、浏览分别定义启停条件 |
 | 基础连接器工厂直接创建 relay 连接器 | [easyconnect.go](../../internal/vpn/easyconnect.go)、[relay.go](../../internal/vpn/relay.go) | 需要显式注册和适配器边界 |
 | 分享已有严格会话接口 | [interfaces.go](../../internal/relay/interfaces.go) | 保留会话代次、资源版本和严格出口语义 |
 | 清理分支已有可执行入口，但 GUI 直接扫描并存在进程内执行回退 | 清理分支的 `cmd/app-cleanup/main.go`、`cleanup_windows.go` | 复用已有能力，完成进程边界 |
@@ -86,15 +86,15 @@ Hub 页面 → 轻量 client / contract → 本机 IPC → 对应 service
 
 ```text
 aTrustHub/
-├── app.go                         # 初期保留入口，逐步减少装配之外的职责
 ├── cmd/
+│   ├── connect-hub/               # P6 桌面薄入口
 │   ├── app-helper/                # 现有网络助手
 │   ├── app-cleanup/               # 从清理分支接入
 │   ├── app-relay/                 # 后续新增
 │   ├── appicon/
 │   └── easyconnect-check/
 ├── internal/
-│   ├── desktop/                   # 后期逐步提取 GUI
+│   ├── desktop/                   # P6 窗口、页面、UI 状态及装配
 │   ├── components/                # 进程定位、握手、状态、退出
 │   ├── vpn/                       # 保留会话管理和核心接口
 │   ├── routing/ proxy/ model/ store/ localapps/
@@ -253,12 +253,12 @@ P0 根据噪声和产品目标确定量化预算，在后续变更前写入基�
 
 ## 6. 提交与交付约定
 
-1. 最初的方案交付已完成；当前按用户授权实施 P0–P3，P4–P6 保留为后续阶段。
+1. 按用户授权逐阶段推进；P0–P5 已实现，P6 当前按根目录与桌面包整理方案实施。
 2. 后续每阶段按“契约/实现 → 有意义的验证 → 文档状态”形成可独立回退的提交，不混入无关格式化。
 3. 首轮实现范围为 P0、P1、P2、P3；在构建可复现、功能生命周期可验证之后推进内核归并和 relay 进程化。
 4. P4 开始前另建 fork 工作分支并记录起点；产品分支提交固定 fork 指针，两个仓库分别维护历史。
 5. 每阶段记录：实际变更、验证命令及环境、实测数据、剩余限制、对应提交和回退方式。只有验收完成才勾选本方案的任务。
-6. 所有 P0–P6 阶段完成且通过回归后，再讨论合回 `dev-main`；标准版和扩展版从同一主线构建，不长期用功能分支代表发行版本。
+6. 所有 P0–P6 阶段完成且通过回归后，再讨论合回 `dev-main`；发行组合暂缓，若恢复应从同一主线构建，不长期用功能分支代表发行版本。
 
 ## 7. 当前进度
 
@@ -270,9 +270,11 @@ P0 根据噪声和产品目标确定量化预算，在后续变更前写入基�
 | P1 实现 | 按需生命周期与回归验证完成，限制见 P1 记录 |
 | P2 实现 | 契约、显式注册、页面客户端与依赖门禁完成，见 P2 记录 |
 | P3 实现 | 独立任务、实机清理/部分恢复、页面用户验收和正式包完成，限制见 P3 记录 |
-| P4–P6 实现 | 未开始 |
+| P4 实现 | 固定子模块归并完成，限制见 P4 记录 |
+| P5 实现 | relay 任务按需子进程化与 Windows 资源对照完成，限制见 P5 记录 |
+| P6 实现 | 桌面包迁移、控制器提取完成，文档整理与最终验收进行中；发行组合暂缓 |
 | 内存对照与实际节省量 | 已采集 P0/P1/P3 对照；确定消除 3 个默认常驻循环，清理进程结束归零；P3 空闲 Private Bytes 相对 dev-main 高约 2.61 MiB，不承诺稳定节省比例 |
-| fork 修改、子模块切换 | 未执行 |
+| fork 修改、子模块切换 | P4 完成，固定提交见 build-inputs.json |
 | 清理分支接入 | P3 已选择性移植，没有直接合并旧公共文件 |
 
 本方案建立时未修改业务代码、未运行应用、未进行网络或系统清理操作。

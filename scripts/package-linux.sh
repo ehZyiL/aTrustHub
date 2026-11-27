@@ -52,7 +52,7 @@ for module in github.com/egoist/mygo github.com/mythologyli/sing-tun github.com/
   module_name=${module##*/}
   install -m 0644 "$module_dir/LICENSE" "$bundle/LICENSES/$module_name.txt"
 done
-install -m 0644 "$app_root/LINUX-QUICKSTART.md" "$bundle/README.md"
+install -m 0644 "$app_root/docs/LINUX-QUICKSTART.md" "$bundle/README.md"
 # 性能对照脚本只用于受控 HTTP 对照测试，需要 Python 3 和 curl；
 # 发布包不携带，脚本保留在仓库 scripts/ 目录。
 cat > "$bundle/COMPONENTS.txt" <<EOF

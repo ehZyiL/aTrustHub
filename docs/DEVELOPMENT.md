@@ -1,9 +1,12 @@
 # Connect Hub 开发手册
 
+> 2026-11-27 P6 更新：桌面入口为 `cmd/connect-hub`，页面在 `internal/desktop`；
+> 清理任务与资源接管控制器独立于 UI，运行与打包命令均从产品仓库根目录执行。
+>
 > 2026-11-26 P4 更新：Hub、Worker 和 patched uTLS 统一使用固定子模块。
 > 本地与 CI 共用 `scripts/build.ps1` / `scripts/build.sh`，显式 `GOWORK=off`。
 > 构建输入见 `packaging/build-inputs.json`，归并与验证记录见
-> [P4 内核归并](docs/plans/p4-kernel-2026-11-26.md)。
+> [P4 内核归并](plans/p4-kernel-2026-11-26.md)。
 
 本手册为 **Connect Hub** 桌面客户端及其底层 VPN 核心、特权网络助手的开发者提供全面的技术架构解析、开发环境搭建指南、本地编译调试方法与测试发布规范。
 
@@ -75,6 +78,10 @@ flowchart TB
 ```text
 connect-hub/
 ├── go.mod                         # 产品模块
+├── cmd/connect-hub/                # 薄 GUI 入口，调用 desktop.Run
+├── internal/desktop/               # 窗口、页面和装配；配套测试在同包
+├── internal/cleanup/client/        # 清理任务进程及异步控制器
+├── internal/localapps/takeover/    # 资源 TUN 控制器（不依赖 MyGo）
 ├── third_party/zju-connect/        # 固定 git 子模块：aTrust + EasyConnect + Worker
 │   └── third_party/utls/           # fork 内固定的局部证书解析补丁
 ├── tests/e2e/                     # 属于产品模块，真实 Worker 黑盒测试
@@ -94,8 +101,8 @@ Hub 的 `go.mod` 同时替换内核和 uTLS；Worker 的 `go.mod` 替换其本�
 
 - **载体**：标准输入输出（`stdin` / `stdout`），以单行 JSON 格式交互。
 - **两端代码**：
-  - 客户端主程序：[internal/workeripc/protocol.go](internal/workeripc/protocol.go)
-  - Worker 侧：[third_party/zju-connect/internal/desktop/protocol.go](third_party/zju-connect/internal/desktop/protocol.go)
+  - 客户端主程序：[internal/workeripc/protocol.go](../internal/workeripc/protocol.go)
+  - Worker 侧：[third_party/zju-connect/internal/desktop/protocol.go](../third_party/zju-connect/internal/desktop/protocol.go)
 - **协议一致性硬约束**：共用构建工具强制执行 `protogen -check`，两端协议定义必须完全一致。
 
 #### 交互流程：
@@ -108,11 +115,11 @@ Hub 的 `go.mod` 同时替换内核和 uTLS；Worker 的 `go.mod` 替换其本�
 ### 3.2 特权抓包助手 IPC 协议
 
 - **Windows 平台（协议版本：v7）**：
-  - 代码位置：[aTrustHub/internal/wincapture/protocol.go](file:///d:/Programming/Projects/Go/easy-connect/aTrustHub/internal/wincapture/protocol.go)
+  - 代码位置：[aTrustHub/internal/wincapture/protocol.go](../internal/wincapture/protocol.go)
   - **载体**：命名管道（Named Pipe），带有严格受控的 DACL 安全描述符，杜绝任意远程连接。
   - **安全校验**：助手在接受连接时主动校验连接端进程 PID 与可执行文件签名/路径，阻断仿冒攻击；会话 Token 在内存中协商，不写磁盘。
 - **Linux 平台（协议版本：v11）**：
-  - 代码位置：[aTrustHub/internal/capture/protocol_linux.go](file:///d:/Programming/Projects/Go/easy-connect/aTrustHub/internal/capture/protocol_linux.go)
+  - 代码位置：[aTrustHub/internal/capture/protocol_linux.go](../internal/capture/protocol_linux.go)
   - **载体**：Unix Domain Socket（`/run/connect-hub-capture-<uid>/control.sock`，权限 0600 且 owner 为该 UID）。
   - **身份凭据**：通过 64 字节随机 Token 进行双向握手确认，防止未授权租约操作。
 
@@ -194,7 +201,7 @@ git submodule update --init --recursive
 ```
 
 内核新提交须先推到 fork，再推引用该提交的产品分支，否则其他人无法初始化子模块。
-本地尚未推送时的复现方式与发布状态见 [P4 记录](docs/plans/p4-kernel-2026-11-26.md)。
+本地尚未推送时的复现方式与发布状态见 [P4 记录](plans/p4-kernel-2026-11-26.md)。
 
 ### 6.2 Windows（PowerShell 7）
 
@@ -216,7 +223,22 @@ bash scripts/build.sh -development
 外部 `-worker` / `ZJU_CONNECT_ROOT` 路径会被拒绝，避免只更换 Worker。
 构建也会生成 `core/connect-hub-relay(.exe)`。它承载 LAN 分享、导入连接和 DNS-SD 发现；Hub 在任务开始时按需启动，空闲后退出。开发时可以将 `EASYCONNECT_RELAY` 指向另一个 relay 可执行文件进行组件协议联调。
 
-### 6.4 修改内核
+### 6.4 直接运行与 MyGo 开发入口
+
+```bash
+# 在产品仓库根目录执行；不再使用 go run .
+# 直接运行不生成配套组件；联调优先使用 6.2/6.3 的完整开发构建。
+go run ./cmd/connect-hub
+go tool mygo dev
+# 独立的 MyGo 调试构建，仍从根目录读取 mygo.json
+go tool mygo build -skip-dmg -debug
+```
+
+`mygo.json` 的 `main` 指向 `cmd/connect-hub`，根目录不保留 Go 源文件。
+图标只有一份 `resources/icon.png`，由 `resources` 包嵌入 Hub；构建时 Windows `.syso`
+生成在入口目录并自动删除。页面测试仍执行真实 MyGo UI tester；控制器测试无需 UI。
+
+### 6.5 修改内核
 
 在 `third_party/zju-connect` 新建分支，修改并运行内核测试后提交；也可在独立 fork
 工作树修改，再让子模块 fetch 并 checkout 该提交。同步更新
@@ -298,7 +320,7 @@ bash ./scripts/package-linux.sh
 - `connect-hub-linux-amd64.tar.gz`：包含主程序、`core/` 助手与 Worker、多分辨率图标及 `.desktop` 安装脚本。
 
 ### 8.3 CI/CD 工作流
-GitHub Actions 自动化流水线配置在 [aTrustHub/.github/workflows/build.yml](file:///d:/Programming/Projects/Go/easy-connect/aTrustHub/.github/workflows/build.yml)：
+GitHub Actions 自动化流水线配置在 [aTrustHub/.github/workflows/build.yml](../.github/workflows/build.yml)：
 - 支持推送 `v*` 标签或手动 `workflow_dispatch` 触发。
 - 在 Windows 环境下通过 Chocolatey 自动安装 NSIS 并编译生成 Setup 安装器。
 - 自动汇集双平台构建产物并发布 GitHub Release。

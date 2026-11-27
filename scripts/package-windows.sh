@@ -86,7 +86,7 @@ for module in github.com/egoist/mygo github.com/mythologyli/sing-tun github.com/
   install -m 0644 "$module_dir/LICENSE" "$bundle/LICENSES/$module_name.txt"
 done
 install -m 0644 "$app_root/packaging/windows/Wintun-LICENSE.txt" "$bundle/LICENSES/Wintun-LICENSE.txt"
-install -m 0644 "$app_root/WINDOWS-QUICKSTART.md" "$bundle/README.md"
+install -m 0644 "$app_root/docs/WINDOWS-QUICKSTART.md" "$bundle/README.md"
 # 性能对照脚本只用于受控 HTTP 对照测试，需要 Python 3 和 curl；
 # 发布包不携带，只在 test 包里放一份。
 if [[ "$bundle_profile" == test ]]; then

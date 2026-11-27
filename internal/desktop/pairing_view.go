@@ -156,6 +156,12 @@ type pairStartResult struct {
 
 func (a *app) stopPairImport() {
 	d := &a.relayImport
+	// Detach result mailboxes before cancelling. Ack/start may already have
+	// succeeded; only this UI thread owns which attempt may update the dialog.
+	d.pairAck = nil
+	d.pairStarts = nil
+	d.pairStoredID = ""
+	d.pairProgress = relay.PairProgress{}
 	if d.pairCancel != nil {
 		d.pairCancel()
 		d.pairCancel = nil
@@ -175,6 +181,8 @@ func (a *app) beginPairImport() {
 		d.err = "配对组件不可用"
 		return
 	}
+	pin := d.pin
+	a.stopPairImport()
 	d.err = ""
 	d.busy = true
 	// Every attempt generates a new private key. A retry must replace the
@@ -187,7 +195,6 @@ func (a *app) beginPairImport() {
 	d.pairCancel = cancel
 	results := d.pairStarts
 	target := relay.PairTarget{Host: d.pinned.Address, Port: d.pinned.Port, ShareID: d.pinned.ShareID, Name: d.deviceName, HostName: d.pinned.Name}
-	pin := d.pin
 	d.pin = ""
 	start := a.pairStart
 	go func() {
@@ -199,6 +206,11 @@ func (a *app) beginPairImport() {
 			return
 		}
 		results <- pairStartResult{attempt, err}
+		// Cancellation can race with publishing into the buffered mailbox.
+		// The attempt remains context-owned even if its UI never drains it.
+		if attempt != nil {
+			context.AfterFunc(ctx, func() { _ = attempt.Close() })
+		}
 		a.invalidateCoalesced()
 	}()
 }
@@ -219,6 +231,7 @@ func (a *app) drainPairImport() {
 	}
 	select {
 	case result := <-d.pairStarts:
+		d.pairStarts = nil
 		d.busy = false
 		if result.err != nil {
 			d.err = result.err.Error()

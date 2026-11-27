@@ -142,6 +142,7 @@ func TestPairClaimUIReceiptCompletesAndStartsConnection(t *testing.T) {
 	attempt := &fakePairAttempt{updates: make(chan relay.PairProgress, 1), success: true}
 	a.relayImport = relayImportDraft{open: true, pairAttempt: attempt, pairProgress: relay.PairProgress{Request: relay.PairRequest{State: "approved"}, Code: &code}}
 	a.claimPairImport()
+	id := a.relayImport.pairStoredID
 	deadline := time.Now().Add(2 * time.Second)
 	for a.relayImport.open && time.Now().Before(deadline) {
 		a.drainPairImport()
@@ -151,8 +152,154 @@ func TestPairClaimUIReceiptCompletesAndStartsConnection(t *testing.T) {
 		t.Fatal("claim did not close dialog and initiate connection", a.relayImport.err)
 	}
 	cfg := a.store.Config()
-	if p := cfg.Find(a.relayImport.pairStoredID); p == nil || p.Relay.PairingUnconfirmed {
+	if p := cfg.Find(id); p == nil || p.Relay.PairingUnconfirmed {
 		t.Fatal("confirmed receipt marker was not persisted")
+	}
+}
+
+func TestPairCancelledClaimCannotFinishNewTab(t *testing.T) {
+	for _, success := range []bool{true, false} {
+		t.Run(map[bool]string{true: "success", false: "failure"}[success], func(t *testing.T) {
+			a := testApp(t)
+			code, _ := relay.ParseShareCode(sampleShareCode())
+			code.Version = 2
+			entered, release := make(chan struct{}), make(chan struct{})
+			attempt := &fakePairAttempt{updates: make(chan relay.PairProgress, 1), success: success, ack: func() error { close(entered); <-release; return nil }}
+			a.relayImport = relayImportDraft{open: true, tab: 2, pairAttempt: attempt, pairProgress: relay.PairProgress{Request: relay.PairRequest{State: "approved"}, Code: &code}}
+			a.claimPairImport()
+			<-entered
+			ack := a.relayImport.pairAck
+			id := a.relayImport.pairStoredID
+			a.stopPairImport()
+			a.relayImport.tab = 1
+			close(release)
+			deadline := time.Now().Add(time.Second)
+			for len(ack) == 0 && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if len(ack) == 0 {
+				t.Fatal("ack did not complete")
+			}
+			a.drainPairImport()
+			if !a.relayImport.open || a.relayImport.tab != 1 || a.toast != "" || a.relayImport.err != "" {
+				t.Fatalf("cancelled claim changed current UI: open=%v toast=%q err=%q", a.relayImport.open, a.toast, a.relayImport.err)
+			}
+			cfg := a.store.Config()
+			if p := cfg.Find(id); p == nil || !p.Relay.PairingUnconfirmed {
+				t.Fatal("cancel lost or confirmed checkpoint")
+			}
+		})
+	}
+}
+
+func TestPairCancelledClaimCannotAffectReopenedOrNewAttempt(t *testing.T) {
+	for _, next := range []string{"reopen", "new-attempt"} {
+		for _, success := range []bool{true, false} {
+			t.Run(next+map[bool]string{true: "/success", false: "/failure"}[success], func(t *testing.T) {
+				a := testApp(t)
+				code, _ := relay.ParseShareCode(sampleShareCode())
+				code.Version = 2
+				entered, release := make(chan struct{}), make(chan struct{})
+				old := &fakePairAttempt{updates: make(chan relay.PairProgress, 1), success: success, ack: func() error { close(entered); <-release; return nil }}
+				a.relayImport = relayImportDraft{open: true, tab: 2, pairAttempt: old, pairProgress: relay.PairProgress{Request: relay.PairRequest{State: "approved"}, Code: &code}}
+				a.claimPairImport()
+				<-entered
+				ack, id := a.relayImport.pairAck, a.relayImport.pairStoredID
+				a.closeRelayImport()
+				a.openRelayImport()
+				var current *fakePairAttempt
+				if next == "new-attempt" {
+					current = &fakePairAttempt{updates: make(chan relay.PairProgress, 1)}
+					a.pairStart = func(context.Context, relay.PairTarget, string) (relay.PairAttempt, error) { return current, nil }
+					a.relayImport.tab, a.relayImport.pin = 2, "12345678"
+					a.beginPairImport()
+					waitPairUI(t, a, func() bool { return a.relayImport.pairAttempt == current })
+				}
+				a.relayImport.err = "current-dialog"
+				close(release)
+				waitPairUI(t, a, func() bool { return len(ack) == 1 })
+				a.drainPairImport()
+				wrongAttempt := current != nil && a.relayImport.pairAttempt != current || current == nil && a.relayImport.pairAttempt != nil
+				if !a.relayImport.open || a.toast != "" || a.relayImport.err != "current-dialog" || wrongAttempt {
+					t.Fatal("old receipt affected reopened dialog")
+				}
+				cfg := a.store.Config()
+				if p := cfg.Find(id); p == nil || !p.Relay.PairingUnconfirmed {
+					t.Fatal("stored checkpoint lost or confirmed after cancel")
+				}
+				if secret, err := a.store.Password(id); err != nil || secret != code.Token {
+					t.Fatal("saved credential lost")
+				}
+				a.stopPairImport()
+			})
+		}
+	}
+}
+
+func waitPairUI(t *testing.T, a *app, ready func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !ready() && time.Now().Before(deadline) {
+		a.drainPairImport()
+		time.Sleep(time.Millisecond)
+	}
+	if !ready() {
+		t.Fatal("pair UI condition did not complete")
+	}
+}
+
+func TestPairLateStartCannotReplaceCurrentAttempt(t *testing.T) {
+	for _, success := range []bool{true, false} {
+		for _, timing := range []string{"buffered-before-stop", "returned-after-stop"} {
+			t.Run(map[bool]string{true: "success/", false: "failure/"}[success]+timing, func(t *testing.T) {
+				a := testApp(t)
+				entered, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+				old := &fakePairAttempt{updates: make(chan relay.PairProgress, 1)}
+				current := &fakePairAttempt{updates: make(chan relay.PairProgress, 1)}
+				a.pairStart = func(context.Context, relay.PairTarget, string) (relay.PairAttempt, error) {
+					close(entered)
+					<-release
+					defer close(returned)
+					if success {
+						return old, nil
+					}
+					return nil, errors.New("old-start-error")
+				}
+				a.relayImport = relayImportDraft{open: true, tab: 2, pin: "12345678"}
+				a.beginPairImport()
+				<-entered
+				mailbox := a.relayImport.pairStarts
+				if timing == "buffered-before-stop" {
+					close(release)
+					deadline := time.Now().Add(time.Second)
+					for len(mailbox) == 0 && time.Now().Before(deadline) {
+						time.Sleep(time.Millisecond)
+					}
+					if len(mailbox) == 0 {
+						t.Fatal("start result not buffered")
+					}
+				}
+				a.stopPairImport()
+				a.pairStart = func(context.Context, relay.PairTarget, string) (relay.PairAttempt, error) { return current, nil }
+				a.relayImport.pin = "87654321"
+				a.beginPairImport()
+				waitPairUI(t, a, func() bool { return a.relayImport.pairAttempt == current })
+				current.updates <- relay.PairProgress{Request: relay.PairRequest{ID: "current", State: "pending"}}
+				a.drainPairImport()
+				if timing == "returned-after-stop" {
+					close(release)
+				}
+				<-returned
+				if success {
+					waitPairUI(t, a, func() bool { return old.closed.Load() })
+				}
+				a.drainPairImport()
+				if a.relayImport.pairAttempt != current || a.relayImport.pairProgress.Request.ID != "current" || a.relayImport.err != "" || !a.relayImport.open {
+					t.Fatal("late start replaced current UI")
+				}
+				a.stopPairImport()
+			})
+		}
 	}
 }
 

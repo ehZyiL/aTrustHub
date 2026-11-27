@@ -15,10 +15,12 @@ import (
 // rendering never touch the network. Only an explicit connect or pair action
 // contacts the host.
 type relayImportDraft struct {
-	pin          string
-	deviceName   string
-	pairAttempt  relay.PairAttempt
-	pairCancel   context.CancelFunc
+	pin         string
+	deviceName  string
+	pairAttempt relay.PairAttempt
+	pairCancel  context.CancelFunc
+	// Mailbox identity is the attempt identity. Stop detaches both; workers
+	// publish only to their captured mailbox, never to the current draft.
 	pairStarts   chan pairStartResult
 	pairProgress relay.PairProgress
 	pairStoredID string

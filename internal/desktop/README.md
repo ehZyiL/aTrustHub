@@ -8,16 +8,28 @@
 
 | 职责 | 主要文件 |
 |---|---|
-| 启动、装配、窗口生命周期 | `app.go`、`relay_assembly.go`、`discovery_assembly.go` |
-| 主视图、设置、简单模式 | `view.go`、`dashboard_simple.go`、`appearance.go`、`pagenav.go` |
+| 应用状态、启动与服务装配 | `app.go`、`relay_assembly.go`、`discovery_assembly.go` |
+| 窗口生命周期、菜单与关闭 | `window_lifecycle.go` |
+| 配置同步、凭据桥接与剪贴板 | `config.go`、`credentials.go`、`clipboard.go` |
+| 主视图、导航与公共控件 | `view.go`、`widgets.go`、`pagenav.go` |
+| 接入点卡片、状态与日志入口 | `access_view.go` |
+| 远程应用资源列表、分组与详情 | `apps_view.go` |
+| 接入点编辑器与操作 | `editor_view.go`、`editor_actions.go` |
+| 设置页、保存与确认弹窗 | `settings_view.go`、`settings_actions.go`、`confirmations_view.go` |
+| 简单模式与外观 | `dashboard_simple.go`、`appearance.go` |
 | 登录、证书及企业微信 | `login.go`、`authentication.go`、`browserlogin.go`、`certificate.go`、`wecom_*.go` |
-| 本机应用及资源展示 | `localapps.go`、`installedapps*.go`、`routeview.go`、`resource_tun.go` |
+| 本机应用与路由展示 | `localapps.go`、`installedapps*.go`、`routeview.go`、`resource_tun.go` |
+| 接管模式切换与启动/退出恢复 | `capture_mode.go`、`capture_restore.go` |
 | 网络接管及自动恢复装配 | `capture_chip.go`、`auto_capture.go`、`resource_proxy*.go`、`globaltun.go` |
 | 分享、发现及导入页面 | `lanshare.go`、`lan_discovery.go`、`import_relay.go`、`lanshare_firewall.go` |
 | 清理页面与选择/确认状态 | `cleanupview.go`、`cleanup.go` |
 | 托盘、关闭、主题及重绘 | `tray_*.go`、`quitclose*.go`、`theme_soft.go`、`redraw.go`、`state_ticker.go` |
 | 系统代理及退出恢复 | `systemproxy*.go` |
 | 资源监测与日志 | `memory.go`、`memusage_*.go`、`accesslog_tail.go`、`logsview.go` |
+
+`apps_view.go` 展示网关提供的远程应用资源；`localapps.go` 管理本机应用接管，二者职责不同。
+本轮只按职责拆文件：原 `app.go` 1259 行、`view.go` 3166 行，拆分后分别为 462 行和
+157 行；其余声明分布到 14 个文件中，165 个非 import 声明保持一致，没有新增包或接口。
 
 以下控制逻辑在独立包维护，桌面只负责装配和消费状态：
 

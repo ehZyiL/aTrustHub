@@ -80,3 +80,21 @@ UI 测试在真实导入入口注入阻塞浏览器，以 100 毫秒内返回为
 
 修复版整套构建使用独立目录 `build/fix-relay-import-development/`，实际来源与组件哈希
 以该目录的 `build-manifest.json` 为准。
+
+## Windows 配套产物
+
+生产代码提交：`2aad967634cc056ba95d0f9b1137961f96695cf1`。固定内核：
+`5929e30fd988f7e3efd3fbbbfffc7a7087e26f44`。本节是构建后的文档记录，
+不将该文档提交算作被测生产代码。
+
+```powershell
+./scripts/build.ps1 -development -out build/fix-relay-import-development
+```
+
+Windows/amd64、Go 1.27.4、`GOWORK=off` 整套构建成功，包含 Hub 和 `core/` 下的
+worker/capture/cleanup/relay。manifest 中五个 EXE 与两份模块清单的 SHA256 全部逐项匹配；
+临时图标 `.syso` 已由构建器移除。测试时从该完整目录运行 `connect-hub.exe`。
+
+三项 opt-in 生命周期/资源用例另行执行一次全部通过，输出在
+`build/import-discovery-checks/lifecycle.log`。新增浏览工作协程纳入退出检测，
+十轮用例每轮都等待浏览真正启动后再关闭，避免只验证被合并掉的打开请求。

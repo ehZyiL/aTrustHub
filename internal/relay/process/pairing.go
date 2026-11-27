@@ -19,6 +19,9 @@ import (
 
 func (p *processServer) PairingSupported() bool { return p.pairing }
 func (p *processServer) PairControl(ctx context.Context, c contract.PairCommand) (contract.PairView, error) {
+	if err := ctx.Err(); err != nil {
+		return contract.PairView{}, err
+	}
 	if !p.pairing {
 		return contract.PairView{}, errors.New("pairing_unsupported: 请更新分享组件")
 	}
@@ -28,7 +31,7 @@ func (p *processServer) PairControl(ctx context.Context, c contract.PairCommand)
 	p.rpc[id] = ch
 	p.rpcMu.Unlock()
 	defer func() { p.rpcMu.Lock(); delete(p.rpc, id); p.rpcMu.Unlock() }()
-	if err := p.send(command{Operation: "pair-control", ID: id, PairCommand: &c}); err != nil {
+	if err := p.sendContext(ctx, command{Operation: "pair-control", ID: id, PairCommand: &c}); err != nil {
 		return contract.PairView{}, err
 	}
 	select {

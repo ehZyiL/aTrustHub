@@ -27,6 +27,7 @@ import (
 	"github.com/ehzyil/connect-hub/internal/model"
 	"github.com/ehzyil/connect-hub/internal/relay"
 	contract "github.com/ehzyil/connect-hub/internal/relay/contract"
+	"github.com/ehzyil/connect-hub/internal/relay/ctxlock"
 	discovery "github.com/ehzyil/connect-hub/internal/relay/discovery/contract"
 	vpncontract "github.com/ehzyil/connect-hub/internal/vpn/contract"
 )
@@ -89,7 +90,7 @@ type processServer struct {
 	done    chan struct{}
 	waitErr error
 	waitMu  sync.RWMutex
-	writeMu sync.Mutex
+	writeMu ctxlock.Mutex
 	clients atomic.Int64
 	port    int
 	closed  atomic.Bool
@@ -130,18 +131,32 @@ func Factory(executable string) relay.ServerFactory {
 		if executable == "" {
 			return nil, errors.New("缺少局域网分享组件 connect-hub-relay")
 		}
-		return start(opts, executable)
+		server, err := start(opts, executable)
+		if err != nil {
+			return nil, err
+		}
+		return server, nil
 	}
 }
 
 func start(opts relay.ServerOptions, executable string) (*processServer, error) {
+	startupCtx := opts.StartupContext
+	if startupCtx == nil {
+		startupCtx = context.Background()
+	}
+	if err := startupCtx.Err(); err != nil {
+		return nil, err
+	}
 	if opts.Source == nil || opts.Identity == nil || opts.Token == "" || opts.ShareID == "" {
 		return nil, errors.New("分享进程启动配置不完整")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(startupCtx, 4*time.Second)
 	defer cancel()
 	probe := newCommandContext(ctx, executable, "--protocol-version")
 	out, err := probe.Output()
+	if startupCtx.Err() != nil {
+		return nil, startupCtx.Err()
+	}
 	if err != nil || strings.TrimSpace(string(out)) != ProtocolVersion {
 		return nil, errors.New("局域网分享组件版本不兼容，请重新安装完整程序")
 	}
@@ -188,12 +203,23 @@ func start(opts relay.ServerOptions, executable string) (*processServer, error) 
 	ps := &processServer{cmd: cmd, stdin: stdin, broker: b, events: make(chan event, 8), done: make(chan struct{}), rpc: make(map[uint64]chan event)}
 	go ps.readEvents(stdout)
 	go ps.wait()
+	// Closing stdin interrupts a blocked startup write. This callback is only
+	// armed during initialization; the running child owns a separate lifetime.
+	stopStartup := context.AfterFunc(startupCtx, func() { _ = stdin.Close() })
+	defer stopStartup()
 	if err := json.NewEncoder(stdin).Encode(start); err != nil {
 		_ = ps.terminate()
+		if startupCtx.Err() != nil {
+			return nil, startupCtx.Err()
+		}
 		return nil, fmt.Errorf("局域网分享组件握手失败：%w", err)
 	}
 	select {
 	case e := <-ps.events:
+		if startupCtx.Err() != nil {
+			_ = ps.terminate()
+			return nil, startupCtx.Err()
+		}
 		if e.Kind != "ready" || e.Port <= 0 || e.Port > 65535 {
 			_ = ps.terminate()
 			if e.Error != "" {
@@ -204,6 +230,9 @@ func start(opts relay.ServerOptions, executable string) (*processServer, error) 
 		ps.port = e.Port
 		ps.pairing = e.Pairing
 		return ps, nil
+	case <-startupCtx.Done():
+		_ = ps.terminate()
+		return nil, startupCtx.Err()
 	case <-ps.done:
 		ps.waitMu.RLock()
 		waitErr := ps.waitErr
@@ -290,7 +319,8 @@ func (p *processServer) Close(ctx context.Context) error {
 }
 
 func (p *processServer) terminate() error {
-	_ = p.send(command{Operation: "stop"})
+	// Initialization may have failed because the child stopped reading stdin;
+	// termination must not wait for another write to that same pipe.
 	_ = p.stdin.Close()
 	_ = p.cmd.Process.Kill()
 	select {
@@ -301,8 +331,17 @@ func (p *processServer) terminate() error {
 }
 
 func (p *processServer) send(c command) error {
-	p.writeMu.Lock()
+	return p.sendContext(context.Background(), c)
+}
+
+func (p *processServer) sendContext(ctx context.Context, c command) error {
+	if err := p.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer p.writeMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return json.NewEncoder(p.stdin).Encode(c)
 }
 

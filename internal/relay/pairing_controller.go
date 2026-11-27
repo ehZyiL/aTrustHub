@@ -17,12 +17,17 @@ func supportsPairing(s ServerInstance) bool {
 func (s *Server) PairingSupported() bool { return s.pairing.available }
 
 func (c *Controller) PairControl(ctx context.Context, cmd contract.PairCommand) (contract.PairView, error) {
-	c.opMu.Lock()
+	if err := c.opMu.LockContext(ctx); err != nil {
+		return contract.PairView{}, err
+	}
 	defer c.opMu.Unlock()
 	c.mu.Lock()
 	server := c.server
 	sid := c.settings.ShareID
 	c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return contract.PairView{}, err
+	}
 	if p, ok := server.(contract.PairControl); ok {
 		return p.PairControl(ctx, cmd)
 	}
@@ -44,11 +49,20 @@ func (c *Controller) PairControl(ctx context.Context, cmd contract.PairCommand) 
 // PauseSharing is explicitly separate from legacy Disable, which destroys the
 // share identity and invalidates all v1 codes. Pause survives application restart.
 func (c *Controller) PauseSharing(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	finish := c.beginStop()
 	defer finish()
-	c.opMu.Lock()
+	if err := c.opMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer c.opMu.Unlock()
 	c.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
 	if !c.settings.Enabled {
 		c.mu.Unlock()
 		return errors.New("共享未开启")
@@ -68,8 +82,15 @@ func (c *Controller) PauseSharing(ctx context.Context) error {
 }
 
 func (c *Controller) ResumeSharing(ctx context.Context) error {
-	c.opMu.Lock()
+	if err := c.opMu.LockContext(ctx); err != nil {
+		return err
+	}
 	c.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		c.opMu.Unlock()
+		return err
+	}
 	c.settings.Paused = false
 	err := c.persistLocked()
 	if err != nil {

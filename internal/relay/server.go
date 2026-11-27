@@ -22,6 +22,9 @@ import (
 
 // ServerOptions configures one running share instance.
 type ServerOptions struct {
+	// StartupContext only governs initialization. The returned server owns an
+	// independent lifetime and survives cancellation after a successful start.
+	StartupContext   context.Context
 	DeviceStore      contract.DeviceStore
 	Identity         *Identity
 	Source           Source
@@ -103,6 +106,13 @@ func (s *Server) Port() int { return s.port }
 // Start binds and serves. It returns only after the listener is up, so the caller
 // can persist the real port before advertising a share code.
 func StartServer(opts ServerOptions) (*Server, error) {
+	startupCtx := opts.StartupContext
+	if startupCtx == nil {
+		startupCtx = context.Background()
+	}
+	if err := startupCtx.Err(); err != nil {
+		return nil, err
+	}
 	if opts.Source == nil {
 		return nil, errors.New("分享源缺失")
 	}
@@ -148,11 +158,14 @@ func StartServer(opts ServerOptions) (*Server, error) {
 		c.cancel()
 		s.conns.stopClient(c.token)
 	}
-	s.pairing, err = newPairingState(root, opts.DeviceStore, opts.ShareID, opts.Identity.Fingerprint, func(id string) {
+	s.pairing, err = newPairingState(startupCtx, opts.DeviceStore, opts.ShareID, opts.Identity.Fingerprint, func(id string) {
 		s.clients.removeID("device:" + id)
 	})
 	if err != nil {
 		cancel()
+		if startupCtx.Err() != nil {
+			return nil, startupCtx.Err()
+		}
 		return nil, err
 	}
 	s.pairSlots = make(chan struct{}, contract.MaxPairHandshakes)
@@ -174,10 +187,15 @@ func StartServer(opts ServerOptions) (*Server, error) {
 		cancel()
 		return nil, errors.New("分享端口无效")
 	}
-	ln, err := net.Listen("tcp4", net.JoinHostPort(addr, strconv.Itoa(opts.Port)))
+	ln, err := (&net.ListenConfig{}).Listen(startupCtx, "tcp4", net.JoinHostPort(addr, strconv.Itoa(opts.Port)))
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("分享端口无法监听：%w", err)
+	}
+	if err := startupCtx.Err(); err != nil {
+		_ = ln.Close()
+		cancel()
+		return nil, err
 	}
 	s.ln = newLimitedListener(ln, MaxUnauthenticated)
 	s.addr = ln.Addr().String()

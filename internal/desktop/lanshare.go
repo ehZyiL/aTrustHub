@@ -43,6 +43,7 @@ type lanShareDraft struct {
 	advanced      bool
 	busy          bool
 	busyAction    string
+	pauseCancel   context.CancelFunc
 	err           string
 	notice        string
 	confirmClose  bool
@@ -116,6 +117,7 @@ func (a *app) lanShareEnabled() bool {
 // never starts a listener.
 func (a *app) openLANShare() {
 	a.stopPairManage()
+	a.stopLANSharePause()
 	d := &a.lanShareUI
 	d.open = true
 	d.pairPIN = ""
@@ -125,10 +127,11 @@ func (a *app) openLANShare() {
 	d.showCode = false
 	d.advanced = false
 	d.portText = ""
-	d.busy = false
-	if d.results == nil {
-		d.results = make(chan lanShareResult, 4)
-	}
+	d.busy, d.busyAction = false, ""
+	d.discoveryBusy = false
+	// Workers capture their panel's mailbox before starting. A late reply from
+	// a closed panel cannot finish an action in this new panel.
+	d.results = make(chan lanShareResult, 4)
 	if a.lanShare == nil {
 		d.err = "局域网分享尚未初始化"
 		return
@@ -226,11 +229,6 @@ func (a *app) drainLANShareResults() {
 	for {
 		select {
 		case res := <-d.results:
-			if res.action == "pause" {
-				d.pairAt = time.Time{}
-			}
-			d.busy = false
-			d.busyAction = ""
 			if res.action == "discovery" || res.action == "discovery-name" ||
 				res.action == "discovery-retry" {
 				d.discoveryBusy = false
@@ -241,6 +239,15 @@ func (a *app) drainLANShareResults() {
 				if res.saveFailed {
 					d.discoverySavePending = true
 				}
+			} else {
+				if res.action != d.busyAction {
+					continue
+				}
+				if res.action == "pause" {
+					a.stopLANSharePause()
+					d.pairAt = time.Time{}
+				}
+				d.busy, d.busyAction = false, ""
 			}
 			if res.err != nil {
 				d.err = res.err.Error()
@@ -256,16 +263,32 @@ func (a *app) drainLANShareResults() {
 	}
 }
 
-func (a *app) postLANShareResult(res lanShareResult) {
+// lanShareResultPoster is called on the UI thread, before launching a worker.
+// The returned function only owns this mailbox and never reads mutable UI state.
+func (a *app) lanShareResultPoster() func(lanShareResult) {
 	d := &a.lanShareUI
 	if d.results == nil {
 		d.results = make(chan lanShareResult, 4)
 	}
-	select {
-	case d.results <- res:
-	default:
+	results := d.results
+	return func(res lanShareResult) {
+		select {
+		case results <- res:
+		default:
+		}
+		a.invalidate()
 	}
-	a.invalidate()
+}
+
+func (a *app) stopLANSharePause() {
+	d := &a.lanShareUI
+	if d.pauseCancel != nil {
+		d.pauseCancel()
+		d.pauseCancel = nil
+	}
+	if d.busyAction == "pause" {
+		d.busy, d.busyAction = false, ""
+	}
 }
 
 func (a *app) enableLANShare() {
@@ -306,10 +329,11 @@ func (a *app) enableLANShare() {
 	}
 	d.busy, d.busyAction = true, "enable"
 	d.err, d.notice = "", ""
+	post := a.lanShareResultPoster()
 	go func() {
 		err := a.lanShare.Enable(context.Background(), opts)
 		notice := "共享已开启。复制分享口令发给同事；应用重启后会自动恢复。"
-		a.postLANShareResult(lanShareResult{action: "enable", err: err, notice: notice})
+		post(lanShareResult{action: "enable", err: err, notice: notice})
 	}()
 	a.invalidate()
 }
@@ -320,8 +344,10 @@ func (a *app) disableLANShare() {
 		return
 	}
 	a.stopPairManage()
+	a.stopLANSharePause()
 	d.busy, d.busyAction = true, "disable"
 	d.err, d.notice = "", ""
+	post := a.lanShareResultPoster()
 	go func() {
 		err := a.lanShare.Disable(context.Background())
 		notice := ""
@@ -332,7 +358,7 @@ func (a *app) disableLANShare() {
 			a.cancelPendingFirewallOps()
 			a.syncLanShareFirewall()
 		}
-		a.postLANShareResult(lanShareResult{action: "disable", err: err, notice: notice})
+		post(lanShareResult{action: "disable", err: err, notice: notice})
 	}()
 	a.invalidate()
 }
@@ -344,9 +370,10 @@ func (a *app) retryLANShare() {
 	}
 	d.busy, d.busyAction = true, "retry"
 	d.err, d.notice = "", ""
+	post := a.lanShareResultPoster()
 	go func() {
 		err := a.lanShare.Retry(context.Background())
-		a.postLANShareResult(lanShareResult{action: "retry", err: err})
+		post(lanShareResult{action: "retry", err: err})
 	}()
 	a.invalidate()
 }
@@ -360,13 +387,14 @@ func (a *app) retryPersistLANShareDisable() {
 	}
 	d.busy, d.busyAction = true, "retry-persist"
 	d.err, d.notice = "", ""
+	post := a.lanShareResultPoster()
 	go func() {
 		err := a.lanShare.RetryPersistDisable()
 		notice := ""
 		if err == nil {
 			notice = "关闭状态已保存，下次启动不会恢复。"
 		}
-		a.postLANShareResult(lanShareResult{action: "retry-persist", err: err, notice: notice})
+		post(lanShareResult{action: "retry-persist", err: err, notice: notice})
 	}()
 	a.invalidate()
 }

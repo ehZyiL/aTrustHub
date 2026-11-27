@@ -114,11 +114,14 @@ func (a *app) pairingManageView(c *ui.Context, view relay.View) {
 			}
 			if ui.Button(c, label).Disabled(busy).Clicked() {
 				a.stopPairManage()
-				d.busy = true
+				d.busy, d.busyAction = true, "pause"
+				d.err, d.notice = "", ""
+				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+				d.pauseCancel = cancel
+				post := a.lanShareResultPoster()
 				control := a.lanShare
 				paused := view.Paused
 				go func() {
-					ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 					defer cancel()
 					var err error
 					if paused {
@@ -126,7 +129,7 @@ func (a *app) pairingManageView(c *ui.Context, view relay.View) {
 					} else {
 						err = control.PauseSharing(ctx)
 					}
-					a.postLANShareResult(lanShareResult{action: "pause", err: err})
+					post(lanShareResult{action: "pause", err: err})
 				}()
 			}
 		})

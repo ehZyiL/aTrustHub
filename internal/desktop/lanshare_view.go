@@ -137,6 +137,7 @@ func (a *app) lanShareView(c *ui.Context) {
 	d := &a.lanShareUI
 	if !d.open {
 		a.stopPairManage()
+		a.stopLANSharePause()
 		return
 	}
 	a.drainLANShareResults()

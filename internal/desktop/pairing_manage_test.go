@@ -30,6 +30,11 @@ func (p *pairManageTestControl) PauseSharing(ctx context.Context) error {
 	return err
 }
 
+func (p *pairManageTestControl) ResumeSharing(ctx context.Context) error {
+	_, err := p.control(ctx, relay.PairCommand{Operation: "resume"})
+	return err
+}
+
 func pairManageSynctest(t *testing.T, test func(*testing.T)) {
 	t.Helper()
 	// MyGo's shared raster workers outlive a test and cannot join a synctest
@@ -43,6 +48,11 @@ func pairManageSynctest(t *testing.T, test func(*testing.T)) {
 // After frames and application invalidations feed that same view; synctest
 // advances the application's timers without wall-clock sleeps.
 func pairManageTester(t *testing.T, control *pairManageTestControl) (*app, *ui.Tester, func(time.Duration)) {
+	t.Helper()
+	return pairManageTesterWithView(t, control, relay.View{Enabled: true, State: relay.StateRunning, Pairing: true})
+}
+
+func pairManageTesterWithView(t *testing.T, control *pairManageTestControl, view relay.View) (*app, *ui.Tester, func(time.Duration)) {
 	t.Helper()
 	a := &app{lanShare: control, lanShareUI: lanShareDraft{
 		open: true, results: make(chan lanShareResult, 4),
@@ -60,10 +70,11 @@ func pairManageTester(t *testing.T, control *pairManageTestControl) (*app, *ui.T
 	}
 	t.Cleanup(func() { a.windowHidden.Store(true) })
 	t.Cleanup(a.stopPairManage)
+	t.Cleanup(a.stopLANSharePause)
 	tester := ui.NewTester(func(c *ui.Context) {
 		if a.lanShareUI.open {
 			a.drainLANShareResults()
-			a.pairingManageView(c, relay.View{Enabled: true, State: relay.StateRunning, Pairing: true})
+			a.pairingManageView(c, view)
 		} else {
 			a.lanShareView(c)
 		}

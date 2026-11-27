@@ -9,11 +9,11 @@ import (
 	"errors"
 	"math/big"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/bytemare/opaque"
 	"github.com/ehzyil/connect-hub/internal/relay/contract"
+	"github.com/ehzyil/connect-hub/internal/relay/ctxlock"
 )
 
 type pairRecord struct {
@@ -30,7 +30,7 @@ type invitationRecord struct {
 }
 
 type pairingState struct {
-	mu          sync.Mutex
+	mu          ctxlock.Mutex
 	store       contract.DeviceStore
 	shareID     string
 	fingerprint string
@@ -145,13 +145,18 @@ func (p *pairingState) commitLocked(ctx context.Context, devices map[string]cont
 }
 
 func (p *pairingState) control(ctx context.Context, c contract.PairCommand) (contract.PairView, error) {
-	p.mu.Lock()
+	if err := p.mu.LockContext(ctx); err != nil {
+		return contract.PairView{}, err
+	}
 	defer p.mu.Unlock()
 	if !p.available {
 		return contract.PairView{}, errors.New("pairing_unsupported: 组件未提供配对存储")
 	}
 	if err := p.flushLocked(ctx); err != nil {
 		return p.snapshotLocked(), err
+	}
+	if err := ctx.Err(); err != nil {
+		return contract.PairView{}, err
 	}
 	p.expireLocked()
 	switch c.Operation {
@@ -163,6 +168,9 @@ func (p *pairingState) control(ctx context.Context, c contract.PairCommand) (con
 		}
 		inv, err := newInvitation(pin, p.shareID, p.fingerprint, p.now())
 		if err != nil {
+			return contract.PairView{}, err
+		}
+		if err := ctx.Err(); err != nil {
 			return contract.PairView{}, err
 		}
 		p.invite = inv

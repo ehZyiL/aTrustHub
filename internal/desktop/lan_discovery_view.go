@@ -114,6 +114,7 @@ func (a *app) toggleLANDiscovery(on bool) {
 	name := d.discoveryName
 	d.discoveryBusy = true
 	d.err, d.notice = "", ""
+	post := a.lanShareResultPoster()
 	go func() {
 		err := a.setLANDiscoveryPreference(on, name)
 		notice := ""
@@ -123,7 +124,7 @@ func (a *app) toggleLANDiscovery(on bool) {
 		if err == nil && !on {
 			notice = "已停止被发现；分享和口令继续有效。"
 		}
-		a.postLANShareResult(lanShareResult{
+		post(lanShareResult{
 			action: "discovery", err: err, notice: notice,
 			saveFailed: err != nil && !on,
 		})
@@ -135,13 +136,14 @@ func (a *app) toggleLANDiscovery(on bool) {
 func (a *app) retryLANDiscoverySave() {
 	d := &a.lanShareUI
 	d.discoveryBusy = true
+	post := a.lanShareResultPoster()
 	go func() {
 		err := a.retryLANDiscoveryPreference()
 		notice := ""
 		if err == nil {
 			notice = "发现偏好已保存。"
 		}
-		a.postLANShareResult(lanShareResult{action: "discovery-retry", err: err, notice: notice})
+		post(lanShareResult{action: "discovery-retry", err: err, notice: notice})
 	}()
 	a.invalidate()
 }
@@ -150,9 +152,10 @@ func (a *app) saveLANDiscoveryName(name string) {
 	d := &a.lanShareUI
 	d.discoveryBusy = true
 	d.err, d.notice = "", ""
+	post := a.lanShareResultPoster()
 	go func() {
 		err := a.setLANDiscoveryPreference(true, name)
-		a.postLANShareResult(lanShareResult{action: "discovery-name", err: err, notice: "公开名称已更新"})
+		post(lanShareResult{action: "discovery-name", err: err, notice: "公开名称已更新"})
 	}()
 	a.invalidate()
 }

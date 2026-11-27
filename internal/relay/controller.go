@@ -10,6 +10,7 @@ import (
 
 	"github.com/ehzyil/connect-hub/internal/lanname"
 	contract "github.com/ehzyil/connect-hub/internal/relay/contract"
+	"github.com/ehzyil/connect-hub/internal/relay/ctxlock"
 )
 
 // Controller owns A's share lifecycle: enable intent, restore, suspend, disable
@@ -18,7 +19,7 @@ import (
 type Controller struct {
 	// Operations may drop mu while closing network resources. Serialize them so
 	// a new enable cannot inherit an identity that a concurrent disable revokes.
-	opMu         sync.Mutex
+	opMu         ctxlock.Mutex
 	workMu       sync.Mutex // cancellation must not wait for an in-flight AcquireSource
 	workCancel   context.CancelFunc
 	stopRequests int
@@ -66,13 +67,19 @@ func NewController(p Persistence, sink Sink, nets NetworkProvider, logf func(str
 		logf = func(string, ...any) {}
 	}
 	c := &Controller{
-		persist:       p,
-		sink:          sink,
-		nets:          nets,
-		logf:          logf,
-		notify:        notify,
-		state:         StateOff,
-		serverFactory: func(opts ServerOptions) (ServerInstance, error) { return StartServer(opts) },
+		persist: p,
+		sink:    sink,
+		nets:    nets,
+		logf:    logf,
+		notify:  notify,
+		state:   StateOff,
+		serverFactory: func(opts ServerOptions) (ServerInstance, error) {
+			server, err := StartServer(opts)
+			if err != nil {
+				return nil, err
+			}
+			return server, nil
+		},
 	}
 	c.settings = p.ShareSettings()
 	if !c.settings.Enabled {
@@ -89,7 +96,7 @@ func (c *Controller) SetServerFactory(factory ServerFactory) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.server != nil || c.runDone != nil || c.closed {
+	if c.server != nil || c.runDone != nil || c.state == StateStarting || c.closed {
 		return errors.New("分享服务已启动，不能更换组件")
 	}
 	c.serverFactory = factory
@@ -227,7 +234,9 @@ func (c *Controller) publishLocked() {
 // Enable persists the user's intent and starts serving when possible. It is the
 // only path that may switch a share on.
 func (c *Controller) Enable(ctx context.Context, opts EnableOptions) error {
-	c.opMu.Lock()
+	if err := c.opMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer c.opMu.Unlock()
 	ctx, finish := c.beginWork(ctx)
 	defer finish()
@@ -310,7 +319,9 @@ func (c *Controller) Enable(ctx context.Context, opts EnableOptions) error {
 // Restore starts the share if the persisted intent says it was on. A VPN that is
 // not connected yet leaves it Waiting; nothing logs in automatically.
 func (c *Controller) Restore(ctx context.Context) error {
-	c.opMu.Lock()
+	if err := c.opMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer c.opMu.Unlock()
 	ctx, finish := c.beginWork(ctx)
 	defer finish()
@@ -644,9 +655,9 @@ func (c *Controller) reconcileTick(ctx context.Context) {
 	}
 }
 
-// reconcileLocked brings the runtime instance in line with the persisted intent.
-// first is true only for a manual first enable, which rolls back instead of
-// entering Blocked.
+// reconcileLocked enters and returns with mu held. opMu serializes the whole
+// attempt while source acquisition, component startup and cleanup run without
+// mu, so View and discovery preference updates remain available.
 func (c *Controller) reconcileLocked(ctx context.Context, first bool) error {
 	if c.closed || !c.settings.Enabled || c.settings.Paused || c.restoreSuppressed {
 		return nil
@@ -658,122 +669,74 @@ func (c *Controller) reconcileLocked(ctx context.Context, first bool) error {
 		if first {
 			c.rollbackFirstEnableLocked()
 			c.state = StateOff
-			c.publishLocked()
+		} else {
+			c.state = StateWaiting
 		}
+		c.publishLocked()
 		return ctx.Err()
 	}
 	if ctx.Err() != nil {
 		return cancelled()
 	}
-	s := c.settings
+	s := c.settings.Clone()
 	blocked := func(code, msg string) error {
 		c.state = StateBlocked
 		c.failCode, c.failure = code, msg
 		c.publishLocked()
 		return errors.New(msg)
 	}
-	waiting := func(msg string) error {
-		unchanged := c.state == StateWaiting && c.failure == msg && c.failCode == ""
-		c.state = StateWaiting
-		c.failCode, c.failure = "", msg
-		if !unchanged {
-			c.publishLocked()
-		}
-		return nil
-	}
 	if s.ShareID == "" || s.Fingerprint == "" {
 		return blocked("identity", "缺少分享身份，请关闭后重新开启共享")
 	}
-	if c.sink == nil || !c.sink.PointExists(s.PointID) {
-		return blocked("point", "共享接入点已不存在，请关闭共享后重新选择")
-	}
-	address, iface := c.pickAddressLocked(s)
-	if address == "" {
-		return waiting("共享已启用，等待局域网地址就绪")
-	}
-	// The identity is bound to one address: a changed address needs a new
-	// share code, which the user has to confirm, never a silent rebind.
-	if s.PreferredIPv4 != "" && s.PreferredIPv4 != address {
-		return blocked("address", fmt.Sprintf("局域网地址已变化（%s → %s），请关闭共享后重新开启并重新分发口令", s.PreferredIPv4, address))
-	}
-	if c.identity != nil && c.identity.Address != "" && c.identity.Address != address {
-		return blocked("address", fmt.Sprintf("局域网地址已变化（%s → %s），请关闭共享后重新开启并重新分发口令", c.identity.Address, address))
-	}
-	src, err := c.sink.AcquireSource(ctx, s.PointID)
+	identity, token := c.identity, c.token
+	factory, instance := c.serverFactory, c.serverInstanceLocked()
+	c.state = StateStarting
+	c.publishLocked()
+	c.mu.Unlock()
+	runtime, code, err := c.prepareInstance(ctx, s, identity, token, factory, instance)
+	c.mu.Lock()
 	if ctx.Err() != nil {
-		if src != nil {
-			_ = src.Close()
+		// Cancellation may also arrive while reacquiring mu after a successful
+		// factory return. Reclaim that unpublished runtime before releasing opMu.
+		if err == nil {
+			c.mu.Unlock()
+			_ = closeInstance(context.Background(), runtime.server, runtime.source)
+			c.mu.Lock()
 		}
 		return cancelled()
 	}
 	if err != nil {
-		if errors.Is(err, ErrPointMissing) {
-			return blocked("point", "共享接入点已不存在")
+		if code == "waiting" {
+			c.state = StateWaiting
+			c.failCode, c.failure = "", err.Error()
+			c.publishLocked()
+			return nil
 		}
-		if errors.Is(err, ErrPointUnsupported) || errors.Is(err, ErrPointTunOwned) {
-			return blocked("unsupported", err.Error())
-		}
-		return waiting("共享已启用，等待接入点连接")
-	}
-	identity, err := c.loadIdentityLocked()
-	if err != nil {
-		_ = src.Close()
-		return blocked("identity", "分享身份不可用："+err.Error())
-	}
-	if err := VerifyIdentityRecord(identity, address); err != nil {
-		_ = src.Close()
-		return blocked("certificate", err.Error())
-	}
-	token, err := c.loadTokenLocked()
-	if err != nil || token == "" {
-		_ = src.Close()
-		return blocked("token", "分享口令不可用，请关闭共享后重新开启")
-	}
-	port := s.BoundPort
-	if port == 0 {
-		port = s.Port
-	}
-	server, err := c.serverFactory(ServerOptions{
-		DeviceStore:      deviceStore(c.persist),
-		Identity:         identity,
-		Source:           src,
-		Token:            token,
-		ShareID:          s.ShareID,
-		ServerInstanceID: c.serverInstanceLocked(),
-		Logf:             c.logf,
-		Port:             port,
-	})
-	if ctx.Err() != nil {
-		_ = closeInstance(context.Background(), server, src)
-		return cancelled()
-	}
-	if err != nil {
-		_ = src.Close()
-		if first {
+		if first && code == "listen" {
 			c.rollbackFirstEnableLocked()
 			c.state = StateOff
-			c.failCode, c.failure = "listen", err.Error()
+			c.failCode, c.failure = code, err.Error()
 			c.publishLocked()
 			return err
 		}
-		return blocked("listen", err.Error())
+		return blocked(code, err.Error())
 	}
-	c.source = src
-	c.server = server
-	c.identity = identity
-	c.token = token
-	c.address = address
-	c.iface = iface
-	c.port = server.Port()
+	c.source = runtime.source
+	c.server = runtime.server
+	c.identity = runtime.identity
+	c.token = runtime.token
+	c.address = runtime.address
+	c.iface = runtime.iface
+	c.port = runtime.server.Port()
 	c.started = time.Now()
-	c.certEnd = identity.NotAfter
+	c.certEnd = runtime.identity.NotAfter
 	c.state = StateRunning
 	c.failure, c.failCode = "", ""
 	c.cleanup = false
-	c.settings.PreferredIPv4 = address
-	c.settings.InterfaceName = iface
+	c.settings.PreferredIPv4 = runtime.address
+	c.settings.InterfaceName = runtime.iface
 	c.settings.BoundPort = c.port
-	c.settings.Fingerprint = identity.Fingerprint
+	c.settings.Fingerprint = runtime.identity.Fingerprint
 	if err := c.persistLocked(); err != nil && first {
 		// The port must be on disk before a code is printed, otherwise a
 		// restart would bind a different one.
@@ -782,15 +745,100 @@ func (c *Controller) reconcileLocked(ctx context.Context, first bool) error {
 		c.state = StateOff
 		c.failCode, c.failure = "persist", "分享端口无法保存："+err.Error()
 		c.publishLocked()
+		failure := c.failure
+		c.mu.Unlock()
 		_ = closeInstance(context.Background(), server2, source2)
-		return errors.New(c.failure)
+		c.mu.Lock()
+		return errors.New(failure)
 	}
-	c.logf("[局域网分享] 已在 %s:%d 开启，共享接入点「%s」", address, c.port, c.sink.PointName(s.PointID))
+	c.logf("[局域网分享] 已在 %s:%d 开启，共享接入点「%s」", c.address, c.port, c.sink.PointName(s.PointID))
 	c.publishLocked()
 	return nil
 }
 
-func (c *Controller) pickAddressLocked(s Settings) (address, iface string) {
+type startupInstance struct {
+	source   Source
+	server   ServerInstance
+	identity *Identity
+	token    string
+	address  string
+	iface    string
+}
+
+// prepareInstance uses an immutable settings snapshot and does not access the
+// controller's mutable state. Only its caller can publish the resulting runtime.
+func (c *Controller) prepareInstance(ctx context.Context, s Settings, identity *Identity, token string, factory ServerFactory, instance string) (r startupInstance, code string, err error) {
+	defer func() {
+		if err != nil {
+			_ = closeInstance(context.Background(), r.server, r.source)
+		}
+	}()
+	if err = ctx.Err(); err != nil {
+		return r, "", err
+	}
+	if c.sink == nil || !c.sink.PointExists(s.PointID) {
+		return r, "point", errors.New("共享接入点已不存在，请关闭共享后重新选择")
+	}
+	r.address, r.iface = c.pickAddress(s)
+	if r.address == "" {
+		return r, "waiting", errors.New("共享已启用，等待局域网地址就绪")
+	}
+	// The certificate is pinned to an address; never silently rebind it.
+	if s.PreferredIPv4 != "" && s.PreferredIPv4 != r.address {
+		return r, "address", fmt.Errorf("局域网地址已变化（%s → %s），请关闭共享后重新开启并重新分发口令", s.PreferredIPv4, r.address)
+	}
+	if identity != nil && identity.Address != "" && identity.Address != r.address {
+		return r, "address", fmt.Errorf("局域网地址已变化（%s → %s），请关闭共享后重新开启并重新分发口令", identity.Address, r.address)
+	}
+	r.source, err = c.sink.AcquireSource(ctx, s.PointID)
+	if ctx.Err() != nil {
+		return r, "", ctx.Err()
+	}
+	if err != nil {
+		if errors.Is(err, ErrPointMissing) {
+			return r, "point", errors.New("共享接入点已不存在")
+		}
+		if errors.Is(err, ErrPointUnsupported) || errors.Is(err, ErrPointTunOwned) {
+			return r, "unsupported", err
+		}
+		return r, "waiting", errors.New("共享已启用，等待接入点连接")
+	}
+	r.identity, err = c.loadIdentity(s, identity)
+	if err != nil {
+		return r, "identity", fmt.Errorf("分享身份不可用：%w", err)
+	}
+	if err = VerifyIdentityRecord(r.identity, r.address); err != nil {
+		return r, "certificate", err
+	}
+	r.token, err = c.loadToken(s, token)
+	if err != nil || r.token == "" {
+		return r, "token", errors.New("分享口令不可用，请关闭共享后重新开启")
+	}
+	if err = ctx.Err(); err != nil {
+		return r, "", err
+	}
+	port := s.BoundPort
+	if port == 0 {
+		port = s.Port
+	}
+	r.server, err = factory(ServerOptions{
+		StartupContext:   ctx,
+		DeviceStore:      deviceStore(c.persist),
+		Identity:         r.identity,
+		Source:           r.source,
+		Token:            r.token,
+		ShareID:          s.ShareID,
+		ServerInstanceID: instance,
+		Logf:             c.logf,
+		Port:             port,
+	})
+	if err == nil {
+		err = ctx.Err()
+	}
+	return r, "listen", err
+}
+
+func (c *Controller) pickAddress(s Settings) (address, iface string) {
 	if c.nets == nil {
 		return "", ""
 	}
@@ -875,7 +923,7 @@ func (c *Controller) ensureAddressLocked() error {
 	if c.address != "" {
 		return nil
 	}
-	address, iface := c.pickAddressLocked(c.settings)
+	address, iface := c.pickAddress(c.settings)
 	if address == "" {
 		return errors.New("没有可用的局域网地址")
 	}
@@ -886,11 +934,11 @@ func (c *Controller) ensureAddressLocked() error {
 	return nil
 }
 
-func (c *Controller) loadIdentityLocked() (*Identity, error) {
-	if c.identity != nil {
-		return c.identity, nil
+func (c *Controller) loadIdentity(s Settings, cached *Identity) (*Identity, error) {
+	if cached != nil {
+		return cached, nil
 	}
-	stored, err := c.persist.GetSecret(IdentitySecretKey(c.settings.ShareID))
+	stored, err := c.persist.GetSecret(IdentitySecretKey(s.ShareID))
 	if err != nil {
 		return nil, err
 	}
@@ -898,23 +946,17 @@ func (c *Controller) loadIdentityLocked() (*Identity, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.settings.Fingerprint != "" && identity.Fingerprint != c.settings.Fingerprint {
+	if s.Fingerprint != "" && identity.Fingerprint != s.Fingerprint {
 		return nil, errors.New("分享证书与记录的指纹不一致")
 	}
-	c.identity = identity
 	return identity, nil
 }
 
-func (c *Controller) loadTokenLocked() (string, error) {
-	if c.token != "" {
-		return c.token, nil
+func (c *Controller) loadToken(s Settings, cached string) (string, error) {
+	if cached != "" {
+		return cached, nil
 	}
-	token, err := c.persist.GetSecret(ShareTokenKey(c.settings.ShareID))
-	if err != nil {
-		return "", err
-	}
-	c.token = token
-	return token, nil
+	return c.persist.GetSecret(ShareTokenKey(s.ShareID))
 }
 
 // persistLocked writes the intent. Running is never persisted.
